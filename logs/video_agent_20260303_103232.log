@@ -1,0 +1,174 @@
+2026-03-03 10:32:32,670 - tools - INFO - 日志系统已初始化，日志文件: /data/liwenxi/agent/GenVideo/logs/video_agent_20260303_103232.log
+2026-03-03 10:32:33,011 - agent - INFO - ============================================================
+2026-03-03 10:32:33,011 - agent - INFO - 📋 新任务开始: Create a two-minute introduction video about Xinjiang University
+2026-03-03 10:32:33,011 - agent - INFO - ============================================================
+2026-03-03 10:32:33,030 - graph - INFO - 🎯 Phase 1 — Planner 开始规划素材准备
+2026-03-03 10:32:33,030 - graph - INFO - 🔍 _get_llm() model=Qwen3.5-27B
+2026-03-03 10:32:33,365 - graph - INFO - 🔍 _get_llm() model=Qwen3.5-27B
+2026-03-03 10:32:33,369 - openai._base_client - DEBUG - Request options: {'method': 'post', 'url': '/chat/completions', 'headers': {'X-Stainless-Raw-Response': 'true'}, 'files': None, 'idempotency_key': 'stainless-python-retry-363beeb1-3599-44d0-9486-ffd8894de3bc', 'json_data': {'messages': [{'content': '请根据用户需求推断成片目标时长（单位秒）。\n- 若用户明确提到时长，返回对应秒数\n- 若用户未明确提到时长，返回 300（约5分钟）\n仅返回一个数字，不要输出其他内容。\n\n用户需求: Create a two-minute introduction video about Xinjiang University', 'role': 'user'}], 'model': 'Qwen3.5-27B', 'max_completion_tokens': 160, 'stream': False, 'temperature': 0.0}}
+2026-03-03 10:32:33,372 - openai._base_client - DEBUG - Sending HTTP Request: POST http://127.0.0.1:8902/v1/chat/completions
+2026-03-03 10:32:33,372 - httpcore.connection - DEBUG - connect_tcp.started host='127.0.0.1' port=8902 local_address=None timeout=None socket_options=None
+2026-03-03 10:32:33,372 - httpcore.connection - DEBUG - connect_tcp.complete return_value=<httpcore._backends.sync.SyncStream object at 0x7faeef372020>
+2026-03-03 10:32:33,372 - httpcore.http11 - DEBUG - send_request_headers.started request=<Request [b'POST']>
+2026-03-03 10:32:33,372 - httpcore.http11 - DEBUG - send_request_headers.complete
+2026-03-03 10:32:33,372 - httpcore.http11 - DEBUG - send_request_body.started request=<Request [b'POST']>
+2026-03-03 10:32:33,372 - httpcore.http11 - DEBUG - send_request_body.complete
+2026-03-03 10:32:33,373 - httpcore.http11 - DEBUG - receive_response_headers.started request=<Request [b'POST']>
+2026-03-03 10:32:36,841 - httpcore.http11 - DEBUG - receive_response_headers.complete return_value=(b'HTTP/1.1', 200, b'OK', [(b'date', b'Tue, 03 Mar 2026 02:32:32 GMT'), (b'server', b'uvicorn'), (b'content-length', b'1223'), (b'content-type', b'application/json')])
+2026-03-03 10:32:36,842 - httpx - INFO - HTTP Request: POST http://127.0.0.1:8902/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-03 10:32:36,842 - httpcore.http11 - DEBUG - receive_response_body.started request=<Request [b'POST']>
+2026-03-03 10:32:36,842 - httpcore.http11 - DEBUG - receive_response_body.complete
+2026-03-03 10:32:36,842 - httpcore.http11 - DEBUG - response_closed.started
+2026-03-03 10:32:36,842 - httpcore.http11 - DEBUG - response_closed.complete
+2026-03-03 10:32:36,842 - openai._base_client - DEBUG - HTTP Response: POST http://127.0.0.1:8902/v1/chat/completions "200 OK" Headers({'date': 'Tue, 03 Mar 2026 02:32:32 GMT', 'server': 'uvicorn', 'content-length': '1223', 'content-type': 'application/json'})
+2026-03-03 10:32:36,842 - openai._base_client - DEBUG - request_id: None
+2026-03-03 10:32:36,852 - openai._base_client - DEBUG - Request options: {'method': 'post', 'url': '/chat/completions', 'headers': {'X-Stainless-Raw-Response': 'true'}, 'files': None, 'idempotency_key': 'stainless-python-retry-0b767bfe-9266-421b-ad38-ba91e744bc6f', 'json_data': {'messages': [{'content': '你是一位资深视频编辑导演。\n用户想要自动编辑一段视频。你的任务是规划**素材准备**阶段的步骤。\n\n⚠️ 重要: 你**只需规划到"所有视频分析完成"为止**。\n后续的剪辑/合并/转场/旁白/导出将由另一个创作 AI 自主完成，不需要你规划。\n\n## 你需要规划的步骤范围\n1. 搜索视频素材（使用 search_bilibili_video，多关键词扩展）\n2. 筛选候选视频（rank_video_candidates，从候选池中精选 Top K）\n3. 下载候选中最优的一批视频（download_bilibili_video，逐个下载）\n4. 对所有下载视频进行多模态分析（analyze_video，每个视频调用一次）\n\n## 可用工具\n1. search_bilibili_video — 在 Bilibili 上搜索视频资源，返回视频标题、BV号、时长、播放量等信息。\n2. download_bilibili_video — 从 Bilibili 下载视频到工作目录。\n3. rank_video_candidates — 使用 AI 模型对候选视频进行评分排序，选出最适合剪辑的 Top K 个视频。\n4. analyze_video — 使用多模态 AI 深度分析视频内容，输出全片时间线分析和推荐剪辑方案。\n5. inspect_video_duration — 检测视频时长、分辨率、帧率等基本信息。\n\n## 关键原则\n- 尽量搜集丰富的资源：使用多关键词扩展与分页搜索，扩大搜索广度\n- 先广度再精选：先广度搜索 → MLLM 筛选 → 下载最优一批\n- 调用参数显式化：搜索和筛选工具必须显式传参（max_results / pages / max_total_results / top_k / max_review）\n- `top_k` 必须由你根据任务复杂度、目标时长、候选质量自主决定，不要固定成 5\n- 所有下载的视频都必须分析：每个视频需要调用一次 analyze_video\n- 每个步骤的 `tool_hint` 必须且只能填写一个工具名，且从以下四个中选择：\n    - search_bilibili_video\n    - rank_video_candidates\n    - download_bilibili_video\n    - analyze_video\n- **不要包含剪辑、合并、转场、旁白、导出步骤** — 这些全部交给后续创作 AI\n\n## 素材数量建议（可按复杂度上下浮动）\n- 每平台搜索数量 max_results: 15\n- 分页 pages: 1\n- 候选池上限 max_total_results: 30\n- MLLM 评估数 max_review: 18\n- 下载数量 top_k 建议区间: 3~6（最终由你自主决定）\n\n\n工作目录: /data/liwenxi/agent/GenVideo/temp\n\n## 输出格式\n请以 JSON 格式输出计划，严格按以下结构:\n{\n    "goal": "用户的最终目标",\n    "analysis": "你对需求的分析和创意构思",\n    "steps": [\n        {"id": 1, "description": "具体做什么", "tool_hint": "建议工具名"},\n        ...\n    ]\n}\n\n', 'role': 'system'}, {'content': '用户需求: Create a two-minute introduction video about Xinjiang University', 'role': 'user'}], 'model': 'Qwen3.5-27B', 'max_completion_tokens': 4096, 'stream': False, 'temperature': 0.2}}
+2026-03-03 10:32:36,853 - openai._base_client - DEBUG - Sending HTTP Request: POST http://127.0.0.1:8902/v1/chat/completions
+2026-03-03 10:32:36,853 - httpcore.http11 - DEBUG - send_request_headers.started request=<Request [b'POST']>
+2026-03-03 10:32:36,853 - httpcore.http11 - DEBUG - send_request_headers.complete
+2026-03-03 10:32:36,853 - httpcore.http11 - DEBUG - send_request_body.started request=<Request [b'POST']>
+2026-03-03 10:32:36,853 - httpcore.http11 - DEBUG - send_request_body.complete
+2026-03-03 10:32:36,853 - httpcore.http11 - DEBUG - receive_response_headers.started request=<Request [b'POST']>
+2026-03-03 10:34:04,561 - httpcore.http11 - DEBUG - receive_response_headers.complete return_value=(b'HTTP/1.1', 200, b'OK', [(b'date', b'Tue, 03 Mar 2026 02:32:36 GMT'), (b'server', b'uvicorn'), (b'content-length', b'20657'), (b'content-type', b'application/json')])
+2026-03-03 10:34:04,561 - httpx - INFO - HTTP Request: POST http://127.0.0.1:8902/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-03 10:34:04,562 - httpcore.http11 - DEBUG - receive_response_body.started request=<Request [b'POST']>
+2026-03-03 10:34:04,562 - httpcore.http11 - DEBUG - receive_response_body.complete
+2026-03-03 10:34:04,562 - httpcore.http11 - DEBUG - response_closed.started
+2026-03-03 10:34:04,562 - httpcore.http11 - DEBUG - response_closed.complete
+2026-03-03 10:34:04,562 - openai._base_client - DEBUG - HTTP Response: POST http://127.0.0.1:8902/v1/chat/completions "200 OK" Headers({'date': 'Tue, 03 Mar 2026 02:32:36 GMT', 'server': 'uvicorn', 'content-length': '20657', 'content-type': 'application/json'})
+2026-03-03 10:34:04,562 - openai._base_client - DEBUG - request_id: None
+2026-03-03 10:34:04,563 - graph - INFO - 📋 素材准备计划 (4 步): Create a two-minute introduction video about Xinjiang University
+2026-03-03 10:34:04,563 - graph - INFO -    [1] 搜索相关视频素材 → search_bilibili_video
+2026-03-03 10:34:04,563 - graph - INFO -    [2] 筛选候选视频 → rank_video_candidates
+2026-03-03 10:34:04,563 - graph - INFO -    [3] 下载最佳素材 → download_bilibili_video
+2026-03-03 10:34:04,563 - graph - INFO -    [4] 分析所有已下载视频 → analyze_video
+2026-03-03 10:34:04,563 - graph - INFO - ⏱ 目标时长: 1.0s
+2026-03-03 10:34:04,564 - graph - INFO - 🔧 Executor 步骤 [1]: 搜索相关视频素材
+2026-03-03 10:34:04,564 - graph - INFO - 🔍 _get_llm() model=Qwen3.5-27B
+2026-03-03 10:34:04,575 - graph - INFO - 🧰 步骤 [1] 工具白名单: search_bilibili_video
+2026-03-03 10:34:04,578 - openai._base_client - DEBUG - Request options: {'method': 'post', 'url': '/chat/completions', 'headers': {'X-Stainless-Raw-Response': 'true'}, 'files': None, 'idempotency_key': 'stainless-python-retry-24f1eb66-0519-43f0-bec6-060eccbd0bc3', 'json_data': {'messages': [{'content': '你是视频素材准备执行器。你的任务是执行一个具体的素材准备步骤。\n请调用合适的工具来完成任务，完成后总结执行结果。\n工作目录: /data/liwenxi/agent/GenVideo/temp\n\n重要:\n- 操作结果中的文件路径非常重要，请在总结中完整保留\n- 对历史步骤里出现过的文件路径，后续调用必须逐字复用；禁止自行改名或猜测路径\n- 调 search_bilibili_video / rank_video_candidates 时，务必显式传入数量参数\n- rank_video_candidates 必须显式传入 top_k，且 top_k 由你自主决定（不要依赖默认值 5）\n- 若当前步骤是"搜索素材"，只做搜索与汇总，不要提前调用 rank_video_candidates\n- 若当前步骤是"排序候选"，基于已累计候选池做排序\n- 排序完成后优先使用返回的 selected_videos 进入下载流程\n- analyze_video 仅对原始下载的源视频调用，不要分析中间产物\n- 每个视频只需分析一次，不要重复分析已有 _analysis.json 的视频\n', 'role': 'system'}, {'content': '当前任务: 搜索相关视频素材\n建议使用工具: search_bilibili_video\n目标时长(参考): 1.0 秒\n数量建议: max_results=15, pages=1, max_total_results=30, max_review=18, top_k_range=3~6 (由你自主决定)\n\n当前工作目录文件(优先复用真实路径):\n(工作目录为空)', 'role': 'user'}], 'model': 'Qwen3.5-27B', 'stream': False, 'temperature': 0.2, 'tools': [{'type': 'function', 'function': {'name': 'search_bilibili_video', 'description': '在 Bilibili 上搜索视频资源，返回视频标题、BV号、时长、播放量等信息。\n    搜索结果会自动写入候选池，供后续 rank_video_candidates 聚合使用。\n\n    Args:\n        query: 搜索关键词，例如 "华南理工大学 宣传片"。支持中英文。\n        max_results: 每个查询变体每页最多返回的视频数量，默认 5。\n            建议范围 10~30，过小会漏掉优质视频。\n        pages: 每个查询变体搜索的页数，默认 2（即第1页+第2页）。\n            增大可扩大搜索范围，建议 1~3，过大会增加耗时。\n        expand_variants: 自动扩展的查询变体数量，默认 3。\n            会基于原始 query 生成 expand_variants 个相近关键词并分别搜索。\n            设为 1 表示只用原始 query，增大可提升覆盖面。\n        max_total_results: 最终候选列表的上限数量。默认自动计算为\n            max_results × pages × 变体数，可手动设置（如 60）以控制候选数量。', 'parameters': {'properties': {'query': {'type': 'string'}, 'max_results': {'default': 5, 'type': 'integer'}, 'pages': {'default': 2, 'type': 'integer'}, 'expand_variants': {'default': 3, 'type': 'integer'}, 'max_total_results': {'anyOf': [{'type': 'integer'}, {'type': 'null'}], 'default': None}}, 'required': ['query'], 'type': 'object'}}}]}}
+2026-03-03 10:34:04,579 - openai._base_client - DEBUG - Sending HTTP Request: POST http://127.0.0.1:8902/v1/chat/completions
+2026-03-03 10:34:04,579 - httpcore.http11 - DEBUG - send_request_headers.started request=<Request [b'POST']>
+2026-03-03 10:34:04,579 - httpcore.http11 - DEBUG - send_request_headers.complete
+2026-03-03 10:34:04,579 - httpcore.http11 - DEBUG - send_request_body.started request=<Request [b'POST']>
+2026-03-03 10:34:04,579 - httpcore.http11 - DEBUG - send_request_body.complete
+2026-03-03 10:34:04,579 - httpcore.http11 - DEBUG - receive_response_headers.started request=<Request [b'POST']>
+2026-03-03 10:34:11,882 - httpcore.http11 - DEBUG - receive_response_headers.complete return_value=(b'HTTP/1.1', 200, b'OK', [(b'date', b'Tue, 03 Mar 2026 02:34:03 GMT'), (b'server', b'uvicorn'), (b'content-length', b'2182'), (b'content-type', b'application/json')])
+2026-03-03 10:34:11,882 - httpx - INFO - HTTP Request: POST http://127.0.0.1:8902/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-03 10:34:11,883 - httpcore.http11 - DEBUG - receive_response_body.started request=<Request [b'POST']>
+2026-03-03 10:34:11,883 - httpcore.http11 - DEBUG - receive_response_body.complete
+2026-03-03 10:34:11,883 - httpcore.http11 - DEBUG - response_closed.started
+2026-03-03 10:34:11,883 - httpcore.http11 - DEBUG - response_closed.complete
+2026-03-03 10:34:11,883 - openai._base_client - DEBUG - HTTP Response: POST http://127.0.0.1:8902/v1/chat/completions "200 OK" Headers({'date': 'Tue, 03 Mar 2026 02:34:03 GMT', 'server': 'uvicorn', 'content-length': '2182', 'content-type': 'application/json'})
+2026-03-03 10:34:11,883 - openai._base_client - DEBUG - request_id: None
+2026-03-03 10:34:11,884 - graph - INFO - ✅ 步骤 [1] 完成: 
+
+我需要知道具体的搜索关键词才能执行视频素材搜索。请问您想要搜索什么主题的视频素材？
+
+例如：
+- "华南理工大学 宣传片"
+- "校园风光 航拍"
+- "科技 创新 展示"
+- 或其他具体主题？
+
+请提供搜索关键词，我将立即执行搜索任务。
+2026-03-03 10:34:11,885 - graph - INFO - 📌 Prep Router: 步骤 2/4，继续 Phase 1
+2026-03-03 10:34:11,885 - graph - INFO - 🔧 Executor 步骤 [2]: 筛选候选视频
+2026-03-03 10:34:11,885 - graph - INFO - 🔍 _get_llm() model=Qwen3.5-27B
+2026-03-03 10:34:11,893 - graph - INFO - 🧰 步骤 [2] 工具白名单: rank_video_candidates
+2026-03-03 10:34:11,896 - openai._base_client - DEBUG - Request options: {'method': 'post', 'url': '/chat/completions', 'headers': {'X-Stainless-Raw-Response': 'true'}, 'files': None, 'idempotency_key': 'stainless-python-retry-785a8339-bd7e-478d-a274-c58136f8d699', 'json_data': {'messages': [{'content': '你是视频素材准备执行器。你的任务是执行一个具体的素材准备步骤。\n请调用合适的工具来完成任务，完成后总结执行结果。\n工作目录: /data/liwenxi/agent/GenVideo/temp\n\n重要:\n- 操作结果中的文件路径非常重要，请在总结中完整保留\n- 对历史步骤里出现过的文件路径，后续调用必须逐字复用；禁止自行改名或猜测路径\n- 调 search_bilibili_video / rank_video_candidates 时，务必显式传入数量参数\n- rank_video_candidates 必须显式传入 top_k，且 top_k 由你自主决定（不要依赖默认值 5）\n- 若当前步骤是"搜索素材"，只做搜索与汇总，不要提前调用 rank_video_candidates\n- 若当前步骤是"排序候选"，基于已累计候选池做排序\n- 排序完成后优先使用返回的 selected_videos 进入下载流程\n- analyze_video 仅对原始下载的源视频调用，不要分析中间产物\n- 每个视频只需分析一次，不要重复分析已有 _analysis.json 的视频\n', 'role': 'system'}, {'content': '当前任务: 筛选候选视频\n建议使用工具: rank_video_candidates\n目标时长(参考): 1.0 秒\n数量建议: max_results=15, pages=1, max_total_results=30, max_review=18, top_k_range=3~6 (由你自主决定)\n\n当前工作目录文件(优先复用真实路径):\n(工作目录为空)\n\n之前步骤的结果:\n  步骤 1: \n\n我需要知道具体的搜索关键词才能执行视频素材搜索。请问您想要搜索什么主题的视频素材？\n\n例如：\n- "华南理工大学 宣传片"\n- "校园风光 航拍"\n- "科技 创新 展示"\n- 或其他具体主题？\n\n请提供搜索关键词，我将立即执行搜索任务。', 'role': 'user'}], 'model': 'Qwen3.5-27B', 'stream': False, 'temperature': 0.2, 'tools': [{'type': 'function', 'function': {'name': 'rank_video_candidates', 'description': '使用 AI 模型对候选视频进行评分排序，选出最适合剪辑的 Top K 个视频。\n    会自动聚合之前 search_bilibili_video / search_youtobe_video 写入的候选池。\n    排序结果中的 selected_videos 字段包含推荐下载的视频列表。\n\n    Args:\n        candidates_json: 候选视频列表的 JSON 字符串，或传入 "[]"（空列表字符串）\n            让工具自动从候选池中加载所有搜索结果。\n            格式为搜索工具返回的 JSON 数组，每项包含 title/url/duration 等字段。\n            ⚠️ 一般直接传 "[]" 即可，工具会自动合并之前所有搜索的候选池。\n        top_k: 希望保留（推荐下载）的视频数量，默认 5。\n            建议根据目标时长设置。\n        max_review: AI 模型最多评审的候选数量，默认 50。\n            超过此数量的候选会被截断不参与评审（按候选池顺序保留前 max_review 个）。\n            建议设置为 20~60，过大会增加 API 消耗。', 'parameters': {'properties': {'candidates_json': {'type': 'string'}, 'top_k': {'default': 5, 'type': 'integer'}, 'max_review': {'default': 50, 'type': 'integer'}}, 'required': ['candidates_json'], 'type': 'object'}}}]}}
+2026-03-03 10:34:11,896 - openai._base_client - DEBUG - Sending HTTP Request: POST http://127.0.0.1:8902/v1/chat/completions
+2026-03-03 10:34:11,896 - httpcore.http11 - DEBUG - send_request_headers.started request=<Request [b'POST']>
+2026-03-03 10:34:11,896 - httpcore.http11 - DEBUG - send_request_headers.complete
+2026-03-03 10:34:11,896 - httpcore.http11 - DEBUG - send_request_body.started request=<Request [b'POST']>
+2026-03-03 10:34:11,897 - httpcore.http11 - DEBUG - send_request_body.complete
+2026-03-03 10:34:11,897 - httpcore.http11 - DEBUG - receive_response_headers.started request=<Request [b'POST']>
+2026-03-03 10:34:21,893 - httpcore.http11 - DEBUG - receive_response_headers.complete return_value=(b'HTTP/1.1', 200, b'OK', [(b'date', b'Tue, 03 Mar 2026 02:34:10 GMT'), (b'server', b'uvicorn'), (b'content-length', b'2543'), (b'content-type', b'application/json')])
+2026-03-03 10:34:21,893 - httpx - INFO - HTTP Request: POST http://127.0.0.1:8902/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-03 10:34:21,893 - httpcore.http11 - DEBUG - receive_response_body.started request=<Request [b'POST']>
+2026-03-03 10:34:21,894 - httpcore.http11 - DEBUG - receive_response_body.complete
+2026-03-03 10:34:21,894 - httpcore.http11 - DEBUG - response_closed.started
+2026-03-03 10:34:21,894 - httpcore.http11 - DEBUG - response_closed.complete
+2026-03-03 10:34:21,894 - openai._base_client - DEBUG - HTTP Response: POST http://127.0.0.1:8902/v1/chat/completions "200 OK" Headers({'date': 'Tue, 03 Mar 2026 02:34:10 GMT', 'server': 'uvicorn', 'content-length': '2543', 'content-type': 'application/json'})
+2026-03-03 10:34:21,894 - openai._base_client - DEBUG - request_id: None
+2026-03-03 10:34:21,901 - openai._base_client - DEBUG - Request options: {'method': 'post', 'url': '/chat/completions', 'headers': {'X-Stainless-Raw-Response': 'true'}, 'files': None, 'idempotency_key': 'stainless-python-retry-23434a77-55bb-4822-b3f8-b3c4401a3bab', 'json_data': {'messages': [{'content': '你是视频素材准备执行器。你的任务是执行一个具体的素材准备步骤。\n请调用合适的工具来完成任务，完成后总结执行结果。\n工作目录: /data/liwenxi/agent/GenVideo/temp\n\n重要:\n- 操作结果中的文件路径非常重要，请在总结中完整保留\n- 对历史步骤里出现过的文件路径，后续调用必须逐字复用；禁止自行改名或猜测路径\n- 调 search_bilibili_video / rank_video_candidates 时，务必显式传入数量参数\n- rank_video_candidates 必须显式传入 top_k，且 top_k 由你自主决定（不要依赖默认值 5）\n- 若当前步骤是"搜索素材"，只做搜索与汇总，不要提前调用 rank_video_candidates\n- 若当前步骤是"排序候选"，基于已累计候选池做排序\n- 排序完成后优先使用返回的 selected_videos 进入下载流程\n- analyze_video 仅对原始下载的源视频调用，不要分析中间产物\n- 每个视频只需分析一次，不要重复分析已有 _analysis.json 的视频\n', 'role': 'system'}, {'content': '当前任务: 筛选候选视频\n建议使用工具: rank_video_candidates\n目标时长(参考): 1.0 秒\n数量建议: max_results=15, pages=1, max_total_results=30, max_review=18, top_k_range=3~6 (由你自主决定)\n\n当前工作目录文件(优先复用真实路径):\n(工作目录为空)\n\n之前步骤的结果:\n  步骤 1: \n\n我需要知道具体的搜索关键词才能执行视频素材搜索。请问您想要搜索什么主题的视频素材？\n\n例如：\n- "华南理工大学 宣传片"\n- "校园风光 航拍"\n- "科技 创新 展示"\n- 或其他具体主题？\n\n请提供搜索关键词，我将立即执行搜索任务。', 'role': 'user'}, {'content': None, 'role': 'assistant', 'tool_calls': [{'type': 'function', 'id': 'chatcmpl-tool-a65b29e81d6deb42', 'function': {'name': 'rank_video_candidates', 'arguments': '{"candidates_json": "[]", "top_k": 4, "max_review": 18}'}}]}, {'content': '筛选出错: 没有可用候选（超过10分钟或时长未知已剔除）。 超时长剔除=0, 时长未知剔除=0', 'role': 'tool', 'tool_call_id': 'chatcmpl-tool-a65b29e81d6deb42'}], 'model': 'Qwen3.5-27B', 'stream': False, 'temperature': 0.2, 'tools': [{'type': 'function', 'function': {'name': 'rank_video_candidates', 'description': '使用 AI 模型对候选视频进行评分排序，选出最适合剪辑的 Top K 个视频。\n    会自动聚合之前 search_bilibili_video / search_youtobe_video 写入的候选池。\n    排序结果中的 selected_videos 字段包含推荐下载的视频列表。\n\n    Args:\n        candidates_json: 候选视频列表的 JSON 字符串，或传入 "[]"（空列表字符串）\n            让工具自动从候选池中加载所有搜索结果。\n            格式为搜索工具返回的 JSON 数组，每项包含 title/url/duration 等字段。\n            ⚠️ 一般直接传 "[]" 即可，工具会自动合并之前所有搜索的候选池。\n        top_k: 希望保留（推荐下载）的视频数量，默认 5。\n            建议根据目标时长设置。\n        max_review: AI 模型最多评审的候选数量，默认 50。\n            超过此数量的候选会被截断不参与评审（按候选池顺序保留前 max_review 个）。\n            建议设置为 20~60，过大会增加 API 消耗。', 'parameters': {'properties': {'candidates_json': {'type': 'string'}, 'top_k': {'default': 5, 'type': 'integer'}, 'max_review': {'default': 50, 'type': 'integer'}}, 'required': ['candidates_json'], 'type': 'object'}}}]}}
+2026-03-03 10:34:21,901 - openai._base_client - DEBUG - Sending HTTP Request: POST http://127.0.0.1:8902/v1/chat/completions
+2026-03-03 10:34:21,901 - httpcore.http11 - DEBUG - send_request_headers.started request=<Request [b'POST']>
+2026-03-03 10:34:21,902 - httpcore.http11 - DEBUG - send_request_headers.complete
+2026-03-03 10:34:21,902 - httpcore.http11 - DEBUG - send_request_body.started request=<Request [b'POST']>
+2026-03-03 10:34:21,902 - httpcore.http11 - DEBUG - send_request_body.complete
+2026-03-03 10:34:21,902 - httpcore.http11 - DEBUG - receive_response_headers.started request=<Request [b'POST']>
+2026-03-03 10:34:25,128 - httpcore.http11 - DEBUG - receive_response_headers.complete return_value=(b'HTTP/1.1', 200, b'OK', [(b'date', b'Tue, 03 Mar 2026 02:34:21 GMT'), (b'server', b'uvicorn'), (b'content-length', b'1209'), (b'content-type', b'application/json')])
+2026-03-03 10:34:25,128 - httpx - INFO - HTTP Request: POST http://127.0.0.1:8902/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-03 10:34:25,129 - httpcore.http11 - DEBUG - receive_response_body.started request=<Request [b'POST']>
+2026-03-03 10:34:25,129 - httpcore.http11 - DEBUG - receive_response_body.complete
+2026-03-03 10:34:25,129 - httpcore.http11 - DEBUG - response_closed.started
+2026-03-03 10:34:25,129 - httpcore.http11 - DEBUG - response_closed.complete
+2026-03-03 10:34:25,129 - openai._base_client - DEBUG - HTTP Response: POST http://127.0.0.1:8902/v1/chat/completions "200 OK" Headers({'date': 'Tue, 03 Mar 2026 02:34:21 GMT', 'server': 'uvicorn', 'content-length': '1209', 'content-type': 'application/json'})
+2026-03-03 10:34:25,129 - openai._base_client - DEBUG - request_id: None
+2026-03-03 10:34:25,132 - graph - INFO - ✅ 步骤 [2] 完成: 
+
+执行结果总结：
+
+当前步骤尝试对候选视频进行排序筛选，但调用 `rank_video_candidates` 时返回错误：**没有可用候选**。
+
+原因分析：
+- 候选池为空，说明之前没有执行过视频搜索步骤（如 `search_bilibili_video` 或 `search_youtube_video`）
+- 没有候选视频可供 AI 模型评审和排序
+
+建议后续操作：
+1. 先执行视频搜索步
+2026-03-03 10:34:25,133 - graph - INFO - 📌 Prep Router: 步骤 3/4，继续 Phase 1
+2026-03-03 10:34:25,134 - graph - INFO - 🔧 Executor 步骤 [3]: 下载最佳素材
+2026-03-03 10:34:25,136 - graph - INFO - 📥 下载步骤走确定性路径: top_k=4, max_review=18
+2026-03-03 10:34:25,138 - graph - INFO - ✅ 步骤 [3] 完成(确定性下载): 步骤执行失败: 无法解析排序结果: 筛选出错: 没有可用候选（超过10分钟或时长未知已剔除）。 超时长剔除=0, 时长未知剔除=0
+2026-03-03 10:34:25,139 - graph - INFO - 📌 Prep Router: 步骤 4/4，继续 Phase 1
+2026-03-03 10:34:25,140 - graph - INFO - 🔧 Executor 步骤 [4]: 分析所有已下载视频
+2026-03-03 10:34:25,141 - graph - INFO - 🧠 源视频过滤: 待分析=0, 已分析=0
+2026-03-03 10:34:25,141 - graph - INFO - 🔍 _get_llm() model=Qwen3.5-27B
+2026-03-03 10:34:25,161 - graph - INFO - 🧰 步骤 [4] 工具白名单: analyze_video
+2026-03-03 10:34:25,168 - openai._base_client - DEBUG - Request options: {'method': 'post', 'url': '/chat/completions', 'headers': {'X-Stainless-Raw-Response': 'true'}, 'files': None, 'idempotency_key': 'stainless-python-retry-30331b1b-2f7e-4358-9d2c-a445fdfe4c7b', 'json_data': {'messages': [{'content': '你是视频素材准备执行器。你的任务是执行一个具体的素材准备步骤。\n请调用合适的工具来完成任务，完成后总结执行结果。\n工作目录: /data/liwenxi/agent/GenVideo/temp\n\n重要:\n- 操作结果中的文件路径非常重要，请在总结中完整保留\n- 对历史步骤里出现过的文件路径，后续调用必须逐字复用；禁止自行改名或猜测路径\n- 调 search_bilibili_video / rank_video_candidates 时，务必显式传入数量参数\n- rank_video_candidates 必须显式传入 top_k，且 top_k 由你自主决定（不要依赖默认值 5）\n- 若当前步骤是"搜索素材"，只做搜索与汇总，不要提前调用 rank_video_candidates\n- 若当前步骤是"排序候选"，基于已累计候选池做排序\n- 排序完成后优先使用返回的 selected_videos 进入下载流程\n- analyze_video 仅对原始下载的源视频调用，不要分析中间产物\n- 每个视频只需分析一次，不要重复分析已有 _analysis.json 的视频\n', 'role': 'system'}, {'content': '当前任务: 分析所有已下载视频\n建议使用工具: analyze_video\n目标时长(参考): 1.0 秒\n数量建议: max_results=15, pages=1, max_total_results=30, max_review=18, top_k_range=3~6 (由你自主决定)\n\n当前工作目录文件(优先复用真实路径):\n(工作目录为空)\n\n之前步骤的结果:\n  步骤 1: \n\n我需要知道具体的搜索关键词才能执行视频素材搜索。请问您想要搜索什么主题的视频素材？\n\n例如：\n- "华南理工大学 宣传片"\n- "校园风光 航拍"\n- "科技 创新 展示"\n- 或其他具体主题？\n\n请提供搜索关键词，我将立即执行搜索任务。\n  步骤 2: \n\n执行结果总结：\n\n当前步骤尝试对候选视频进行排序筛选，但调用 `rank_video_candidates` 时返回错误：**没有可用候选**。\n\n原因分析：\n- 候选池为空，说明之前没有执行过视频搜索步骤（如 `search_bilibili_video` 或 `search_youtube_video`）\n- 没有候选视频可供 AI 模型评审和排序\n\n建议后续操作：\n1. 先执行视频搜索步骤，提供具体的搜索关键词（如 "华南理工大学 宣传片"、"校园风光" 等）\n2. 搜索完成后，再执行当前的排序筛选步骤\n\n请提供搜索关键词，我将先执行视频搜索任务。\n  步骤 3: 步骤执行失败: 无法解析排序结果: 筛选出错: 没有可用候选（超过10分钟或时长未知已剔除）。 超时长剔除=0, 时长未知剔除=0\n\n⚠️ 分析规则:\n- 仅分析原始下载视频，不分析中间产物\n- 不重复分析已有 _analysis.json 的视频\n- 快速完成所有视频的分析', 'role': 'user'}], 'model': 'Qwen3.5-27B', 'stream': False, 'temperature': 0.2, 'tools': [{'type': 'function', 'function': {'name': 'analyze_video', 'description': '使用多模态 AI 深度分析视频内容，输出全片时间线分析和推荐剪辑方案。\n    分析结果会自动保存为 *_analysis.json，供后续 batch_cut_video 使用。\n    **每个源视频只需分析一次**，已有 _analysis.json 的视频无需重复调用。\n\n    Args:\n        video_path: 要分析的视频文件路径（仅限原始下载的源视频，不要传入\n            merged_*/final_*/narrated_* 等中间产物）。\n            例如 "/workspace/scut_intro_video.mp4"\n        analysis_goal: 分析侧重点，直接影响 AI 的描述维度。常用示例：\n            - "找出适合做介绍视频的精华片段，标注时间段"（默认剪辑场景）\n            - "找出视觉冲击力强的高燃片段"\n            - "按场景分析画面内容和情绪"\n        interval_seconds: 保留参数（当前版本未使用），勿修改，默认 5.0\n        max_frames: 保留参数（当前版本未使用），勿修改，默认 20', 'parameters': {'properties': {'video_path': {'type': 'string'}, 'analysis_goal': {'default': '详细描述视频中每个场景的内容、情绪和视觉特征', 'type': 'string'}, 'interval_seconds': {'default': 5.0, 'type': 'number'}, 'max_frames': {'default': 20, 'type': 'integer'}}, 'required': ['video_path'], 'type': 'object'}}}]}}
+2026-03-03 10:34:25,169 - openai._base_client - DEBUG - Sending HTTP Request: POST http://127.0.0.1:8902/v1/chat/completions
+2026-03-03 10:34:25,170 - httpcore.http11 - DEBUG - send_request_headers.started request=<Request [b'POST']>
+2026-03-03 10:34:25,170 - httpcore.http11 - DEBUG - send_request_headers.complete
+2026-03-03 10:34:25,170 - httpcore.http11 - DEBUG - send_request_body.started request=<Request [b'POST']>
+2026-03-03 10:34:25,170 - httpcore.http11 - DEBUG - send_request_body.complete
+2026-03-03 10:34:25,171 - httpcore.http11 - DEBUG - receive_response_headers.started request=<Request [b'POST']>
+2026-03-03 10:34:36,549 - httpcore.http11 - DEBUG - receive_response_headers.complete return_value=(b'HTTP/1.1', 200, b'OK', [(b'date', b'Tue, 03 Mar 2026 02:34:25 GMT'), (b'server', b'uvicorn'), (b'content-length', b'2783'), (b'content-type', b'application/json')])
+2026-03-03 10:34:36,549 - httpx - INFO - HTTP Request: POST http://127.0.0.1:8902/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-03 10:34:36,550 - httpcore.http11 - DEBUG - receive_response_body.started request=<Request [b'POST']>
+2026-03-03 10:34:36,550 - httpcore.http11 - DEBUG - receive_response_body.complete
+2026-03-03 10:34:36,550 - httpcore.http11 - DEBUG - response_closed.started
+2026-03-03 10:34:36,550 - httpcore.http11 - DEBUG - response_closed.complete
+2026-03-03 10:34:36,550 - openai._base_client - DEBUG - HTTP Response: POST http://127.0.0.1:8902/v1/chat/completions "200 OK" Headers({'date': 'Tue, 03 Mar 2026 02:34:25 GMT', 'server': 'uvicorn', 'content-length': '2783', 'content-type': 'application/json'})
+2026-03-03 10:34:36,550 - openai._base_client - DEBUG - request_id: None
+2026-03-03 10:34:36,553 - graph - INFO - ✅ 步骤 [4] 完成: 
+
+根据当前情况，我发现**工作目录为空**，没有任何已下载的视频文件可供分析。
+
+## 当前状态分析
+
+| 项目 | 状态 |
+|------|------|
+| 工作目录 | `/data/liwenxi/agent/GenVideo/temp` |
+| 目录内容 | **空** - 无视频文件 |
+| 可分析视频 | 0 个 |
+
+## 问题原因
+
+之前的步骤显示：
+- 步骤 1-3 均因*
+2026-03-03 10:34:36,554 - graph - WARNING - ⚠️ 准备步骤已完成但无分析 JSON，触发重新规划
+2026-03-03 10:34:36,555 - graph - INFO - 🎯 Phase 1 — Planner 开始规划素材准备
+2026-03-03 10:34:36,555 - graph - INFO - 🔍 _get_llm() model=Qwen3.5-27B
+2026-03-03 10:34:36,556 - graph - INFO - 🔍 _get_llm() model=Qwen3.5-27B
+2026-03-03 10:34:36,559 - openai._base_client - DEBUG - Request options: {'method': 'post', 'url': '/chat/completions', 'headers': {'X-Stainless-Raw-Response': 'true'}, 'files': None, 'idempotency_key': 'stainless-python-retry-dda2fe43-2ff6-41a2-b286-29abc7faca46', 'json_data': {'messages': [{'content': '请根据用户需求推断成片目标时长（单位秒）。\n- 若用户明确提到时长，返回对应秒数\n- 若用户未明确提到时长，返回 300（约5分钟）\n仅返回一个数字，不要输出其他内容。\n\n用户需求: Create a two-minute introduction video about Xinjiang University', 'role': 'user'}], 'model': 'Qwen3.5-27B', 'max_completion_tokens': 160, 'stream': False, 'temperature': 0.0}}
+2026-03-03 10:34:36,560 - openai._base_client - DEBUG - Sending HTTP Request: POST http://127.0.0.1:8902/v1/chat/completions
+2026-03-03 10:34:36,561 - httpcore.http11 - DEBUG - send_request_headers.started request=<Request [b'POST']>
+2026-03-03 10:34:36,561 - httpcore.http11 - DEBUG - send_request_headers.complete
+2026-03-03 10:34:36,561 - httpcore.http11 - DEBUG - send_request_body.started request=<Request [b'POST']>
+2026-03-03 10:34:36,561 - httpcore.http11 - DEBUG - send_request_body.complete
+2026-03-03 10:34:36,561 - httpcore.http11 - DEBUG - receive_response_headers.started request=<Request [b'POST']>
+2026-03-03 10:34:39,578 - httpcore.http11 - DEBUG - receive_response_headers.failed exception=KeyboardInterrupt()
+2026-03-03 10:34:39,578 - httpcore.http11 - DEBUG - response_closed.started
+2026-03-03 10:34:39,578 - httpcore.http11 - DEBUG - response_closed.complete

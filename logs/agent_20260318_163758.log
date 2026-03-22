@@ -1,0 +1,34 @@
+2026-03-18 16:37:58,189 - agent - INFO - Agent日志已初始化: E:\Google\GenVideo\logs\agent_20260318_163758.log
+2026-03-18 16:38:17,136 - agent - INFO - ============================================================
+2026-03-18 16:38:17,136 - agent - INFO - 📋 新任务开始: 创建一个一分钟左右的新疆大学介绍视频
+2026-03-18 16:38:17,136 - agent - INFO - ============================================================
+2026-03-18 16:38:17,178 - graph - INFO - 🎯 Phase 1 — Planner 开始规划素材准备
+2026-03-18 16:38:17,178 - graph - INFO - 🔍 _get_llm() model=Qwen3.5-122B-A10B
+2026-03-18 16:38:17,962 - graph - INFO - 🔍 _get_llm() model=Qwen3.5-122B-A10B
+2026-03-18 16:38:26,003 - graph - INFO - 📋 素材准备计划 (4 步): 为制作一分钟新疆大学介绍视频，完成素材的搜索、筛选、下载及深度多模态分析，为后续自动剪辑提供高质量数据基础。
+2026-03-18 16:38:26,003 - graph - INFO -    [1] 使用关键词'新疆大学'、'新大校园'、'新疆大学风景'、'新疆大学招生'、'新疆大学图书馆'在Bilibili进行搜索，每关键词搜索2页，每页获取28个结果，以扩大素材库广度。 → search_bilibili_video
+2026-03-18 16:38:26,003 - graph - INFO -    [2] 对搜索到的所有候选视频（上限100个）进行AI评分筛选，重点评估画质清晰度、内容相关性（是否包含标志性建筑或活动）、画面美感及视频时长，选出最适合剪辑的Top 10个视频。 → rank_video_candidates
+2026-03-18 16:38:26,003 - graph - INFO -    [3] 批量下载经筛选出的Top 10个最优视频到工作目录 E:\Google\GenVideo\temp，确保素材完整可用。 → download_bilibili_video
+2026-03-18 16:38:26,005 - graph - INFO -    [4] 对下载的所有10个视频进行多模态深度分析，识别每个视频中的关键场景（如校门、图书馆、操场、实验室等）、人物活动、环境氛围，并输出详细的时间线分析和剪辑建议。 → analyze_video
+2026-03-18 16:38:26,005 - graph - INFO - ⏱ 目标时长: 60.0s
+2026-03-18 16:38:26,005 - graph - INFO - 🔧 Executor 步骤 [1]: 使用关键词'新疆大学'、'新大校园'、'新疆大学风景'、'新疆大学招生'、'新疆大学图书馆'在Bilibili进行搜索，每关键词搜索2页，每页获取28个结果，以扩大素材库广度。
+2026-03-18 16:38:26,006 - graph - INFO - 🔍 _get_llm() model=Qwen3.5-122B-A10B
+2026-03-18 16:38:26,056 - graph - INFO - 🧰 步骤 [1] 工具白名单: search_bilibili_video
+2026-03-18 16:38:28,739 - tools._shared - INFO - 🔍 开始搜索Bilibili视频: query='新疆大学', max_results=28, pages=2, expand_variants=3
+2026-03-18 16:38:31,808 - tools._shared - DEBUG - B站搜索返回结构: ['seid', 'page', 'pagesize', 'numResults', 'numPages', 'suggest_keyword', 'rqt_type', 'exp_list', 'is_hit_web_inf', 'egg_hit', 'result', 'show_column', 'in_black_key', 'in_white_key', 'next']
+2026-03-18 16:38:31,808 - tools._shared - DEBUG - 获取到 28 条搜索结果
+2026-03-18 16:38:32,241 - tools._shared - DEBUG - B站搜索返回结构: ['seid', 'page', 'pagesize', 'numResults', 'numPages', 'suggest_keyword', 'rqt_type', 'exp_list', 'is_hit_web_inf', 'egg_hit', 'result', 'show_column', 'in_black_key', 'in_white_key', 'next']
+2026-03-18 16:38:32,241 - tools._shared - DEBUG - 获取到 28 条搜索结果
+2026-03-18 16:38:32,731 - tools._shared - DEBUG - B站搜索返回结构: ['seid', 'page', 'pagesize', 'numResults', 'numPages', 'suggest_keyword', 'rqt_type', 'exp_list', 'is_hit_web_inf', 'egg_hit', 'result', 'show_column', 'in_black_key', 'in_white_key', 'next']
+2026-03-18 16:38:32,731 - tools._shared - DEBUG - 获取到 28 条搜索结果
+2026-03-18 16:38:33,182 - tools._shared - DEBUG - B站搜索返回结构: ['seid', 'page', 'pagesize', 'numResults', 'numPages', 'suggest_keyword', 'rqt_type', 'exp_list', 'is_hit_web_inf', 'egg_hit', 'result', 'show_column', 'in_black_key', 'in_white_key', 'next']
+2026-03-18 16:38:33,182 - tools._shared - DEBUG - 获取到 28 条搜索结果
+2026-03-18 16:38:33,634 - tools._shared - DEBUG - B站搜索返回结构: ['seid', 'page', 'pagesize', 'numResults', 'numPages', 'suggest_keyword', 'rqt_type', 'exp_list', 'is_hit_web_inf', 'egg_hit', 'result', 'show_column', 'in_black_key', 'in_white_key', 'next']
+2026-03-18 16:38:33,634 - tools._shared - DEBUG - 获取到 28 条搜索结果
+2026-03-18 16:38:34,049 - tools._shared - DEBUG - B站搜索返回结构: ['seid', 'page', 'pagesize', 'numResults', 'numPages', 'suggest_keyword', 'rqt_type', 'exp_list', 'is_hit_web_inf', 'egg_hit', 'result', 'show_column', 'in_black_key', 'in_white_key', 'next']
+2026-03-18 16:38:34,049 - tools._shared - DEBUG - 获取到 28 条搜索结果
+2026-03-18 16:38:34,548 - tools._shared - DEBUG - B站搜索返回结构: ['seid', 'page', 'pagesize', 'numResults', 'numPages', 'suggest_keyword', 'rqt_type', 'exp_list', 'is_hit_web_inf', 'egg_hit', 'result', 'show_column', 'in_black_key', 'in_white_key', 'next']
+2026-03-18 16:38:34,549 - tools._shared - DEBUG - 获取到 28 条搜索结果
+2026-03-18 16:38:34,982 - tools._shared - DEBUG - B站搜索返回结构: ['seid', 'page', 'pagesize', 'numResults', 'numPages', 'suggest_keyword', 'rqt_type', 'exp_list', 'is_hit_web_inf', 'egg_hit', 'result', 'show_column', 'in_black_key', 'in_white_key', 'next']
+2026-03-18 16:38:34,983 - tools._shared - DEBUG - 获取到 28 条搜索结果
+2026-03-18 16:38:34,984 - tools._shared - INFO - 📊 Bilibili搜索统计: 查询=4, 原始结果=220, 去重后=167, 过滤后=139, 超时长剔除=28, 时长未知剔除=0, 候选=100

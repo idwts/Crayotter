@@ -1,0 +1,34 @@
+{
+  "items": [
+    {
+      "id": "campus-youth-theme",
+      "tab": "campus",
+      "title": "campus_youth_final.mp4",
+      "description": "青春校园主题：聚焦校园人文、学习场景与活力氛围。",
+      "videoSrc": "./assets/videos/campus_youth_final.mp4",
+      "callsSrc": "./assets/log_calls/campus_youth_calls.json",
+      "logSrc": "./assets/logs/video_agent_20260321_045836.log",
+      "traceHref": "./assets/traces/campus_youth_trace.html"
+    },
+    {
+      "id": "xinjiang-nature-theme",
+      "tab": "pipeline",
+      "title": "Xinjiang_Nature_Final.mp4",
+      "description": "新疆自然主题：突出自然景观、多镜头调度与色彩节奏。",
+      "videoSrc": "./assets/videos/Xinjiang_Nature_Final.mp4",
+      "callsSrc": "./assets/log_calls/xinjiang_nature_calls.json",
+      "logSrc": "./assets/logs/video_agent_20260321_130207.log",
+      "traceHref": "./assets/traces/xinjiang_nature_trace.html"
+    },
+    {
+      "id": "travel-healing-ops",
+      "tab": "ops",
+      "title": "travel_healing_final.mp4",
+      "description": "治愈旅行主题：聚焦沉浸感镜头。",
+      "videoSrc": "./assets/videos/travel_healing_final.mp4",
+      "callsSrc": "./assets/log_calls/travel_healing_calls.json",
+      "logSrc": "./assets/logs/video_agent_20260320_153647.log",
+      "traceHref": "./assets/traces/travel_healing_trace.html"
+    }
+  ]
+}

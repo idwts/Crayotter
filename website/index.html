@@ -1,0 +1,188 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="site-version" content="20260322-01">
+  <title>Crayotter | 多模态视频自动编辑 Agent</title>
+  <meta name="description" content="Crayotter 是一个面向 general agent framework 的多模态视频自动编辑系统，支持三阶段工作流：素材准备、深度研究、自动生成。">
+  <link rel="stylesheet" href="./styles.css">
+</head>
+<body>
+  <header class="site-header">
+    <div class="container nav-wrap">
+      <a class="brand" href="#top" aria-label="Crayotter 首页">
+        <span class="brand-logo-co" aria-hidden="true">CO</span>
+        <span class="brand-text">Crayotter</span>
+      </a>
+      <div class="nav-controls">
+        <button id="themeToggle" class="theme-toggle-site" type="button" aria-label="切换主题">
+          ☀️ 浅色
+        </button>
+        <button class="nav-toggle" type="button" aria-label="切换导航菜单">☰</button>
+      </div>
+      <nav class="nav-links" aria-label="主导航">
+        <a href="#overview">概览</a>
+        <a href="#demo">案例</a>
+        <a href="#workflow">工作流</a>
+        <a href="#contributors">贡献者</a>
+      </nav>
+    </div>
+  </header>
+
+  <main id="top">
+    <section class="hero" id="overview">
+      <div class="hero-glow hero-glow-a"></div>
+      <div class="hero-glow hero-glow-b"></div>
+      <div class="container hero-content">
+        <h1><span>Crayotter</span> 多模态视频自动编辑 Agent</h1>
+        <p>
+          把视频生成拆分为三阶段自动化工作流，先规划、再分析、再执行，
+          让视频生产从脚本到成片更稳、更快、更可控
+        </p>
+        <div class="hero-actions">
+          <a class="btn btn-primary" href="#workflow">查看三阶段流程</a>
+          <a class="btn btn-ghost" href="#demo">查看展示案例</a>
+          <a class="github-link github-link-compact" href="https://github.com/idwts/Crayotter" target="_blank" rel="noopener noreferrer" aria-label="打开 Crayotter GitHub 仓库">
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <path fill="currentColor" d="M12 2C6.48 2 2 6.58 2 12.23c0 4.52 2.87 8.35 6.84 9.7.5.1.68-.22.68-.5 0-.25-.01-1.07-.01-1.94-2.78.62-3.37-1.22-3.37-1.22-.45-1.2-1.11-1.52-1.11-1.52-.91-.64.07-.63.07-.63 1 .07 1.54 1.06 1.54 1.06.9 1.58 2.35 1.12 2.92.85.09-.67.35-1.13.64-1.39-2.22-.26-4.56-1.14-4.56-5.08 0-1.12.39-2.03 1.04-2.74-.1-.26-.45-1.31.1-2.73 0 0 .84-.28 2.75 1.04A9.34 9.34 0 0 1 12 6.87c.85 0 1.72.12 2.52.35 1.9-1.32 2.74-1.04 2.74-1.04.55 1.42.2 2.47.1 2.73.65.71 1.04 1.62 1.04 2.74 0 3.95-2.34 4.82-4.57 5.07.36.32.68.95.68 1.92 0 1.38-.01 2.5-.01 2.84 0 .28.18.61.69.5A10.27 10.27 0 0 0 22 12.23C22 6.58 17.52 2 12 2z"/>
+            </svg>
+            <span>github</span>
+          </a>
+        </div>
+        <div class="stat-grid">
+          <article class="stat-card">
+            <h3>3 阶段</h3>
+            <p>Planner → Research → ReAct Editor</p>
+          </article>
+          <article class="stat-card">
+            <h3>20+ 工具</h3>
+            <p>搜索、下载、分析、转场、配音、导出</p>
+          </article>
+          <article class="stat-card">
+            <h3>自动化闭环</h3>
+            <p>从候选素材到最终成片全流程打通</p>
+          </article>
+          <article class="stat-card">
+            <h3>可观测</h3>
+            <p>日志可视化追踪每次任务执行轨迹</p>
+          </article>
+        </div>
+      </div>
+    </section>
+
+    <section class="section" id="demo">
+      <div class="container">
+        <div class="section-head">
+          <h2>See Crayotter in Action</h2>
+          <p>探索不同领域的剪辑成果。</p>
+        </div>
+
+        <div class="tabs" role="tablist" aria-label="案例分类">
+          <button class="tab-button active" type="button" role="tab" data-tab-target="campus">青春校园</button>
+          <button class="tab-button" type="button" role="tab" data-tab-target="pipeline">自然风光</button>
+          <button class="tab-button" type="button" role="tab" data-tab-target="ops">治愈旅行</button>
+        </div>
+
+        <div class="tab-panel active" data-tab-panel="campus">
+          <div class="demo-stack" data-demo-stack="true" data-demo-tab="campus" data-config="./assets/demo-showcase.json" data-config-version="20260322-01">
+            <div class="demo-loading">正在读取「青春校园」配置...</div>
+          </div>
+        </div>
+
+        <div class="tab-panel" data-tab-panel="pipeline">
+          <div class="demo-stack" data-demo-stack="true" data-demo-tab="pipeline" data-config="./assets/demo-showcase.json" data-config-version="20260322-01">
+            <div class="demo-loading">正在读取「自然风光」配置...</div>
+          </div>
+        </div>
+
+        <div class="tab-panel" data-tab-panel="ops">
+          <div class="demo-stack" data-demo-stack="true" data-demo-tab="ops" data-config="./assets/demo-showcase.json" data-config-version="20260322-01">
+            <div class="demo-loading">正在读取「治愈旅行」配置...</div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="section section-soft" id="workflow">
+      <div class="container">
+        <div class="section-head">
+          <h2>三阶段工作流</h2>
+          <p>“可控自动化”而不是黑盒生成。</p>
+        </div>
+        <div class="workflow-grid">
+          <article class="workflow-card">
+            <span class="phase-tag">Phase 1</span>
+            <h3>Planner + Executor</h3>
+            <p>结构化计划先行，确保搜索、下载、分析过程稳定可重跑。</p>
+            <ol>
+              <li>扩展关键词并分页搜索</li>
+              <li>多候选打分筛选 Top-K</li>
+              <li>确定性下载并落盘</li>
+              <li>逐视频分析生成 JSON</li>
+            </ol>
+          </article>
+          <article class="workflow-card">
+            <span class="phase-tag">Phase 2</span>
+            <h3>Editing Research</h3>
+            <p>不执行工具，只做深度推理，提前定义叙事结构和镜头序列。</p>
+            <ol>
+              <li>逐段阅读分析结果</li>
+              <li>提炼主题、情绪与视觉特征</li>
+              <li>设计转场与节奏曲线</li>
+              <li>输出可执行剪辑蓝图</li>
+            </ol>
+          </article>
+          <article class="workflow-card">
+            <span class="phase-tag">Phase 3</span>
+            <h3>ReAct Editor</h3>
+            <p>基于蓝图自动完成裁剪、合并、转场、配音、字幕和导出。</p>
+            <ol>
+              <li>按时间段精确裁剪</li>
+              <li>多源混剪与专业转场</li>
+              <li>成片复分析后分段配音</li>
+              <li>时长校验并导出成片</li>
+            </ol>
+          </article>
+        </div>
+      </div>
+    </section>
+
+    <section class="section" id="contributors">
+      <div class="container">
+        <div class="section-head">
+          <h2>Contributors</h2>
+          <!-- <p>展示项目核心贡献者。</p> -->
+        </div>
+        <div class="contributors-grid">
+          <article class="contributor-card">
+            <h3>Lecheng Yan</h3>
+            <p>Project Maintainer</p>
+          </article>
+          <!-- <article class="contributor-card">
+            <h3>沉迷学习ing</h3>
+            <p>Workflow & Tooling Contributor</p>
+          </article>
+          <article class="contributor-card">
+            <h3>thefirstmycome</h3>
+            <p>Engineering Contributor</p>
+          </article>
+          <article class="contributor-card">
+            <h3>8openhands</h3>
+            <p>Automation Contributor</p>
+          </article> -->
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <footer class="site-footer">
+    <div class="container footer-wrap">
+      <p>© <span id="current-year"></span> Crayotter · Multi-modal Video Agent</p>
+      <p>Built for production-ready video workflow.</p>
+    </div>
+  </footer>
+
+  <script src="./script.js?v=20260322-01"></script>
+</body>
+</html>

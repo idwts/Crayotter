@@ -1,0 +1,807 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>GenVideo Agent Trace</title>
+<style>
+:root {
+  --bg-primary: #0d1117;
+  --bg-secondary: #161b22;
+  --bg-tertiary: #21262d;
+  --bg-card: #1c2128;
+  --border: #30363d;
+  --text-primary: #e6edf3;
+  --text-secondary: #8b949e;
+  --text-muted: #6e7681;
+  --accent-blue: #58a6ff;
+  --accent-green: #3fb950;
+  --accent-yellow: #d29922;
+  --accent-red: #f85149;
+  --accent-purple: #bc8cff;
+  --accent-cyan: #39d2c0;
+  --phase1-color: #58a6ff;
+  --phase15-color: #bc8cff;
+  --phase2-color: #3fb950;
+  --glow-blue: rgba(88, 166, 255, 0.15);
+  --glow-green: rgba(63, 185, 80, 0.15);
+  --glow-purple: rgba(188, 140, 255, 0.15);
+  --radius: 12px;
+  --radius-sm: 8px;
+  --shadow: 0 4px 24px rgba(0,0,0,0.3);
+}
+body.theme-light {
+  --bg-primary: #f6f8fc;
+  --bg-secondary: #ffffff;
+  --bg-tertiary: #eef3fb;
+  --bg-card: #ffffff;
+  --border: #d1dced;
+  --text-primary: #1e2b3f;
+  --text-secondary: #566784;
+  --text-muted: #6e7f9c;
+  --accent-blue: #2f6bda;
+  --accent-green: #208d5b;
+  --accent-yellow: #9f6f05;
+  --accent-red: #d74444;
+  --accent-purple: #7b56d8;
+  --accent-cyan: #1f9ea5;
+  --phase1-color: #2f6bda;
+  --phase15-color: #7b56d8;
+  --phase2-color: #208d5b;
+  --glow-blue: rgba(47, 107, 218, 0.14);
+  --glow-green: rgba(32, 141, 91, 0.14);
+  --glow-purple: rgba(123, 86, 216, 0.14);
+  --shadow: 0 8px 24px rgba(35, 58, 95, 0.12);
+}
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body {
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans SC', Roboto, Helvetica, Arial, sans-serif;
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  line-height: 1.6;
+  overflow: hidden;
+  height: 100vh;
+  transition: background 0.2s ease, color 0.2s ease;
+}
+
+/* ── Layout ── */
+.app-container {
+  display: grid;
+  grid-template-columns: 320px 1fr;
+  grid-template-rows: 64px 1fr;
+  height: 100vh;
+  gap: 0;
+}
+
+/* ── Header ── */
+.header {
+  grid-column: 1 / -1;
+  background: var(--bg-secondary);
+  border-bottom: 1px solid var(--border);
+  display: flex;
+  align-items: center;
+  padding: 0 24px;
+  gap: 16px;
+  z-index: 10;
+}
+.header-logo {
+  font-size: 20px;
+  font-weight: 700;
+  background: linear-gradient(135deg, var(--accent-blue), var(--accent-purple));
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  letter-spacing: -0.5px;
+}
+.header-divider {
+  width: 1px;
+  height: 28px;
+  background: var(--border);
+}
+.header-task {
+  flex: 1;
+  font-size: 14px;
+  color: var(--text-secondary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.header-stats {
+  display: flex;
+  gap: 16px;
+  font-size: 13px;
+}
+.header-controls {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+.theme-toggle {
+  border: 1px solid var(--border);
+  background: var(--bg-tertiary);
+  color: var(--text-primary);
+  border-radius: 999px;
+  font-size: 12px;
+  padding: 5px 10px;
+  cursor: pointer;
+  transition: border-color 0.15s, background 0.15s;
+}
+.theme-toggle:hover {
+  border-color: var(--accent-blue);
+}
+.stat-item {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  color: var(--text-secondary);
+}
+.stat-value {
+  color: var(--text-primary);
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+/* ── Sidebar ── */
+.sidebar {
+  background: var(--bg-secondary);
+  border-right: 1px solid var(--border);
+  overflow-y: auto;
+  padding: 16px 0;
+}
+.sidebar::-webkit-scrollbar { width: 4px; }
+.sidebar::-webkit-scrollbar-track { background: transparent; }
+.sidebar::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
+
+.phase-block {
+  margin-bottom: 4px;
+}
+.phase-header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 20px;
+  cursor: pointer;
+  transition: background 0.15s;
+  user-select: none;
+}
+.phase-header:hover { background: var(--bg-tertiary); }
+.phase-header.active { background: var(--bg-tertiary); }
+.phase-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+.phase-dot.phase1 { background: var(--phase1-color); box-shadow: 0 0 8px var(--glow-blue); }
+.phase-dot.phase15 { background: var(--phase15-color); box-shadow: 0 0 8px var(--glow-purple); }
+.phase-dot.phase2 { background: var(--phase2-color); box-shadow: 0 0 8px var(--glow-green); }
+.phase-label {
+  flex: 1;
+  font-size: 13px;
+  font-weight: 600;
+}
+.phase-duration {
+  font-size: 11px;
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+}
+.phase-chevron {
+  color: var(--text-muted);
+  transition: transform 0.2s;
+  font-size: 12px;
+}
+.phase-header.expanded .phase-chevron { transform: rotate(90deg); }
+
+.phase-steps {
+  display: none;
+  padding: 2px 0 8px 0;
+}
+.phase-header.expanded + .phase-steps { display: block; }
+
+.step-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 6px 20px 6px 44px;
+  cursor: pointer;
+  transition: background 0.15s;
+  font-size: 12px;
+  color: var(--text-secondary);
+  position: relative;
+}
+.step-item::before {
+  content: '';
+  position: absolute;
+  left: 29px;
+  top: 0;
+  bottom: 0;
+  width: 1px;
+  background: var(--border);
+}
+.step-item:hover { background: var(--bg-tertiary); color: var(--text-primary); }
+.step-item.active { background: var(--bg-tertiary); color: var(--text-primary); }
+.step-icon {
+  font-size: 14px;
+  flex-shrink: 0;
+  line-height: 1.4;
+}
+.step-text {
+  flex: 1;
+  line-height: 1.4;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+}
+.step-badge {
+  font-size: 10px;
+  padding: 1px 6px;
+  border-radius: 10px;
+  font-weight: 600;
+  flex-shrink: 0;
+}
+.badge-tool { background: rgba(88,166,255,0.15); color: var(--accent-blue); }
+.badge-warn { background: rgba(210,153,34,0.15); color: var(--accent-yellow); }
+.badge-error { background: rgba(248,81,73,0.15); color: var(--accent-red); }
+
+/* ── Main Content ── */
+.main {
+  overflow-y: auto;
+  padding: 24px;
+  background: var(--bg-primary);
+}
+.main::-webkit-scrollbar { width: 6px; }
+.main::-webkit-scrollbar-track { background: transparent; }
+.main::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
+
+/* ── Summary Cards ── */
+.summary-row {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: 12px;
+  margin-bottom: 24px;
+}
+.summary-card {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 16px 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.summary-label {
+  font-size: 12px;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+.summary-value {
+  font-size: 24px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+.summary-value.blue { color: var(--accent-blue); }
+.summary-value.green { color: var(--accent-green); }
+.summary-value.purple { color: var(--accent-purple); }
+.summary-value.yellow { color: var(--accent-yellow); }
+
+/* ── Timeline ── */
+.timeline-section {
+  margin-bottom: 32px;
+}
+.timeline-phase-title {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 16px;
+  padding-bottom: 8px;
+  border-bottom: 1px solid var(--border);
+}
+.timeline-phase-icon {
+  font-size: 20px;
+}
+.timeline-phase-name {
+  font-size: 16px;
+  font-weight: 600;
+}
+.timeline-phase-time {
+  font-size: 12px;
+  color: var(--text-muted);
+  margin-left: auto;
+  font-variant-numeric: tabular-nums;
+}
+
+/* ── Event Cards ── */
+.event-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.event-card {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 10px 16px;
+  display: grid;
+  grid-template-columns: 90px 24px 1fr auto;
+  align-items: center;
+  gap: 10px;
+  transition: border-color 0.15s, background 0.15s;
+  cursor: default;
+}
+.event-card:hover {
+  border-color: var(--accent-blue);
+  background: rgba(88,166,255,0.04);
+}
+.event-card.warning {
+  border-left: 3px solid var(--accent-yellow);
+}
+.event-card.error {
+  border-left: 3px solid var(--accent-red);
+}
+.event-time {
+  font-size: 11px;
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+  font-family: 'SF Mono', 'Cascadia Code', 'Consolas', monospace;
+}
+.event-icon {
+  font-size: 16px;
+  text-align: center;
+}
+.event-msg {
+  font-size: 13px;
+  color: var(--text-primary);
+  line-height: 1.5;
+  word-break: break-all;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.event-card.expanded .event-msg {
+  white-space: normal;
+}
+.event-tag {
+  font-size: 10px;
+  padding: 2px 8px;
+  border-radius: 4px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.3px;
+  flex-shrink: 0;
+}
+.tag-phase { background: rgba(88,166,255,0.12); color: var(--accent-blue); }
+.tag-step { background: rgba(63,185,80,0.12); color: var(--accent-green); }
+.tag-tool { background: rgba(188,140,255,0.12); color: var(--accent-purple); }
+.tag-llm { background: rgba(57,210,192,0.12); color: var(--accent-cyan); }
+.tag-warn { background: rgba(210,153,34,0.12); color: var(--accent-yellow); }
+.tag-ok { background: rgba(63,185,80,0.12); color: var(--accent-green); }
+.tag-info { background: rgba(139,148,158,0.12); color: var(--text-secondary); }
+
+/* ── Phase Progress Bar ── */
+.progress-bar-container {
+  margin-bottom: 24px;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 16px 20px;
+}
+.progress-bar-label {
+  font-size: 12px;
+  color: var(--text-muted);
+  margin-bottom: 8px;
+  display: flex;
+  justify-content: space-between;
+}
+.progress-bar {
+  height: 8px;
+  border-radius: 4px;
+  background: var(--bg-tertiary);
+  overflow: hidden;
+  display: flex;
+}
+.progress-segment {
+  height: 100%;
+  transition: width 0.5s ease;
+}
+.progress-segment.phase1 { background: var(--phase1-color); }
+.progress-segment.phase15 { background: var(--phase15-color); }
+.progress-segment.phase2 { background: var(--phase2-color); }
+.progress-legend {
+  display: flex;
+  gap: 16px;
+  margin-top: 8px;
+  font-size: 11px;
+  color: var(--text-secondary);
+}
+.legend-item {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+.legend-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+}
+
+/* ── Filter Bar ── */
+.filter-bar {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 16px;
+  flex-wrap: wrap;
+}
+.filter-btn {
+  padding: 4px 12px;
+  border-radius: 16px;
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 12px;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+.filter-btn:hover { border-color: var(--accent-blue); color: var(--text-primary); }
+.filter-btn.active { background: var(--accent-blue); color: #fff; border-color: var(--accent-blue); }
+
+/* ── Animations ── */
+@keyframes fadeIn {
+  from { opacity: 0; transform: translateY(8px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+.event-card { animation: fadeIn 0.25s ease forwards; }
+
+/* ── Responsive ── */
+@media (max-width: 900px) {
+  .app-container { grid-template-columns: 1fr; }
+  .sidebar { display: none; }
+}
+</style>
+</head>
+<body>
+<div class="app-container">
+  <!-- Header -->
+  <div class="header">
+    <div class="header-logo">GenVideo Trace</div>
+    <div class="header-divider"></div>
+    <div class="header-task" id="headerTask">Loading...</div>
+    <div class="header-controls">
+      <button id="themeToggle" class="theme-toggle" type="button">☀️ 浅色</button>
+      <div class="header-stats" id="headerStats"></div>
+    </div>
+  </div>
+
+  <!-- Sidebar -->
+  <div class="sidebar" id="sidebar"></div>
+
+  <!-- Main -->
+  <div class="main" id="main">
+    <div id="summaryRow" class="summary-row"></div>
+    <div id="progressBar"></div>
+    <div id="filterBar" class="filter-bar"></div>
+    <div id="timeline"></div>
+  </div>
+</div>
+
+<script>
+const DATA = {"file": "video_agent_20260319_075527.log", "total_lines": 1084, "task": {"description": "create a 1 mins video about xinjiang university.", "plan_count": 4, "plan_desc": "为制作一段关于新疆大学的1分钟视频，自动规划并执行素材搜集、筛选、下载及深度分析阶段，确保后续剪辑AI拥有高质量、多视角的原始素材。", "target_duration": 60.0, "total_seconds": 1338.5, "output_file": "narrated_final.mp4, transitioned_final.mp4, transitioned_final_analysis_ts.mp4, xinjiang_university_final.mp4"}, "phases": [{"id": "phase1", "name": "Phase 1: 素材准备", "icon": "🎯", "start_ts": "2026-03-19 07:55:28,005", "duration_s": 660.4, "tool_calls": 14, "warnings": 0, "errors": 0}, {"id": "phase15", "name": "Phase 2: 深度剪辑研究", "icon": "🔬", "start_ts": "2026-03-19 08:06:28,406", "duration_s": 67.5, "tool_calls": 0, "warnings": 0, "errors": 0}, {"id": "phase2", "name": "Phase 3: ReAct Editor", "icon": "🎬", "start_ts": "2026-03-19 08:07:35,917", "duration_s": 610.9, "tool_calls": 60, "warnings": 0, "errors": 0}], "plan_steps": [{"index": 1, "description": "使用多关键词（如'新疆大学 校园风光', '新疆大学 红湖校区', '新疆大学 日常vlog', '新疆大学 科研', '新疆大学 建筑'）在Bilibili进行分页搜索，每页获取28个结果，共搜索2页，以建立广泛的候选素材池。", "tool": "search_bilibili_video"}, {"index": 2, "description": "调用AI模型对搜索得到的候选视频池（上限100个）进行评分和排序，重点评估视频画质、内容相关性、画面美感及是否包含标志性场景，筛选出最适合剪辑的Top 8个视频。", "tool": "rank_video_candidates"}, {"index": 3, "description": "批量下载经筛选出的Top 8个最优视频到工作目录，确保素材完整可用。", "tool": "download_bilibili_video"}, {"index": 4, "description": "对下载的所有8个视频进行多模态深度分析，识别每个视频中的关键场景（如校门、图书馆、操场、实验室）、人物活动及情感基调，输出详细的时间线分析和剪辑建议。", "tool": "analyze_video"}], "events": [{"timestamp": "2026-03-19 07:55:27,483", "ts_ms": 1773878127483, "logger": "tools._shared", "level": "INFO", "message": "日志系统已初始化，日志文件: /data1/liwenxi/agent/GenVideo/logs/video_agent_20260319_075527.log", "type": "info", "groups": []}, {"timestamp": "2026-03-19 07:55:27,930", "ts_ms": 1773878127930, "logger": "agent", "level": "INFO", "message": "============================================================", "type": "info", "groups": []}, {"timestamp": "2026-03-19 07:55:27,930", "ts_ms": 1773878127930, "logger": "agent", "level": "INFO", "message": "📋 新任务开始: create a 1 mins video about xinjiang university.", "type": "task_start", "groups": ["create a 1 mins video about xinjiang university."]}, {"timestamp": "2026-03-19 07:55:27,930", "ts_ms": 1773878127930, "logger": "agent", "level": "INFO", "message": "============================================================", "type": "info", "groups": []}, {"timestamp": "2026-03-19 07:55:28,003", "ts_ms": 1773878128003, "logger": "agent", "level": "INFO", "message": "🧹 任务前已清理 temp 文件: 4", "type": "cleanup_pre", "groups": ["4"]}, {"timestamp": "2026-03-19 07:55:28,005", "ts_ms": 1773878128005, "logger": "graph", "level": "INFO", "message": "🎯 Phase 1 — Planner 开始规划素材准备", "type": "phase1_start", "groups": []}, {"timestamp": "2026-03-19 07:55:28,005", "ts_ms": 1773878128005, "logger": "graph", "level": "INFO", "message": "🔍 _get_llm() model=Qwen3.5-122B-A10B", "type": "llm_call", "groups": ["Qwen3.5-122B-A10B"]}, {"timestamp": "2026-03-19 07:55:28,070", "ts_ms": 1773878128070, "logger": "graph", "level": "INFO", "message": "🔍 _get_llm() model=Qwen3.5-122B-A10B", "type": "llm_call", "groups": ["Qwen3.5-122B-A10B"]}, {"timestamp": "2026-03-19 07:55:35,640", "ts_ms": 1773878135640, "logger": "graph", "level": "INFO", "message": "📋 素材准备计划 (4 步): 为制作一段关于新疆大学的1分钟视频，自动规划并执行素材搜集、筛选、下载及深度分析阶段，确保后续剪辑AI拥有高质量、多视角的原始素材。", "type": "plan_summary", "groups": ["4", "为制作一段关于新疆大学的1分钟视频，自动规划并执行素材搜集、筛选、下载及深度分析阶段，确保后续剪辑AI拥有高质量、多视角的原始素材。"]}, {"timestamp": "2026-03-19 07:55:35,640", "ts_ms": 1773878135640, "logger": "graph", "level": "INFO", "message": "   [1] 使用多关键词（如'新疆大学 校园风光', '新疆大学 红湖校区', '新疆大学 日常vlog', '新疆大学 科研', '新疆大学 建筑'）在Bilibili进行分页搜索，每页获取28个结果，共搜索2页，以建立广泛的候选素材池。 → search_bilibili_video", "type": "plan_step", "groups": ["1", "使用多关键词（如'新疆大学 校园风光', '新疆大学 红湖校区', '新疆大学 日常vlog', '新疆大学 科研', '新疆大学 建筑'）在Bilibili进行分页搜索，每页获取28个结果，共搜索2页，以建立广泛的候选素材池。", "search_bilibili_video"]}, {"timestamp": "2026-03-19 07:55:35,640", "ts_ms": 1773878135640, "logger": "graph", "level": "INFO", "message": "   [2] 调用AI模型对搜索得到的候选视频池（上限100个）进行评分和排序，重点评估视频画质、内容相关性、画面美感及是否包含标志性场景，筛选出最适合剪辑的Top 8个视频。 → rank_video_candidates", "type": "plan_step", "groups": ["2", "调用AI模型对搜索得到的候选视频池（上限100个）进行评分和排序，重点评估视频画质、内容相关性、画面美感及是否包含标志性场景，筛选出最适合剪辑的Top 8个视频。", "rank_video_candidates"]}, {"timestamp": "2026-03-19 07:55:35,640", "ts_ms": 1773878135640, "logger": "graph", "level": "INFO", "message": "   [3] 批量下载经筛选出的Top 8个最优视频到工作目录，确保素材完整可用。 → download_bilibili_video", "type": "plan_step", "groups": ["3", "批量下载经筛选出的Top 8个最优视频到工作目录，确保素材完整可用。", "download_bilibili_video"]}, {"timestamp": "2026-03-19 07:55:35,640", "ts_ms": 1773878135640, "logger": "graph", "level": "INFO", "message": "   [4] 对下载的所有8个视频进行多模态深度分析，识别每个视频中的关键场景（如校门、图书馆、操场、实验室）、人物活动及情感基调，输出详细的时间线分析和剪辑建议。 → analyze_video", "type": "plan_step", "groups": ["4", "对下载的所有8个视频进行多模态深度分析，识别每个视频中的关键场景（如校门、图书馆、操场、实验室）、人物活动及情感基调，输出详细的时间线分析和剪辑建议。", "analyze_video"]}, {"timestamp": "2026-03-19 07:55:35,640", "ts_ms": 1773878135640, "logger": "graph", "level": "INFO", "message": "⏱ 目标时长: 60.0s", "type": "target_duration", "groups": ["60.0"]}, {"timestamp": "2026-03-19 07:55:35,642", "ts_ms": 1773878135642, "logger": "graph", "level": "INFO", "message": "🔧 Executor 步骤 [1]: 使用多关键词（如'新疆大学 校园风光', '新疆大学 红湖校区', '新疆大学 日常vlog', '新疆大学 科研', '新疆大学 建筑'）在Bilibili进行分页搜索，每页获取28个结果，共搜索2页，以建立广泛的候选素材池。", "type": "executor_step", "groups": ["1", "使用多关键词（如'新疆大学 校园风光', '新疆大学 红湖校区', '新疆大学 日常vlog', '新疆大学 科研', '新疆大学 建筑'）在Bilibili进行分页搜索，每页获取28个结果，共搜索2页，以建立广泛的候选素材池。"]}, {"timestamp": "2026-03-19 07:55:35,642", "ts_ms": 1773878135642, "logger": "graph", "level": "INFO", "message": "🔍 _get_llm() model=Qwen3.5-122B-A10B", "type": "llm_call", "groups": ["Qwen3.5-122B-A10B"]}, {"timestamp": "2026-03-19 07:55:35,657", "ts_ms": 1773878135657, "logger": "graph", "level": "INFO", "message": "🧰 步骤 [1] 工具白名单: search_bilibili_video", "type": "tool_whitelist", "groups": ["1", "search_bilibili_video"]}, {"timestamp": "2026-03-19 07:55:39,528", "ts_ms": 1773878139528, "logger": "tools._shared", "level": "INFO", "message": "🔍 开始搜索Bilibili视频: query='新疆大学 校园风光', max_results=28, pages=2, expand_variants=1", "type": "search_start", "groups": ["新疆大学 校园风光"]}, {"timestamp": "2026-03-19 07:55:41,930", "ts_ms": 1773878141930, "logger": "tools._shared", "level": "INFO", "message": "📊 Bilibili搜索统计: 查询=2, 原始结果=112, 去重后=70, 过滤后=59, 超时长剔除=11, 时长未知剔除=0, 候选=59", "type": "search_stats", "groups": ["查询=2, 原始结果=112, 去重后=70, 过滤后=59, 超时长剔除=11, 时长未知剔除=0, 候选=59"]}, {"timestamp": "2026-03-19 07:55:50,904", "ts_ms": 1773878150904, "logger": "tools._shared", "level": "INFO", "message": "🔍 开始搜索Bilibili视频: query='新疆大学 红湖校区', max_results=28, pages=2, expand_variants=1", "type": "search_start", "groups": ["新疆大学 红湖校区"]}, {"timestamp": "2026-03-19 07:55:52,658", "ts_ms": 1773878152658, "logger": "tools._shared", "level": "INFO", "message": "📊 Bilibili搜索统计: 查询=2, 原始结果=112, 去重后=78, 过滤后=71, 超时长剔除=7, 时长未知剔除=0, 候选=71", "type": "search_stats", "groups": ["查询=2, 原始结果=112, 去重后=78, 过滤后=71, 超时长剔除=7, 时长未知剔除=0, 候选=71"]}, {"timestamp": "2026-03-19 07:56:04,160", "ts_ms": 1773878164160, "logger": "tools._shared", "level": "INFO", "message": "🔍 开始搜索Bilibili视频: query='新疆大学 日常vlog', max_results=28, pages=2, expand_variants=1", "type": "search_start", "groups": ["新疆大学 日常vlog"]}, {"timestamp": "2026-03-19 07:56:05,926", "ts_ms": 1773878165926, "logger": "tools._shared", "level": "INFO", "message": "📊 Bilibili搜索统计: 查询=2, 原始结果=109, 去重后=91, 过滤后=79, 超时长剔除=12, 时长未知剔除=0, 候选=79", "type": "search_stats", "groups": ["查询=2, 原始结果=109, 去重后=91, 过滤后=79, 超时长剔除=12, 时长未知剔除=0, 候选=79"]}, {"timestamp": "2026-03-19 07:56:18,965", "ts_ms": 1773878178965, "logger": "tools._shared", "level": "INFO", "message": "🔍 开始搜索Bilibili视频: query='新疆大学 科研', max_results=28, pages=2, expand_variants=1", "type": "search_start", "groups": ["新疆大学 科研"]}, {"timestamp": "2026-03-19 07:56:20,738", "ts_ms": 1773878180738, "logger": "tools._shared", "level": "INFO", "message": "📊 Bilibili搜索统计: 查询=2, 原始结果=111, 去重后=82, 过滤后=48, 超时长剔除=34, 时长未知剔除=0, 候选=48", "type": "search_stats", "groups": ["查询=2, 原始结果=111, 去重后=82, 过滤后=48, 超时长剔除=34, 时长未知剔除=0, 候选=48"]}, {"timestamp": "2026-03-19 07:56:29,895", "ts_ms": 1773878189895, "logger": "tools._shared", "level": "INFO", "message": "🔍 开始搜索Bilibili视频: query='新疆大学 建筑', max_results=28, pages=2, expand_variants=1", "type": "search_start", "groups": ["新疆大学 建筑"]}, {"timestamp": "2026-03-19 07:56:31,688", "ts_ms": 1773878191688, "logger": "tools._shared", "level": "INFO", "message": "📊 Bilibili搜索统计: 查询=2, 原始结果=111, 去重后=98, 过滤后=76, 超时长剔除=22, 时长未知剔除=0, 候选=76", "type": "search_stats", "groups": ["查询=2, 原始结果=111, 去重后=98, 过滤后=76, 超时长剔除=22, 时长未知剔除=0, 候选=76"]}, {"timestamp": "2026-03-19 07:56:50,987", "ts_ms": 1773878210987, "logger": "graph", "level": "INFO", "message": "✅ 步骤 [1] 完成: 执行结果总结：", "type": "step_complete", "groups": ["1"]}, {"timestamp": "2026-03-19 07:56:50,989", "ts_ms": 1773878210989, "logger": "graph", "level": "INFO", "message": "📌 Prep Router: 步骤 2/4，继续 Phase 1", "type": "prep_router", "groups": ["2", "4"]}, {"timestamp": "2026-03-19 07:56:50,990", "ts_ms": 1773878210990, "logger": "graph", "level": "INFO", "message": "🔧 Executor 步骤 [2]: 调用AI模型对搜索得到的候选视频池（上限100个）进行评分和排序，重点评估视频画质、内容相关性、画面美感及是否包含标志性场景，筛选出最适合剪辑的Top 8个视频。", "type": "executor_step", "groups": ["2", "调用AI模型对搜索得到的候选视频池（上限100个）进行评分和排序，重点评估视频画质、内容相关性、画面美感及是否包含标志性场景，筛选出最适合剪辑的Top 8个视频。"]}, {"timestamp": "2026-03-19 07:56:50,991", "ts_ms": 1773878210991, "logger": "graph", "level": "INFO", "message": "🔍 _get_llm() model=Qwen3.5-122B-A10B", "type": "llm_call", "groups": ["Qwen3.5-122B-A10B"]}, {"timestamp": "2026-03-19 07:56:51,003", "ts_ms": 1773878211003, "logger": "graph", "level": "INFO", "message": "🧰 步骤 [2] 工具白名单: rank_video_candidates", "type": "tool_whitelist", "groups": ["2", "rank_video_candidates"]}, {"timestamp": "2026-03-19 07:56:52,469", "ts_ms": 1773878212469, "logger": "tools._shared", "level": "INFO", "message": "🤖 MLLM筛选开始: 入参=0, 候选池=245, 聚合候选=245, 过滤后=245, 超时长剔除=0, 时长未知剔除=0, 实际评估=100, 目标保留=8", "type": "rank_start", "groups": ["入参=0, 候选池=245, 聚合候选=245, 过滤后=245, 超时长剔除=0, 时长未知剔除=0, 实际评估=100, 目标保留=8"]}, {"timestamp": "2026-03-19 07:57:51,458", "ts_ms": 1773878271458, "logger": "tools._shared", "level": "INFO", "message": "✅ MLLM筛选完成: 候选=245, 评估=100, 选中=8", "type": "rank_done", "groups": ["候选=245, 评估=100, 选中=8"]}, {"timestamp": "2026-03-19 07:58:20,673", "ts_ms": 1773878300673, "logger": "graph", "level": "INFO", "message": "✅ 步骤 [2] 完成: **执行结果总结：**", "type": "step_complete", "groups": ["2"]}, {"timestamp": "2026-03-19 07:58:20,675", "ts_ms": 1773878300675, "logger": "graph", "level": "INFO", "message": "📌 Prep Router: 步骤 3/4，继续 Phase 1", "type": "prep_router", "groups": ["3", "4"]}, {"timestamp": "2026-03-19 07:58:20,676", "ts_ms": 1773878300676, "logger": "graph", "level": "INFO", "message": "🔧 Executor 步骤 [3]: 批量下载经筛选出的Top 8个最优视频到工作目录，确保素材完整可用。", "type": "executor_step", "groups": ["3", "批量下载经筛选出的Top 8个最优视频到工作目录，确保素材完整可用。"]}, {"timestamp": "2026-03-19 07:58:20,677", "ts_ms": 1773878300677, "logger": "graph", "level": "INFO", "message": "📥 下载步骤走确定性路径: top_k=8, max_review=100", "type": "download_det", "groups": ["8"]}, {"timestamp": "2026-03-19 07:58:20,678", "ts_ms": 1773878300678, "logger": "tools._shared", "level": "INFO", "message": "♻️ MLLM筛选命中缓存，跳过重复评估", "type": "info", "groups": []}, {"timestamp": "2026-03-19 07:58:20,681", "ts_ms": 1773878300681, "logger": "tools._shared", "level": "INFO", "message": "📥 开始下载Bilibili视频: url='http://www.bilibili.com/video/av115271771620939', filename='selected_1_5zyEqn', prefer_h264=True", "type": "download_start", "groups": ["http://www.bilibili.com/video/av115271771620939", "selected_1_5zyEqn"]}, {"timestamp": "2026-03-19 07:58:41,079", "ts_ms": 1773878321079, "logger": "tools._shared", "level": "INFO", "message": "📥 开始下载Bilibili视频: url='http://www.bilibili.com/video/av459490184', filename='selected_2_11K7H7', prefer_h264=True", "type": "download_start", "groups": ["http://www.bilibili.com/video/av459490184", "selected_2_11K7H7"]}, {"timestamp": "2026-03-19 07:59:10,482", "ts_ms": 1773878350482, "logger": "tools._shared", "level": "INFO", "message": "📥 开始下载Bilibili视频: url='http://www.bilibili.com/video/av1155938128', filename='selected_3_21M7ke', prefer_h264=True", "type": "download_start", "groups": ["http://www.bilibili.com/video/av1155938128", "selected_3_21M7ke"]}, {"timestamp": "2026-03-19 07:59:23,854", "ts_ms": 1773878363854, "logger": "tools._shared", "level": "INFO", "message": "📥 开始下载Bilibili视频: url='http://www.bilibili.com/video/av679453544', filename='selected_4_y1d7e8', prefer_h264=True", "type": "download_start", "groups": ["http://www.bilibili.com/video/av679453544", "selected_4_y1d7e8"]}, {"timestamp": "2026-03-19 07:59:37,862", "ts_ms": 1773878377862, "logger": "tools._shared", "level": "INFO", "message": "📥 开始下载Bilibili视频: url='http://www.bilibili.com/video/av45017190', filename='selected_5_11b7ta', prefer_h264=True", "type": "download_start", "groups": ["http://www.bilibili.com/video/av45017190", "selected_5_11b7ta"]}, {"timestamp": "2026-03-19 07:59:55,998", "ts_ms": 1773878395998, "logger": "tools._shared", "level": "INFO", "message": "📥 开始下载Bilibili视频: url='http://www.bilibili.com/video/av420947482', filename='selected_6_11171k', prefer_h264=True", "type": "download_start", "groups": ["http://www.bilibili.com/video/av420947482", "selected_6_11171k"]}, {"timestamp": "2026-03-19 08:00:06,484", "ts_ms": 1773878406484, "logger": "tools._shared", "level": "INFO", "message": "📥 开始下载Bilibili视频: url='http://www.bilibili.com/video/av481802049', filename='selected_7_11X7gp', prefer_h264=True", "type": "download_start", "groups": ["http://www.bilibili.com/video/av481802049", "selected_7_11X7gp"]}, {"timestamp": "2026-03-19 08:00:28,188", "ts_ms": 1773878428188, "logger": "tools._shared", "level": "INFO", "message": "📥 开始下载Bilibili视频: url='http://www.bilibili.com/video/av425387748', filename='selected_8_11H7Hk', prefer_h264=True", "type": "download_start", "groups": ["http://www.bilibili.com/video/av425387748", "selected_8_11H7Hk"]}, {"timestamp": "2026-03-19 08:00:53,103", "ts_ms": 1773878453103, "logger": "graph", "level": "INFO", "message": "✅ 步骤 [3] 完成(确定性下载): 下载步骤（确定性执行）完成", "type": "step_complete", "groups": ["3"]}, {"timestamp": "2026-03-19 08:00:53,104", "ts_ms": 1773878453104, "logger": "graph", "level": "INFO", "message": "📌 Prep Router: 步骤 4/4，继续 Phase 1", "type": "prep_router", "groups": ["4", "4"]}, {"timestamp": "2026-03-19 08:00:53,105", "ts_ms": 1773878453105, "logger": "graph", "level": "INFO", "message": "🔧 Executor 步骤 [4]: 对下载的所有8个视频进行多模态深度分析，识别每个视频中的关键场景（如校门、图书馆、操场、实验室）、人物活动及情感基调，输出详细的时间线分析和剪辑建议。", "type": "executor_step", "groups": ["4", "对下载的所有8个视频进行多模态深度分析，识别每个视频中的关键场景（如校门、图书馆、操场、实验室）、人物活动及情感基调，输出详细的时间线分析和剪辑建议。"]}, {"timestamp": "2026-03-19 08:00:53,106", "ts_ms": 1773878453106, "logger": "graph", "level": "INFO", "message": "🧠 源视频过滤: 待分析=8, 已分析=0", "type": "video_filter", "groups": ["8", "0"]}, {"timestamp": "2026-03-19 08:00:53,106", "ts_ms": 1773878453106, "logger": "graph", "level": "INFO", "message": "🔍 _get_llm() model=Qwen3.5-122B-A10B", "type": "llm_call", "groups": ["Qwen3.5-122B-A10B"]}, {"timestamp": "2026-03-19 08:00:53,120", "ts_ms": 1773878453120, "logger": "graph", "level": "INFO", "message": "🧰 步骤 [4] 工具白名单: analyze_video", "type": "tool_whitelist", "groups": ["4", "analyze_video"]}, {"timestamp": "2026-03-19 08:01:32,828", "ts_ms": 1773878492828, "logger": "tools._shared", "level": "INFO", "message": "🕒 已生成时间戳分析视频: /data1/liwenxi/agent/GenVideo/temp/selected_4_y1d7e8_analysis_ts.mp4", "type": "analysis_ts", "groups": ["/data1/liwenxi/agent/GenVideo/temp/selected_4_y1d7e8_analysis_ts.mp4"]}, {"timestamp": "2026-03-19 08:01:32,828", "ts_ms": 1773878492828, "logger": "tools._shared", "level": "INFO", "message": "多模态视频内容分析: model= is_omni=False video=/data1/liwenxi/agent/GenVideo/temp/selected_4_y1d7e8_analysis_ts.mp4", "type": "info", "groups": []}, {"timestamp": "2026-03-19 08:01:32,870", "ts_ms": 1773878492870, "logger": "tools._shared", "level": "INFO", "message": "视频URLs: ['file:///data1/liwenxi/agent/GenVideo/temp/selected_4_y1d7e8_analysis_ts.mp4', 'file:///data1/liwenxi/agent/GenVideo/temp/selected_4_y1d7e8.mp4'] | 音频URLs: [] | is_omni=False", "type": "info", "groups": []}, {"timestamp": "2026-03-19 08:01:39,143", "ts_ms": 1773878499143, "logger": "tools._shared", "level": "INFO", "message": "🕒 已生成时间戳分析视频: /data1/liwenxi/agent/GenVideo/temp/selected_3_21M7ke_analysis_ts.mp4", "type": "analysis_ts", "groups": ["/data1/liwenxi/agent/GenVideo/temp/selected_3_21M7ke_analysis_ts.mp4"]}, {"timestamp": "2026-03-19 08:01:39,143", "ts_ms": 1773878499143, "logger": "tools._shared", "level": "INFO", "message": "多模态视频内容分析: model= is_omni=False video=/data1/liwenxi/agent/GenVideo/temp/selected_3_21M7ke_analysis_ts.mp4", "type": "info", "groups": []}, {"timestamp": "2026-03-19 08:01:39,144", "ts_ms": 1773878499144, "logger": "tools._shared", "level": "INFO", "message": "视频URLs: ['file:///data1/liwenxi/agent/GenVideo/temp/selected_3_21M7ke_analysis_ts.mp4', 'file:///data1/liwenxi/agent/GenVideo/temp/selected_3_21M7ke.mp4'] | 音频URLs: [] | is_omni=False", "type": "info", "groups": []}, {"timestamp": "2026-03-19 08:01:52,527", "ts_ms": 1773878512527, "logger": "tools._shared", "level": "INFO", "message": "🕒 已生成时间戳分析视频: /data1/liwenxi/agent/GenVideo/temp/selected_5_11b7ta_analysis_ts.mp4", "type": "analysis_ts", "groups": ["/data1/liwenxi/agent/GenVideo/temp/selected_5_11b7ta_analysis_ts.mp4"]}, {"timestamp": "2026-03-19 08:01:52,527", "ts_ms": 1773878512527, "logger": "tools._shared", "level": "INFO", "message": "多模态视频内容分析: model= is_omni=False video=/data1/liwenxi/agent/GenVideo/temp/selected_5_11b7ta_analysis_ts.mp4", "type": "info", "groups": []}, {"timestamp": "2026-03-19 08:01:52,528", "ts_ms": 1773878512528, "logger": "tools._shared", "level": "INFO", "message": "视频URLs: ['file:///data1/liwenxi/agent/GenVideo/temp/selected_5_11b7ta_analysis_ts.mp4', 'file:///data1/liwenxi/agent/GenVideo/temp/selected_5_11b7ta.mp4'] | 音频URLs: [] | is_omni=False", "type": "info", "groups": []}, {"timestamp": "2026-03-19 08:01:53,449", "ts_ms": 1773878513449, "logger": "tools._shared", "level": "INFO", "message": "🕒 已生成时间戳分析视频: /data1/liwenxi/agent/GenVideo/temp/selected_1_5zyEqn_analysis_ts.mp4", "type": "analysis_ts", "groups": ["/data1/liwenxi/agent/GenVideo/temp/selected_1_5zyEqn_analysis_ts.mp4"]}, {"timestamp": "2026-03-19 08:01:53,449", "ts_ms": 1773878513449, "logger": "tools._shared", "level": "INFO", "message": "多模态视频内容分析: model= is_omni=False video=/data1/liwenxi/agent/GenVideo/temp/selected_1_5zyEqn_analysis_ts.mp4", "type": "info", "groups": []}, {"timestamp": "2026-03-19 08:01:53,450", "ts_ms": 1773878513450, "logger": "tools._shared", "level": "INFO", "message": "视频URLs: ['file:///data1/liwenxi/agent/GenVideo/temp/selected_1_5zyEqn_analysis_ts.mp4', 'file:///data1/liwenxi/agent/GenVideo/temp/selected_1_5zyEqn.mp4'] | 音频URLs: [] | is_omni=False", "type": "info", "groups": []}, {"timestamp": "2026-03-19 08:01:57,014", "ts_ms": 1773878517014, "logger": "tools._shared", "level": "INFO", "message": "🕒 已生成时间戳分析视频: /data1/liwenxi/agent/GenVideo/temp/selected_8_11H7Hk_analysis_ts.mp4", "type": "analysis_ts", "groups": ["/data1/liwenxi/agent/GenVideo/temp/selected_8_11H7Hk_analysis_ts.mp4"]}, {"timestamp": "2026-03-19 08:01:57,015", "ts_ms": 1773878517015, "logger": "tools._shared", "level": "INFO", "message": "多模态视频内容分析: model= is_omni=False video=/data1/liwenxi/agent/GenVideo/temp/selected_8_11H7Hk_analysis_ts.mp4", "type": "info", "groups": []}, {"timestamp": "2026-03-19 08:01:57,015", "ts_ms": 1773878517015, "logger": "tools._shared", "level": "INFO", "message": "视频URLs: ['file:///data1/liwenxi/agent/GenVideo/temp/selected_8_11H7Hk_analysis_ts.mp4', 'file:///data1/liwenxi/agent/GenVideo/temp/selected_8_11H7Hk.mp4'] | 音频URLs: [] | is_omni=False", "type": "info", "groups": []}, {"timestamp": "2026-03-19 08:01:58,302", "ts_ms": 1773878518302, "logger": "tools._shared", "level": "INFO", "message": "🕒 已生成时间戳分析视频: /data1/liwenxi/agent/GenVideo/temp/selected_7_11X7gp_analysis_ts.mp4", "type": "analysis_ts", "groups": ["/data1/liwenxi/agent/GenVideo/temp/selected_7_11X7gp_analysis_ts.mp4"]}, {"timestamp": "2026-03-19 08:01:58,302", "ts_ms": 1773878518302, "logger": "tools._shared", "level": "INFO", "message": "多模态视频内容分析: model= is_omni=False video=/data1/liwenxi/agent/GenVideo/temp/selected_7_11X7gp_analysis_ts.mp4", "type": "info", "groups": []}, {"timestamp": "2026-03-19 08:01:58,302", "ts_ms": 1773878518302, "logger": "tools._shared", "level": "INFO", "message": "视频URLs: ['file:///data1/liwenxi/agent/GenVideo/temp/selected_7_11X7gp_analysis_ts.mp4', 'file:///data1/liwenxi/agent/GenVideo/temp/selected_7_11X7gp.mp4'] | 音频URLs: [] | is_omni=False", "type": "info", "groups": []}, {"timestamp": "2026-03-19 08:02:03,405", "ts_ms": 1773878523405, "logger": "tools._shared", "level": "INFO", "message": "🕒 已生成时间戳分析视频: /data1/liwenxi/agent/GenVideo/temp/selected_6_11171k_analysis_ts.mp4", "type": "analysis_ts", "groups": ["/data1/liwenxi/agent/GenVideo/temp/selected_6_11171k_analysis_ts.mp4"]}, {"timestamp": "2026-03-19 08:02:03,405", "ts_ms": 1773878523405, "logger": "tools._shared", "level": "INFO", "message": "多模态视频内容分析: model= is_omni=False video=/data1/liwenxi/agent/GenVideo/temp/selected_6_11171k_analysis_ts.mp4", "type": "info", "groups": []}, {"timestamp": "2026-03-19 08:02:03,406", "ts_ms": 1773878523406, "logger": "tools._shared", "level": "INFO", "message": "视频URLs: ['file:///data1/liwenxi/agent/GenVideo/temp/selected_6_11171k_analysis_ts.mp4', 'file:///data1/liwenxi/agent/GenVideo/temp/selected_6_11171k.mp4'] | 音频URLs: [] | is_omni=False", "type": "info", "groups": []}, {"timestamp": "2026-03-19 08:02:36,542", "ts_ms": 1773878556542, "logger": "tools._shared", "level": "INFO", "message": "🕒 已生成时间戳分析视频: /data1/liwenxi/agent/GenVideo/temp/selected_2_11K7H7_analysis_ts.mp4", "type": "analysis_ts", "groups": ["/data1/liwenxi/agent/GenVideo/temp/selected_2_11K7H7_analysis_ts.mp4"]}, {"timestamp": "2026-03-19 08:02:36,542", "ts_ms": 1773878556542, "logger": "tools._shared", "level": "INFO", "message": "多模态视频内容分析: model= is_omni=False video=/data1/liwenxi/agent/GenVideo/temp/selected_2_11K7H7_analysis_ts.mp4", "type": "info", "groups": []}, {"timestamp": "2026-03-19 08:02:36,543", "ts_ms": 1773878556543, "logger": "tools._shared", "level": "INFO", "message": "视频URLs: ['file:///data1/liwenxi/agent/GenVideo/temp/selected_2_11K7H7_analysis_ts.mp4', 'file:///data1/liwenxi/agent/GenVideo/temp/selected_2_11K7H7.mp4'] | 音频URLs: [] | is_omni=False", "type": "info", "groups": []}, {"timestamp": "2026-03-19 08:03:50,214", "ts_ms": 1773878630214, "logger": "tools._shared", "level": "INFO", "message": "视频分析完成（视觉）: ### 全片分段分析", "type": "analysis_done", "groups": []}, {"timestamp": "2026-03-19 08:04:31,438", "ts_ms": 1773878671438, "logger": "tools._shared", "level": "INFO", "message": "视频分析完成（视觉）: ### 全片分段分析", "type": "analysis_done", "groups": []}, {"timestamp": "2026-03-19 08:04:32,897", "ts_ms": 1773878672897, "logger": "tools._shared", "level": "INFO", "message": "视频分析完成（视觉）: ### 全片分段分析", "type": "analysis_done", "groups": []}, {"timestamp": "2026-03-19 08:04:36,632", "ts_ms": 1773878676632, "logger": "tools._shared", "level": "INFO", "message": "视频分析完成（视觉）: ### 全片分段分析", "type": "analysis_done", "groups": []}, {"timestamp": "2026-03-19 08:04:44,595", "ts_ms": 1773878684595, "logger": "tools._shared", "level": "INFO", "message": "视频分析完成（视觉）: ### 全片分段分析", "type": "analysis_done", "groups": []}, {"timestamp": "2026-03-19 08:05:20,886", "ts_ms": 1773878720886, "logger": "tools._shared", "level": "INFO", "message": "视频分析完成（视觉）: ### 全片分段分析", "type": "analysis_done", "groups": []}, {"timestamp": "2026-03-19 08:05:46,157", "ts_ms": 1773878746157, "logger": "tools._shared", "level": "INFO", "message": "视频分析完成（视觉）: ### 全片分段分析", "type": "analysis_done", "groups": []}, {"timestamp": "2026-03-19 08:05:56,533", "ts_ms": 1773878756533, "logger": "tools._shared", "level": "INFO", "message": "视频分析完成（视觉）: ### 全片分段分析", "type": "analysis_done", "groups": []}, {"timestamp": "2026-03-19 08:06:28,403", "ts_ms": 1773878788403, "logger": "graph", "level": "INFO", "message": "✅ 步骤 [4] 完成: 所有8个视频的**多模态深度分析**已完成。", "type": "step_complete", "groups": ["4"]}, {"timestamp": "2026-03-19 08:06:28,405", "ts_ms": 1773878788405, "logger": "graph", "level": "INFO", "message": "✅ Phase 1 完成: 8 个分析文件, 8 个源视频 → 进入 Phase 2 深度剪辑研究", "type": "phase1_done", "groups": ["8 个分析文件, 8 个源视频 → 进入 Phase 2 深度剪辑研究"]}, {"timestamp": "2026-03-19 08:06:28,406", "ts_ms": 1773878788406, "logger": "graph", "level": "INFO", "message": "🔬 ═══ Phase 2 开始: 深度剪辑研究 ═══", "type": "phase15_start", "groups": []}, {"timestamp": "2026-03-19 08:06:28,412", "ts_ms": 1773878788412, "logger": "graph", "level": "INFO", "message": "🔍 _get_llm() model=Qwen3.5-122B-A10B", "type": "llm_call", "groups": ["Qwen3.5-122B-A10B"]}, {"timestamp": "2026-03-19 08:06:28,414", "ts_ms": 1773878788414, "logger": "graph", "level": "INFO", "message": "📝 分析上下文长度: 32745 字", "type": "blueprint_ctx", "groups": ["32745"]}, {"timestamp": "2026-03-19 08:06:28,415", "ts_ms": 1773878788415, "logger": "graph", "level": "INFO", "message": "📝 总提示长度: 38695 字", "type": "blueprint_prompt", "groups": ["38695"]}, {"timestamp": "2026-03-19 08:07:35,916", "ts_ms": 1773878855916, "logger": "graph", "level": "INFO", "message": "🔬 剪辑蓝图生成完成 (6596 字)", "type": "blueprint_done", "groups": ["6596"]}, {"timestamp": "2026-03-19 08:07:35,916", "ts_ms": 1773878855916, "logger": "graph", "level": "INFO", "message": "📝 蓝图摘要: # 新疆大学 60 秒宣传短片剪辑蓝图", "type": "blueprint_summary", "groups": ["# 新疆大学 60 秒宣传短片剪辑蓝图"]}, {"timestamp": "2026-03-19 08:07:35,917", "ts_ms": 1773878855917, "logger": "graph", "level": "INFO", "message": "🎬 ═══ Phase 3 开始: ReAct Editor 自主创作 ═══", "type": "phase2_start", "groups": []}, {"timestamp": "2026-03-19 08:07:35,922", "ts_ms": 1773878855922, "logger": "graph", "level": "INFO", "message": "🔍 _get_llm() model=Qwen3.5-122B-A10B", "type": "llm_call", "groups": ["Qwen3.5-122B-A10B"]}, {"timestamp": "2026-03-19 08:07:36,043", "ts_ms": 1773878856043, "logger": "graph", "level": "INFO", "message": "🧰 ReAct Editor 工具集: analyze_video, recall_semantic_segments, batch_cut_video, cut_video, merge_videos, inspect_video_duration, list_transition_presets, plan_transition_timeline, add_transition, validate_narration_timeline, build_edit_timeline_from_segments, align_narration_to_timeline, validate_timeline_constraints, score_cut_continuity, recommend_transition_for_cut, duck_background_audio, normalize_loudness, add_narration, add_narration_segments, add_subtitles, export_video", "type": "react_tools", "groups": ["analyze_video, recall_semantic_segments, batch_cut_video, cut_video, merge_videos, inspect_video_duration, list_transition_presets, plan_transition_timeline, add_transition, validate_narration_timeline, build_edit_timeline_from_segments, align_narration_to_timeline, validate_timeline_constraints, score_cut_continuity, recommend_transition_for_cut, duck_background_audio, normalize_loudness, add_narration, add_narration_segments, add_subtitles, export_video"]}, {"timestamp": "2026-03-19 08:07:36,043", "ts_ms": 1773878856043, "logger": "graph", "level": "INFO", "message": "📝 分析上下文长度: 32745 字", "type": "blueprint_ctx", "groups": ["32745"]}, {"timestamp": "2026-03-19 08:12:11,957", "ts_ms": 1773879131957, "logger": "tools._shared", "level": "INFO", "message": "📏 时长检测: /data1/liwenxi/agent/GenVideo/temp/merged_raw.mp4 -> 54.00s (1920x1080)", "type": "duration_check", "groups": ["/data1/liwenxi/agent/GenVideo/temp/merged_raw.mp4", "54.00"]}, {"timestamp": "2026-03-19 08:12:51,636", "ts_ms": 1773879171636, "logger": "tools._shared", "level": "INFO", "message": "📏 时长检测: /data1/liwenxi/agent/GenVideo/temp/transitioned_final.mp4 -> 50.20s (1920x1080)", "type": "duration_check", "groups": ["/data1/liwenxi/agent/GenVideo/temp/transitioned_final.mp4", "50.20"]}, {"timestamp": "2026-03-19 08:13:02,418", "ts_ms": 1773879182418, "logger": "tools._shared", "level": "INFO", "message": "🕒 已生成时间戳分析视频: /data1/liwenxi/agent/GenVideo/temp/transitioned_final_analysis_ts.mp4", "type": "analysis_ts", "groups": ["/data1/liwenxi/agent/GenVideo/temp/transitioned_final_analysis_ts.mp4"]}, {"timestamp": "2026-03-19 08:13:02,418", "ts_ms": 1773879182418, "logger": "tools._shared", "level": "INFO", "message": "多模态视频内容分析: model= is_omni=False video=/data1/liwenxi/agent/GenVideo/temp/transitioned_final_analysis_ts.mp4", "type": "info", "groups": []}, {"timestamp": "2026-03-19 08:13:02,419", "ts_ms": 1773879182419, "logger": "tools._shared", "level": "INFO", "message": "视频URLs: ['file:///data1/liwenxi/agent/GenVideo/temp/transitioned_final_analysis_ts.mp4', 'file:///data1/liwenxi/agent/GenVideo/temp/transitioned_final.mp4'] | 音频URLs: [] | is_omni=False", "type": "info", "groups": []}, {"timestamp": "2026-03-19 08:13:34,601", "ts_ms": 1773879214601, "logger": "tools._shared", "level": "INFO", "message": "视频分析完成（视觉）: ### 全片分段分析", "type": "analysis_done", "groups": []}, {"timestamp": "2026-03-19 08:14:06,216", "ts_ms": 1773879246216, "logger": "tools._shared", "level": "INFO", "message": "TTS 生成成功: 在天山脚下，雪山见证着每一寸土地的辽阔。 (20 chars) -> narrated_final_seg1.mp3", "type": "tts_success", "groups": ["在天山脚下，雪山见证着每一寸土地的辽阔。", "20", "narrated_final_seg1.mp3"]}, {"timestamp": "2026-03-19 08:14:06,272", "ts_ms": 1773879246272, "logger": "tools._shared", "level": "INFO", "message": "字幕布局: 段=1, font=AlibabaPuHuiTi-3-55-Regular.ttf, clip_h=96, y=910, video_h=1080, safe_margin=64, baseline_lift=10", "type": "subtitle_layout", "groups": ["1", "AlibabaPuHuiTi-3-55-Regular.ttf", "96", "910", "1080"]}, {"timestamp": "2026-03-19 08:14:06,846", "ts_ms": 1773879246846, "logger": "tools._shared", "level": "INFO", "message": "TTS 生成成功: 这里，是知识的殿堂。 (10 chars) -> narrated_final_seg2.mp3", "type": "tts_success", "groups": ["这里，是知识的殿堂。", "10", "narrated_final_seg2.mp3"]}, {"timestamp": "2026-03-19 08:14:06,898", "ts_ms": 1773879246898, "logger": "tools._shared", "level": "INFO", "message": "字幕布局: 段=2, font=AlibabaPuHuiTi-3-55-Regular.ttf, clip_h=95, y=911, video_h=1080, safe_margin=64, baseline_lift=10", "type": "subtitle_layout", "groups": ["2", "AlibabaPuHuiTi-3-55-Regular.ttf", "95", "911", "1080"]}, {"timestamp": "2026-03-19 08:14:08,165", "ts_ms": 1773879248165, "logger": "tools._shared", "level": "INFO", "message": "TTS 生成成功: 从宏伟的校门，到静谧的图书馆，每一处角落，都流淌着求知的渴望 (31 chars) -> narrated_final_seg3.mp3", "type": "tts_success", "groups": ["从宏伟的校门，到静谧的图书馆，每一处角落，都流淌着求知的渴望", "31", "narrated_final_seg3.mp3"]}, {"timestamp": "2026-03-19 08:14:08,235", "ts_ms": 1773879248235, "logger": "tools._shared", "level": "INFO", "message": "字幕布局: 段=3, font=AlibabaPuHuiTi-3-55-Regular.ttf, clip_h=96, y=910, video_h=1080, safe_margin=64, baseline_lift=10", "type": "subtitle_layout", "groups": ["3", "AlibabaPuHuiTi-3-55-Regular.ttf", "96", "910", "1080"]}, {"timestamp": "2026-03-19 08:14:09,007", "ts_ms": 1773879249007, "logger": "tools._shared", "level": "INFO", "message": "TTS 生成成功: 科研的严谨，生活的多彩。 (12 chars) -> narrated_final_seg4.mp3", "type": "tts_success", "groups": ["科研的严谨，生活的多彩。", "12", "narrated_final_seg4.mp3"]}, {"timestamp": "2026-03-19 08:14:09,063", "ts_ms": 1773879249063, "logger": "tools._shared", "level": "INFO", "message": "字幕布局: 段=4, font=AlibabaPuHuiTi-3-55-Regular.ttf, clip_h=95, y=911, video_h=1080, safe_margin=64, baseline_lift=10", "type": "subtitle_layout", "groups": ["4", "AlibabaPuHuiTi-3-55-Regular.ttf", "95", "911", "1080"]}, {"timestamp": "2026-03-19 08:14:10,296", "ts_ms": 1773879250296, "logger": "tools._shared", "level": "INFO", "message": "TTS 生成成功: 在实验室探索未知，在食堂品味烟火，在球场挥洒汗水。 (25 chars) -> narrated_final_seg5.mp3", "type": "tts_success", "groups": ["在实验室探索未知，在食堂品味烟火，在球场挥洒汗水。", "25", "narrated_final_seg5.mp3"]}, {"timestamp": "2026-03-19 08:14:10,353", "ts_ms": 1773879250353, "logger": "tools._shared", "level": "INFO", "message": "字幕布局: 段=5, font=AlibabaPuHuiTi-3-55-Regular.ttf, clip_h=95, y=911, video_h=1080, safe_margin=64, baseline_lift=10", "type": "subtitle_layout", "groups": ["5", "AlibabaPuHuiTi-3-55-Regular.ttf", "95", "911", "1080"]}, {"timestamp": "2026-03-19 08:14:11,136", "ts_ms": 1773879251136, "logger": "tools._shared", "level": "INFO", "message": "TTS 生成成功: 这就是新疆大学，在这里，遇见未来。 (17 chars) -> narrated_final_seg6.mp3", "type": "tts_success", "groups": ["这就是新疆大学，在这里，遇见未来。", "17", "narrated_final_seg6.mp3"]}, {"timestamp": "2026-03-19 08:14:11,196", "ts_ms": 1773879251196, "logger": "tools._shared", "level": "INFO", "message": "字幕布局: 段=6, font=AlibabaPuHuiTi-3-55-Regular.ttf, clip_h=95, y=911, video_h=1080, safe_margin=64, baseline_lift=10", "type": "subtitle_layout", "groups": ["6", "AlibabaPuHuiTi-3-55-Regular.ttf", "95", "911", "1080"]}, {"timestamp": "2026-03-19 08:16:59,818", "ts_ms": 1773879419818, "logger": "tools._shared", "level": "INFO", "message": "📏 时长检测: /data1/liwenxi/agent/GenVideo/temp/narrated_final.mp4 -> 50.60s (1920x1080)", "type": "duration_check", "groups": ["/data1/liwenxi/agent/GenVideo/temp/narrated_final.mp4", "50.60"]}, {"timestamp": "2026-03-19 08:17:46,471", "ts_ms": 1773879466471, "logger": "graph", "level": "INFO", "message": "🛠️ Phase3 工具调用: cut_video args={'input_path': '/data1/liwenxi/agent/GenVideo/temp/selected_1_5zyEqn.mp4', 'start_time': 0, 'end_time': 5, 'output_name': 'clip_01_opening_aerial'}", "type": "phase_tool_call", "groups": ["3", "cut_video", "{'input_path': '/data1/liwenxi/agent/GenVideo/temp/selected_1_5zyEqn.mp4', 'start_time': 0, 'end_time': 5, 'output_name': 'clip_01_opening_aerial'}"]}, {"timestamp": "2026-03-19 08:17:46,471", "ts_ms": 1773879466471, "logger": "graph", "level": "INFO", "message": "🛠️ Phase3 工具调用: cut_video args={'input_path': '/data1/liwenxi/agent/GenVideo/temp/selected_5_11b7ta.mp4', 'start_time': 0, 'end_time': 4, 'output_name': 'clip_02_nature_lake'}", "type": "phase_tool_call", "groups": ["3", "cut_video", "{'input_path': '/data1/liwenxi/agent/GenVideo/temp/selected_5_11b7ta.mp4', 'start_time': 0, 'end_time': 4, 'output_name': 'clip_02_nature_lake'}"]}, {"timestamp": "2026-03-19 08:17:46,471", "ts_ms": 1773879466471, "logger": "graph", "level": "INFO", "message": "🛠️ Phase3 工具调用: cut_video args={'input_path': '/data1/liwenxi/agent/GenVideo/temp/selected_7_11X7gp.mp4', 'start_time': 0, 'end_time': 5, 'output_name': 'clip_03_gate_snow'}", "type": "phase_tool_call", "groups": ["3", "cut_video", "{'input_path': '/data1/liwenxi/agent/GenVideo/temp/selected_7_11X7gp.mp4', 'start_time': 0, 'end_time': 5, 'output_name': 'clip_03_gate_snow'}"]}, {"timestamp": "2026-03-19 08:17:46,471", "ts_ms": 1773879466471, "logger": "graph", "level": "INFO", "message": "🛠️ Phase3 工具调用: cut_video args={'input_path': '/data1/liwenxi/agent/GenVideo/temp/selected_6_11171k.mp4', 'start_time': 5, 'end_time': 10, 'output_name': 'clip_04_stairs_hall'}", "type": "phase_tool_call", "groups": ["3", "cut_video", "{'input_path': '/data1/liwenxi/agent/GenVideo/temp/selected_6_11171k.mp4', 'start_time': 5, 'end_time': 10, 'output_name': 'clip_04_stairs_hall'}"]}, {"timestamp": "2026-03-19 08:17:46,471", "ts_ms": 1773879466471, "logger": "graph", "level": "INFO", "message": "🛠️ Phase3 工具调用: cut_video args={'input_path': '/data1/liwenxi/agent/GenVideo/temp/selected_3_21M7ke.mp4', 'start_time': 10, 'end_time': 15, 'output_name': 'clip_05_library_reading'}", "type": "phase_tool_call", "groups": ["3", "cut_video", "{'input_path': '/data1/liwenxi/agent/GenVideo/temp/selected_3_21M7ke.mp4', 'start_time': 10, 'end_time': 15, 'output_name': 'clip_05_library_reading'}"]}, {"timestamp": "2026-03-19 08:17:46,471", "ts_ms": 1773879466471, "logger": "graph", "level": "INFO", "message": "🛠️ Phase3 工具调用: cut_video args={'input_path': '/data1/liwenxi/agent/GenVideo/temp/selected_4_y1d7e8.mp4', 'start_time': 0, 'end_time': 3, 'output_name': 'clip_06_library_detail'}", "type": "phase_tool_call", "groups": ["3", "cut_video", "{'input_path': '/data1/liwenxi/agent/GenVideo/temp/selected_4_y1d7e8.mp4', 'start_time': 0, 'end_time': 3, 'output_name': 'clip_06_library_detail'}"]}, {"timestamp": "2026-03-19 08:17:46,471", "ts_ms": 1773879466471, "logger": "graph", "level": "INFO", "message": "🛠️ Phase3 工具调用: cut_video args={'input_path': '/data1/liwenxi/agent/GenVideo/temp/selected_3_21M7ke.mp4', 'start_time': 30, 'end_time': 35, 'output_name': 'clip_07_lab_research'}", "type": "phase_tool_call", "groups": ["3", "cut_video", "{'input_path': '/data1/liwenxi/agent/GenVideo/temp/selected_3_21M7ke.mp4', 'start_time': 30, 'end_time': 35, 'output_name': 'clip_07_lab_research'}"]}, {"timestamp": "2026-03-19 08:17:46,472", "ts_ms": 1773879466472, "logger": "graph", "level": "INFO", "message": "🛠️ Phase3 工具调用: cut_video args={'input_path': '/data1/liwenxi/agent/GenVideo/temp/selected_8_11H7Hk.mp4', 'start_time': 10, 'end_time': 14, 'output_name': 'clip_08_canteen_food'}", "type": "phase_tool_call", "groups": ["3", "cut_video", "{'input_path': '/data1/liwenxi/agent/GenVideo/temp/selected_8_11H7Hk.mp4', 'start_time': 10, 'end_time': 14, 'output_name': 'clip_08_canteen_food'}"]}, {"timestamp": "2026-03-19 08:17:46,472", "ts_ms": 1773879466472, "logger": "graph", "level": "INFO", "message": "🛠️ Phase3 工具调用: cut_video args={'input_path': '/data1/liwenxi/agent/GenVideo/temp/selected_8_11H7Hk.mp4', 'start_time': 80, 'end_time': 84, 'output_name': 'clip_09_sports_basketball'}", "type": "phase_tool_call", "groups": ["3", "cut_video", "{'input_path': '/data1/liwenxi/agent/GenVideo/temp/selected_8_11H7Hk.mp4', 'start_time': 80, 'end_time': 84, 'output_name': 'clip_09_sports_basketball'}"]}, {"timestamp": "2026-03-19 08:17:46,472", "ts_ms": 1773879466472, "logger": "graph", "level": "INFO", "message": "🛠️ Phase3 工具调用: cut_video args={'input_path': '/data1/liwenxi/agent/GenVideo/temp/selected_2_11K7H7.mp4', 'start_time': 60, 'end_time': 64, 'output_name': 'clip_10_life_laughing'}", "type": "phase_tool_call", "groups": ["3", "cut_video", "{'input_path': '/data1/liwenxi/agent/GenVideo/temp/selected_2_11K7H7.mp4', 'start_time': 60, 'end_time': 64, 'output_name': 'clip_10_life_laughing'}"]}, {"timestamp": "2026-03-19 08:17:46,472", "ts_ms": 1773879466472, "logger": "graph", "level": "INFO", "message": "🛠️ Phase3 工具调用: cut_video args={'input_path': '/data1/liwenxi/agent/GenVideo/temp/selected_1_5zyEqn.mp4', 'start_time': 100, 'end_time': 105, 'output_name': 'clip_11_sunset_mainroad'}", "type": "phase_tool_call", "groups": ["3", "cut_video", "{'input_path': '/data1/liwenxi/agent/GenVideo/temp/selected_1_5zyEqn.mp4', 'start_time': 100, 'end_time': 105, 'output_name': 'clip_11_sunset_mainroad'}"]}, {"timestamp": "2026-03-19 08:17:46,472", "ts_ms": 1773879466472, "logger": "graph", "level": "INFO", "message": "🛠️ Phase3 工具调用: cut_video args={'input_path': '/data1/liwenxi/agent/GenVideo/temp/selected_3_21M7ke.mp4', 'start_time': 0, 'end_time': 5, 'output_name': 'clip_12_ending_smile'}", "type": "phase_tool_call", "groups": ["3", "cut_video", "{'input_path': '/data1/liwenxi/agent/GenVideo/temp/selected_3_21M7ke.mp4', 'start_time': 0, 'end_time': 5, 'output_name': 'clip_12_ending_smile'}"]}, {"timestamp": "2026-03-19 08:17:46,472", "ts_ms": 1773879466472, "logger": "graph", "level": "INFO", "message": "📦 Phase3 工具结果: cut_video -> {\"status\": \"success\", \"path\": \"/data1/liwenxi/agent/GenVideo/temp/clip_01_opening_aerial.mp4\", \"duration\": 5.0}", "type": "phase_tool_result", "groups": ["3", "cut_video", "{\"status\": \"success\", \"path\": \"/data1/liwenxi/agent/GenVideo/temp/clip_01_opening_aerial.mp4\", \"duration\": 5.0}"]}, {"timestamp": "2026-03-19 08:17:46,472", "ts_ms": 1773879466472, "logger": "graph", "level": "INFO", "message": "📦 Phase3 工具结果: cut_video -> {\"status\": \"success\", \"path\": \"/data1/liwenxi/agent/GenVideo/temp/clip_02_nature_lake.mp4\", \"duration\": 4.0}", "type": "phase_tool_result", "groups": ["3", "cut_video", "{\"status\": \"success\", \"path\": \"/data1/liwenxi/agent/GenVideo/temp/clip_02_nature_lake.mp4\", \"duration\": 4.0}"]}, {"timestamp": "2026-03-19 08:17:46,472", "ts_ms": 1773879466472, "logger": "graph", "level": "INFO", "message": "📦 Phase3 工具结果: cut_video -> {\"status\": \"success\", \"path\": \"/data1/liwenxi/agent/GenVideo/temp/clip_03_gate_snow.mp4\", \"duration\": 5.0}", "type": "phase_tool_result", "groups": ["3", "cut_video", "{\"status\": \"success\", \"path\": \"/data1/liwenxi/agent/GenVideo/temp/clip_03_gate_snow.mp4\", \"duration\": 5.0}"]}, {"timestamp": "2026-03-19 08:17:46,472", "ts_ms": 1773879466472, "logger": "graph", "level": "INFO", "message": "📦 Phase3 工具结果: cut_video -> {\"status\": \"success\", \"path\": \"/data1/liwenxi/agent/GenVideo/temp/clip_04_stairs_hall.mp4\", \"duration\": 5.0}", "type": "phase_tool_result", "groups": ["3", "cut_video", "{\"status\": \"success\", \"path\": \"/data1/liwenxi/agent/GenVideo/temp/clip_04_stairs_hall.mp4\", \"duration\": 5.0}"]}, {"timestamp": "2026-03-19 08:17:46,473", "ts_ms": 1773879466473, "logger": "graph", "level": "INFO", "message": "📦 Phase3 工具结果: cut_video -> {\"status\": \"success\", \"path\": \"/data1/liwenxi/agent/GenVideo/temp/clip_05_library_reading.mp4\", \"duration\": 5.0}", "type": "phase_tool_result", "groups": ["3", "cut_video", "{\"status\": \"success\", \"path\": \"/data1/liwenxi/agent/GenVideo/temp/clip_05_library_reading.mp4\", \"duration\": 5.0}"]}, {"timestamp": "2026-03-19 08:17:46,473", "ts_ms": 1773879466473, "logger": "graph", "level": "INFO", "message": "📦 Phase3 工具结果: cut_video -> {\"status\": \"success\", \"path\": \"/data1/liwenxi/agent/GenVideo/temp/clip_06_library_detail.mp4\", \"duration\": 3.0}", "type": "phase_tool_result", "groups": ["3", "cut_video", "{\"status\": \"success\", \"path\": \"/data1/liwenxi/agent/GenVideo/temp/clip_06_library_detail.mp4\", \"duration\": 3.0}"]}, {"timestamp": "2026-03-19 08:17:46,473", "ts_ms": 1773879466473, "logger": "graph", "level": "INFO", "message": "📦 Phase3 工具结果: cut_video -> {\"status\": \"success\", \"path\": \"/data1/liwenxi/agent/GenVideo/temp/clip_07_lab_research.mp4\", \"duration\": 5.0}", "type": "phase_tool_result", "groups": ["3", "cut_video", "{\"status\": \"success\", \"path\": \"/data1/liwenxi/agent/GenVideo/temp/clip_07_lab_research.mp4\", \"duration\": 5.0}"]}, {"timestamp": "2026-03-19 08:17:46,473", "ts_ms": 1773879466473, "logger": "graph", "level": "INFO", "message": "📦 Phase3 工具结果: cut_video -> {\"status\": \"success\", \"path\": \"/data1/liwenxi/agent/GenVideo/temp/clip_08_canteen_food.mp4\", \"duration\": 4.0}", "type": "phase_tool_result", "groups": ["3", "cut_video", "{\"status\": \"success\", \"path\": \"/data1/liwenxi/agent/GenVideo/temp/clip_08_canteen_food.mp4\", \"duration\": 4.0}"]}, {"timestamp": "2026-03-19 08:17:46,473", "ts_ms": 1773879466473, "logger": "graph", "level": "INFO", "message": "📦 Phase3 工具结果: cut_video -> {\"status\": \"success\", \"path\": \"/data1/liwenxi/agent/GenVideo/temp/clip_09_sports_basketball.mp4\", \"duration\": 4.0}", "type": "phase_tool_result", "groups": ["3", "cut_video", "{\"status\": \"success\", \"path\": \"/data1/liwenxi/agent/GenVideo/temp/clip_09_sports_basketball.mp4\", \"duration\": 4.0}"]}, {"timestamp": "2026-03-19 08:17:46,473", "ts_ms": 1773879466473, "logger": "graph", "level": "INFO", "message": "📦 Phase3 工具结果: cut_video -> {\"status\": \"success\", \"path\": \"/data1/liwenxi/agent/GenVideo/temp/clip_10_life_laughing.mp4\", \"duration\": 4.0}", "type": "phase_tool_result", "groups": ["3", "cut_video", "{\"status\": \"success\", \"path\": \"/data1/liwenxi/agent/GenVideo/temp/clip_10_life_laughing.mp4\", \"duration\": 4.0}"]}, {"timestamp": "2026-03-19 08:17:46,473", "ts_ms": 1773879466473, "logger": "graph", "level": "INFO", "message": "📦 Phase3 工具结果: cut_video -> {\"status\": \"success\", \"path\": \"/data1/liwenxi/agent/GenVideo/temp/clip_11_sunset_mainroad.mp4\", \"duration\": 5.0}", "type": "phase_tool_result", "groups": ["3", "cut_video", "{\"status\": \"success\", \"path\": \"/data1/liwenxi/agent/GenVideo/temp/clip_11_sunset_mainroad.mp4\", \"duration\": 5.0}"]}, {"timestamp": "2026-03-19 08:17:46,473", "ts_ms": 1773879466473, "logger": "graph", "level": "INFO", "message": "📦 Phase3 工具结果: cut_video -> {\"status\": \"success\", \"path\": \"/data1/liwenxi/agent/GenVideo/temp/clip_12_ending_smile.mp4\", \"duration\": 5.0}", "type": "phase_tool_result", "groups": ["3", "cut_video", "{\"status\": \"success\", \"path\": \"/data1/liwenxi/agent/GenVideo/temp/clip_12_ending_smile.mp4\", \"duration\": 5.0}"]}, {"timestamp": "2026-03-19 08:17:46,473", "ts_ms": 1773879466473, "logger": "graph", "level": "INFO", "message": "🛠️ Phase3 工具调用: merge_videos args={'video_paths': ['/data1/liwenxi/agent/GenVideo/temp/clip_01_opening_aerial.mp4', '/data1/liwenxi/agent/GenVideo/temp/clip_02_nature_lake.mp4', '/data1/liwenxi/agent/GenVideo/temp/clip_03_gate_snow.mp4', '/data1/liwenxi/agent/GenVideo/temp/clip_04_stairs_hall.mp4', '/data1/liwenxi/agent/GenVideo/temp/clip_05_library_reading.mp4', '/data1/liwenxi/agent/GenVideo/temp/clip_06_library_detail.mp4', '/d", "type": "phase_tool_call", "groups": ["3", "merge_videos", "{'video_paths': ['/data1/liwenxi/agent/GenVideo/temp/clip_01_opening_aerial.mp4', '/data1/liwenxi/agent/GenVideo/temp/clip_02_nature_lake.mp4', '/data1/liwenxi/agent/GenVideo/temp/clip_03_gate_snow.mp4', '/data1/liwenxi/agent/GenVideo/temp/clip_04_stairs_hall.mp4', '/data1/liwenxi/agent/GenVideo/temp/clip_05_library_reading.mp4', '/data1/liwenxi/agent/GenVideo/temp/clip_06_library_detail.mp4', '/d"]}, {"timestamp": "2026-03-19 08:17:46,474", "ts_ms": 1773879466474, "logger": "graph", "level": "INFO", "message": "📦 Phase3 工具结果: merge_videos -> {\"status\": \"success\", \"path\": \"/data1/liwenxi/agent/GenVideo/temp/merged_raw.mp4\", \"total_duration\": 54.0, \"num_clips\": 12, \"target_duration\": null}", "type": "phase_tool_result", "groups": ["3", "merge_videos", "{\"status\": \"success\", \"path\": \"/data1/liwenxi/agent/GenVideo/temp/merged_raw.mp4\", \"total_duration\": 54.0, \"num_clips\": 12, \"target_duration\": null}"]}, {"timestamp": "2026-03-19 08:17:46,474", "ts_ms": 1773879466474, "logger": "graph", "level": "INFO", "message": "🛠️ Phase3 工具调用: inspect_video_duration args={'video_path': '/data1/liwenxi/agent/GenVideo/temp/merged_raw.mp4'}", "type": "phase_tool_call", "groups": ["3", "inspect_video_duration", "{'video_path': '/data1/liwenxi/agent/GenVideo/temp/merged_raw.mp4'}"]}, {"timestamp": "2026-03-19 08:17:46,474", "ts_ms": 1773879466474, "logger": "graph", "level": "INFO", "message": "📦 Phase3 工具结果: inspect_video_duration -> {\"status\": \"success\", \"path\": \"/data1/liwenxi/agent/GenVideo/temp/merged_raw.mp4\", \"duration_seconds\": 54.0, \"fps\": 30.0, \"resolution\": \"1920x1080\", \"width\": 1920, \"height\": 1080}", "type": "phase_tool_result", "groups": ["3", "inspect_video_duration", "{\"status\": \"success\", \"path\": \"/data1/liwenxi/agent/GenVideo/temp/merged_raw.mp4\", \"duration_seconds\": 54.0, \"fps\": 30.0, \"resolution\": \"1920x1080\", \"width\": 1920, \"height\": 1080}"]}, {"timestamp": "2026-03-19 08:17:46,474", "ts_ms": 1773879466474, "logger": "graph", "level": "INFO", "message": "🛠️ Phase3 工具调用: list_transition_presets args={}", "type": "phase_tool_call", "groups": ["3", "list_transition_presets", "{}"]}, {"timestamp": "2026-03-19 08:17:46,474", "ts_ms": 1773879466474, "logger": "graph", "level": "INFO", "message": "📦 Phase3 工具结果: list_transition_presets -> {\"status\": \"success\", \"count\": 18, \"presets\": [{\"name\": \"circle_crop\", \"ffmpeg_transition\": \"circlecrop\", \"default_duration\": 0.9, \"category\": \"stylized\"}, {\"name\": \"crossfade\", \"ffmpeg_transition\": \"fade\", \"default_duration\": 0.8, \"category\": \"basic\"}, {\"name\": \"distance\", \"ffmpeg_transition\": \"distance\", \"default_duration\": 0.8, \"category\": \"cinematic\"}, {\"name\": \"fade_through_black\", \"ffmpeg_transition\": \"fadeblack\", \"default_duration\": 1.0, \"category\": \"basic\"}, {\"name\": \"fade_through_white\"", "type": "phase_tool_result", "groups": ["3", "list_transition_presets", "{\"status\": \"success\", \"count\": 18, \"presets\": [{\"name\": \"circle_crop\", \"ffmpeg_transition\": \"circlecrop\", \"default_duration\": 0.9, \"category\": \"stylized\"}, {\"name\": \"crossfade\", \"ffmpeg_transition\": \"fade\", \"default_duration\": 0.8, \"category\": \"basic\"}, {\"name\": \"distance\", \"ffmpeg_transition\": \"distance\", \"default_duration\": 0.8, \"category\": \"cinematic\"}, {\"name\": \"fade_through_black\", \"ffmpeg_transition\": \"fadeblack\", \"default_duration\": 1.0, \"category\": \"basic\"}, {\"name\": \"fade_through_white\""]}, {"timestamp": "2026-03-19 08:17:46,474", "ts_ms": 1773879466474, "logger": "graph", "level": "INFO", "message": "🛠️ Phase3 工具调用: add_transition args={'video_paths': ['/data1/liwenxi/agent/GenVideo/temp/clip_01_opening_aerial.mp4', '/data1/liwenxi/agent/GenVideo/temp/clip_02_nature_lake.mp4', '/data1/liwenxi/agent/GenVideo/temp/clip_03_gate_snow.mp4', '/data1/liwenxi/agent/GenVideo/temp/clip_04_stairs_hall.mp4', '/data1/liwenxi/agent/GenVideo/temp/clip_05_library_reading.mp4', '/data1/liwenxi/agent/GenVideo/temp/clip_06_library_detail.mp4', '/d", "type": "phase_tool_call", "groups": ["3", "add_transition", "{'video_paths': ['/data1/liwenxi/agent/GenVideo/temp/clip_01_opening_aerial.mp4', '/data1/liwenxi/agent/GenVideo/temp/clip_02_nature_lake.mp4', '/data1/liwenxi/agent/GenVideo/temp/clip_03_gate_snow.mp4', '/data1/liwenxi/agent/GenVideo/temp/clip_04_stairs_hall.mp4', '/data1/liwenxi/agent/GenVideo/temp/clip_05_library_reading.mp4', '/data1/liwenxi/agent/GenVideo/temp/clip_06_library_detail.mp4', '/d"]}, {"timestamp": "2026-03-19 08:17:46,474", "ts_ms": 1773879466474, "logger": "graph", "level": "INFO", "message": "📦 Phase3 工具结果: add_transition -> {\"status\": \"success\", \"path\": \"/data1/liwenxi/agent/GenVideo/temp/transitioned_final.mp4\", \"transition\": \"crossfade\", \"duration_seconds\": 50.2, \"num_clips\": 12, \"applied_transition_plan\": [{\"cut_index\": 0, \"transition_type\": \"crossfade\", \"ffmpeg_transition\": \"fade\", \"duration\": 0.5, \"offset\": 4.5}, {\"cut_index\": 1, \"transition_type\": \"crossfade\", \"ffmpeg_transition\": \"fade\", \"duration\": 0.15, \"offset\": 8.32}, {\"cut_index\": 2, \"transition_type\": \"crossfade\", \"ffmpeg_transition\": \"fade\", \"duration", "type": "phase_tool_result", "groups": ["3", "add_transition", "{\"status\": \"success\", \"path\": \"/data1/liwenxi/agent/GenVideo/temp/transitioned_final.mp4\", \"transition\": \"crossfade\", \"duration_seconds\": 50.2, \"num_clips\": 12, \"applied_transition_plan\": [{\"cut_index\": 0, \"transition_type\": \"crossfade\", \"ffmpeg_transition\": \"fade\", \"duration\": 0.5, \"offset\": 4.5}, {\"cut_index\": 1, \"transition_type\": \"crossfade\", \"ffmpeg_transition\": \"fade\", \"duration\": 0.15, \"offset\": 8.32}, {\"cut_index\": 2, \"transition_type\": \"crossfade\", \"ffmpeg_transition\": \"fade\", \"duration"]}, {"timestamp": "2026-03-19 08:17:46,474", "ts_ms": 1773879466474, "logger": "graph", "level": "INFO", "message": "🛠️ Phase3 工具调用: inspect_video_duration args={'video_path': '/data1/liwenxi/agent/GenVideo/temp/transitioned_final.mp4'}", "type": "phase_tool_call", "groups": ["3", "inspect_video_duration", "{'video_path': '/data1/liwenxi/agent/GenVideo/temp/transitioned_final.mp4'}"]}, {"timestamp": "2026-03-19 08:17:46,474", "ts_ms": 1773879466474, "logger": "graph", "level": "INFO", "message": "📦 Phase3 工具结果: inspect_video_duration -> {\"status\": \"success\", \"path\": \"/data1/liwenxi/agent/GenVideo/temp/transitioned_final.mp4\", \"duration_seconds\": 50.2, \"fps\": 30.0, \"resolution\": \"1920x1080\", \"width\": 1920, \"height\": 1080}", "type": "phase_tool_result", "groups": ["3", "inspect_video_duration", "{\"status\": \"success\", \"path\": \"/data1/liwenxi/agent/GenVideo/temp/transitioned_final.mp4\", \"duration_seconds\": 50.2, \"fps\": 30.0, \"resolution\": \"1920x1080\", \"width\": 1920, \"height\": 1080}"]}, {"timestamp": "2026-03-19 08:17:46,474", "ts_ms": 1773879466474, "logger": "graph", "level": "INFO", "message": "🛠️ Phase3 工具调用: analyze_video args={'video_path': '/data1/liwenxi/agent/GenVideo/temp/transitioned_final.mp4', 'analysis_goal': '按场景分析画面内容和情绪，标注时间段，用于配音文案撰写'}", "type": "phase_tool_call", "groups": ["3", "analyze_video", "{'video_path': '/data1/liwenxi/agent/GenVideo/temp/transitioned_final.mp4', 'analysis_goal': '按场景分析画面内容和情绪，标注时间段，用于配音文案撰写'}"]}, {"timestamp": "2026-03-19 08:17:46,474", "ts_ms": 1773879466474, "logger": "graph", "level": "INFO", "message": "📦 Phase3 工具结果: analyze_video -> 视频分析完成（视觉）:", "type": "analysis_done", "groups": []}, {"timestamp": "2026-03-19 08:17:46,474", "ts_ms": 1773879466474, "logger": "graph", "level": "INFO", "message": "🛠️ Phase3 工具调用: build_edit_timeline_from_segments args={'video_paths': ['/data1/liwenxi/agent/GenVideo/temp/clip_01_opening_aerial.mp4', '/data1/liwenxi/agent/GenVideo/temp/clip_02_nature_lake.mp4', '/data1/liwenxi/agent/GenVideo/temp/clip_03_gate_snow.mp4', '/data1/liwenxi/agent/GenVideo/temp/clip_04_stairs_hall.mp4', '/data1/liwenxi/agent/GenVideo/temp/clip_05_library_reading.mp4', '/data1/liwenxi/agent/GenVideo/temp/clip_06_library_detail.mp4', '/d", "type": "phase_tool_call", "groups": ["3", "build_edit_timeline_from_segments", "{'video_paths': ['/data1/liwenxi/agent/GenVideo/temp/clip_01_opening_aerial.mp4', '/data1/liwenxi/agent/GenVideo/temp/clip_02_nature_lake.mp4', '/data1/liwenxi/agent/GenVideo/temp/clip_03_gate_snow.mp4', '/data1/liwenxi/agent/GenVideo/temp/clip_04_stairs_hall.mp4', '/data1/liwenxi/agent/GenVideo/temp/clip_05_library_reading.mp4', '/data1/liwenxi/agent/GenVideo/temp/clip_06_library_detail.mp4', '/d"]}, {"timestamp": "2026-03-19 08:17:46,474", "ts_ms": 1773879466474, "logger": "graph", "level": "INFO", "message": "📦 Phase3 工具结果: build_edit_timeline_from_segments -> {\"status\": \"success\", \"timeline\": [{\"clip_index\": 0, \"path\": \"/data1/liwenxi/agent/GenVideo/temp/clip_01_opening_aerial.mp4\", \"source_duration\": 5.0, \"source_in\": 0.0, \"source_out\": 5.0, \"timeline_start\": 0.0, \"timeline_end\": 5.0, \"timeline_duration\": 5.0, \"trimmed\": false}, {\"clip_index\": 1, \"path\": \"/data1/liwenxi/agent/GenVideo/temp/clip_02_nature_lake.mp4\", \"source_duration\": 3.96, \"source_in\": 0.0, \"source_out\": 3.96, \"timeline_start\": 5.0, \"timeline_end\": 8.96, \"timeline_duration\": 3.96, \"", "type": "phase_tool_result", "groups": ["3", "build_edit_timeline_from_segments", "{\"status\": \"success\", \"timeline\": [{\"clip_index\": 0, \"path\": \"/data1/liwenxi/agent/GenVideo/temp/clip_01_opening_aerial.mp4\", \"source_duration\": 5.0, \"source_in\": 0.0, \"source_out\": 5.0, \"timeline_start\": 0.0, \"timeline_end\": 5.0, \"timeline_duration\": 5.0, \"trimmed\": false}, {\"clip_index\": 1, \"path\": \"/data1/liwenxi/agent/GenVideo/temp/clip_02_nature_lake.mp4\", \"source_duration\": 3.96, \"source_in\": 0.0, \"source_out\": 3.96, \"timeline_start\": 5.0, \"timeline_end\": 8.96, \"timeline_duration\": 3.96, \""]}, {"timestamp": "2026-03-19 08:17:46,474", "ts_ms": 1773879466474, "logger": "graph", "level": "INFO", "message": "🛠️ Phase3 工具调用: validate_narration_timeline args={'video_path': '/data1/liwenxi/agent/GenVideo/temp/transitioned_final.mp4', 'segments': [{'text': '在天山脚下，雪山见证着每一寸土地的辽阔。', 'start': 0, 'end': 8}, {'text': '这里，是知识的殿堂。', 'start': 8, 'end': 15}, {'text': '从宏伟的校门，到静谧的图书馆，每一处角落，都流淌着求知的渴望。', 'start': 15, 'end': 25}, {'text': '科研的严谨，生活的多彩。', 'start': 25, 'end': 35}, {'text': '在实验室探索未知，在食堂品味烟火，在球场挥洒汗水。', 'start': 35, 'end': 45}, {'text': '这就是新疆大学，在这里，遇见未来", "type": "phase_tool_call", "groups": ["3", "validate_narration_timeline", "{'video_path': '/data1/liwenxi/agent/GenVideo/temp/transitioned_final.mp4', 'segments': [{'text': '在天山脚下，雪山见证着每一寸土地的辽阔。', 'start': 0, 'end': 8}, {'text': '这里，是知识的殿堂。', 'start': 8, 'end': 15}, {'text': '从宏伟的校门，到静谧的图书馆，每一处角落，都流淌着求知的渴望。', 'start': 15, 'end': 25}, {'text': '科研的严谨，生活的多彩。', 'start': 25, 'end': 35}, {'text': '在实验室探索未知，在食堂品味烟火，在球场挥洒汗水。', 'start': 35, 'end': 45}, {'text': '这就是新疆大学，在这里，遇见未来"]}, {"timestamp": "2026-03-19 08:17:46,474", "ts_ms": 1773879466474, "logger": "graph", "level": "INFO", "message": "📦 Phase3 工具结果: validate_narration_timeline -> {\"status\": \"pass\", \"video_path\": \"/data1/liwenxi/agent/GenVideo/temp/transitioned_final.mp4\", \"video_duration\": 50.2, \"segment_count\": 6, \"narration_coverage_seconds\": 50.0, \"narration_coverage_ratio\": 0.996, \"normalized_segments\": [{\"index\": 0, \"text\": \"在天山脚下，雪山见证着每一寸土地的辽阔。\", \"start\": 0.0, \"end\": 8.0}, {\"index\": 1, \"text\": \"这里，是知识的殿堂。\", \"start\": 8.0, \"end\": 15.0}, {\"index\": 2, \"text\": \"从宏伟的校门，到静谧的图书馆，每一处角落，都流淌着求知的渴望。\", \"start\": 15.0, \"end\": 25.0}, {\"index\": 3, \"text\": \"科研的严谨，生活的多彩。\", \"start\": 2", "type": "phase_tool_result", "groups": ["3", "validate_narration_timeline", "{\"status\": \"pass\", \"video_path\": \"/data1/liwenxi/agent/GenVideo/temp/transitioned_final.mp4\", \"video_duration\": 50.2, \"segment_count\": 6, \"narration_coverage_seconds\": 50.0, \"narration_coverage_ratio\": 0.996, \"normalized_segments\": [{\"index\": 0, \"text\": \"在天山脚下，雪山见证着每一寸土地的辽阔。\", \"start\": 0.0, \"end\": 8.0}, {\"index\": 1, \"text\": \"这里，是知识的殿堂。\", \"start\": 8.0, \"end\": 15.0}, {\"index\": 2, \"text\": \"从宏伟的校门，到静谧的图书馆，每一处角落，都流淌着求知的渴望。\", \"start\": 15.0, \"end\": 25.0}, {\"index\": 3, \"text\": \"科研的严谨，生活的多彩。\", \"start\": 2"]}, {"timestamp": "2026-03-19 08:17:46,475", "ts_ms": 1773879466475, "logger": "graph", "level": "INFO", "message": "🛠️ Phase3 工具调用: add_narration_segments args={'video_path': '/data1/liwenxi/agent/GenVideo/temp/transitioned_final.mp4', 'segments': [{'text': '在天山脚下，雪山见证着每一寸土地的辽阔。', 'start': 0, 'end': 8}, {'text': '这里，是知识的殿堂。', 'start': 8, 'end': 15}, {'text': '从宏伟的校门，到静谧的图书馆，每一处角落，都流淌着求知的渴望。', 'start': 15, 'end': 25}, {'text': '科研的严谨，生活的多彩。', 'start': 25, 'end': 35}, {'text': '在实验室探索未知，在食堂品味烟火，在球场挥洒汗水。', 'start': 35, 'end': 45}, {'text': '这就是新疆大学，在这里，遇见未来", "type": "phase_tool_call", "groups": ["3", "add_narration_segments", "{'video_path': '/data1/liwenxi/agent/GenVideo/temp/transitioned_final.mp4', 'segments': [{'text': '在天山脚下，雪山见证着每一寸土地的辽阔。', 'start': 0, 'end': 8}, {'text': '这里，是知识的殿堂。', 'start': 8, 'end': 15}, {'text': '从宏伟的校门，到静谧的图书馆，每一处角落，都流淌着求知的渴望。', 'start': 15, 'end': 25}, {'text': '科研的严谨，生活的多彩。', 'start': 25, 'end': 35}, {'text': '在实验室探索未知，在食堂品味烟火，在球场挥洒汗水。', 'start': 35, 'end': 45}, {'text': '这就是新疆大学，在这里，遇见未来"]}, {"timestamp": "2026-03-19 08:17:46,475", "ts_ms": 1773879466475, "logger": "graph", "level": "INFO", "message": "📦 Phase3 工具结果: add_narration_segments -> {\"status\": \"success\", \"path\": \"/data1/liwenxi/agent/GenVideo/temp/narrated_final.mp4\", \"total_segments\": 6, \"success_segments\": 6, \"has_subtitles\": true, \"subtitle_font_used\": \"/data1/liwenxi/agent/GenVideo/AlibabaPuHuiTi-3-55-Regular/AlibabaPuHuiTi-3-55-Regular.ttf\", \"target_narration_seconds\": 50.0, \"actual_narration_seconds\": 21.36, \"narration_coverage_ratio\": 0.4221, \"target_slot_coverage_ratio\": 0.4272, \"warnings\": [\"段 1: 旁白明显短于分配时段(3.92s/8.00s)，建议增加文案字数或缩短该段 end。\", \"段 2: 旁白明显短于分配时段(1.68s/7", "type": "phase_tool_result", "groups": ["3", "add_narration_segments", "{\"status\": \"success\", \"path\": \"/data1/liwenxi/agent/GenVideo/temp/narrated_final.mp4\", \"total_segments\": 6, \"success_segments\": 6, \"has_subtitles\": true, \"subtitle_font_used\": \"/data1/liwenxi/agent/GenVideo/AlibabaPuHuiTi-3-55-Regular/AlibabaPuHuiTi-3-55-Regular.ttf\", \"target_narration_seconds\": 50.0, \"actual_narration_seconds\": 21.36, \"narration_coverage_ratio\": 0.4221, \"target_slot_coverage_ratio\": 0.4272, \"warnings\": [\"段 1: 旁白明显短于分配时段(3.92s/8.00s)，建议增加文案字数或缩短该段 end。\", \"段 2: 旁白明显短于分配时段(1.68s/7"]}, {"timestamp": "2026-03-19 08:17:46,475", "ts_ms": 1773879466475, "logger": "graph", "level": "INFO", "message": "🛠️ Phase3 工具调用: inspect_video_duration args={'video_path': '/data1/liwenxi/agent/GenVideo/temp/narrated_final.mp4'}", "type": "phase_tool_call", "groups": ["3", "inspect_video_duration", "{'video_path': '/data1/liwenxi/agent/GenVideo/temp/narrated_final.mp4'}"]}, {"timestamp": "2026-03-19 08:17:46,475", "ts_ms": 1773879466475, "logger": "graph", "level": "INFO", "message": "📦 Phase3 工具结果: inspect_video_duration -> {\"status\": \"success\", \"path\": \"/data1/liwenxi/agent/GenVideo/temp/narrated_final.mp4\", \"duration_seconds\": 50.6, \"fps\": 30.0, \"resolution\": \"1920x1080\", \"width\": 1920, \"height\": 1080}", "type": "phase_tool_result", "groups": ["3", "inspect_video_duration", "{\"status\": \"success\", \"path\": \"/data1/liwenxi/agent/GenVideo/temp/narrated_final.mp4\", \"duration_seconds\": 50.6, \"fps\": 30.0, \"resolution\": \"1920x1080\", \"width\": 1920, \"height\": 1080}"]}, {"timestamp": "2026-03-19 08:17:46,475", "ts_ms": 1773879466475, "logger": "graph", "level": "INFO", "message": "🛠️ Phase3 工具调用: export_video args={'input_path': '/data1/liwenxi/agent/GenVideo/temp/narrated_final.mp4', 'output_name': 'xinjiang_university_final', 'resolution': '1080p'}", "type": "phase_tool_call", "groups": ["3", "export_video", "{'input_path': '/data1/liwenxi/agent/GenVideo/temp/narrated_final.mp4', 'output_name': 'xinjiang_university_final', 'resolution': '1080p'}"]}, {"timestamp": "2026-03-19 08:17:46,475", "ts_ms": 1773879466475, "logger": "graph", "level": "INFO", "message": "📦 Phase3 工具结果: export_video -> {\"status\": \"success\", \"path\": \"/data1/liwenxi/agent/GenVideo/temp/xinjiang_university_final.mp4\", \"resolution\": \"1080p\", \"duration\": 50.6}", "type": "phase_tool_result", "groups": ["3", "export_video", "{\"status\": \"success\", \"path\": \"/data1/liwenxi/agent/GenVideo/temp/xinjiang_university_final.mp4\", \"resolution\": \"1080p\", \"duration\": 50.6}"]}, {"timestamp": "2026-03-19 08:17:46,475", "ts_ms": 1773879466475, "logger": "graph", "level": "INFO", "message": "🎬 ═══ Phase 3 完成 ═══", "type": "phase2_done", "groups": []}, {"timestamp": "2026-03-19 08:17:46,475", "ts_ms": 1773879466475, "logger": "graph", "level": "INFO", "message": "📝 最终输出: ## 创作总结", "type": "final_output", "groups": []}, {"timestamp": "2026-03-19 08:17:46,476", "ts_ms": 1773879466476, "logger": "agent", "level": "INFO", "message": "⏱  任务完成，总耗时: 1338.5s", "type": "task_end", "groups": ["1338.5"]}, {"timestamp": "2026-03-19 08:17:46,476", "ts_ms": 1773879466476, "logger": "agent", "level": "INFO", "message": "============================================================", "type": "info", "groups": []}, {"timestamp": "2026-03-19 08:17:46,784", "ts_ms": 1773879466784, "logger": "agent", "level": "INFO", "message": "🧹 任务后已清理中间文件: 46", "type": "cleanup_post", "groups": ["46"]}, {"timestamp": "2026-03-19 08:17:46,784", "ts_ms": 1773879466784, "logger": "agent", "level": "INFO", "message": "📌 任务后保留文件: narrated_final.mp4, transitioned_final.mp4, transitioned_final_analysis_ts.mp4, xinjiang_university_final.mp4", "type": "kept_files", "groups": ["narrated_final.mp4, transitioned_final.mp4, transitioned_final_analysis_ts.mp4, xinjiang_university_final.mp4"]}], "start_time": "2026-03-19T07:55:27.483000", "end_time": "2026-03-19T08:17:46.785000"};
+
+// ─── Helpers ─────────────────────────────────────────────────────────────
+function fmtTime(ts) {
+  return ts ? ts.split(' ')[1] || ts.split(',')[0] : '';
+}
+function fmtShortTime(ts) {
+  const t = fmtTime(ts);
+  return t ? t.substring(0, 8) : '';
+}
+function fmtDuration(s) {
+  if (s < 60) return s.toFixed(1) + 's';
+  const m = Math.floor(s / 60);
+  const sec = Math.round(s % 60);
+  return m + 'm ' + sec + 's';
+}
+function escapeHtml(str) {
+  const d = document.createElement('div');
+  d.textContent = str;
+  return d.innerHTML;
+}
+
+// 事件分类
+function getEventCategory(e) {
+  const t = e.type;
+  if (e.level === 'WARNING') return 'warn';
+  if (e.level === 'ERROR') return 'error';
+  if (['phase1_start','phase15_start','phase2_start','phase1_done','phase2_done'].includes(t)) return 'phase';
+  if (['executor_step','step_complete','plan_summary','plan_step','prep_router','download_det','video_filter'].includes(t)) return 'step';
+  if (['search_start','search_stats','rank_start','rank_done','download_start','batch_cut',
+       'analysis_ts','analysis_native','analysis_done','segment_merge','duration_check',
+       'tts_success','subtitle_fail','subtitle_layout','phase_tool_call','phase_tool_result','export'].includes(t)) return 'tool';
+  if (t === 'llm_call') return 'llm';
+  return 'info';
+}
+
+function getEventIcon(e) {
+  const icons = {
+    task_start: '📋', task_end: '⏱️', cleanup_pre: '🧹', cleanup_post: '🧹', kept_files: '📌',
+    phase1_start: '🎯', phase15_start: '🔬', phase2_start: '🎬',
+    plan_summary: '📋', plan_step: '📝', target_duration: '⏱️',
+    executor_step: '🔧', step_complete: '✅', tool_whitelist: '🧰',
+    prep_router: '📌', download_det: '📥', video_filter: '🧠',
+    phase1_done: '✅', phase2_done: '🎬', final_output: '📝',
+    blueprint_ctx: '📝', blueprint_prompt: '📝', blueprint_done: '🔬', blueprint_summary: '📝',
+    react_tools: '🧰',
+    llm_call: '🤖', search_start: '🔍', search_stats: '📊',
+    rank_start: '🤖', rank_done: '✅',
+    download_start: '📥', analysis_ts: '🕒', analysis_native: '🎥',
+    analysis_done: '✅', batch_cut: '✂️', segment_merge: '🔗',
+    duration_check: '📏', tts_success: '🎙️', subtitle_fail: '⚠️', subtitle_layout: '🧱',
+    phase_tool_call: '🛠️', phase_tool_result: '📦',
+    export: '🎬', info: '💬',
+  };
+  return icons[e.type] || (e.level === 'WARNING' ? '⚠️' : '💬');
+}
+
+function getTagClass(category) {
+  return {phase:'tag-phase',step:'tag-step',tool:'tag-tool',llm:'tag-llm',
+          warn:'tag-warn',error:'tag-warn',info:'tag-info',ok:'tag-ok'}[category] || 'tag-info';
+}
+
+function getTagLabel(category) {
+  return {phase:'PHASE',step:'STEP',tool:'TOOL',llm:'LLM',warn:'WARN',error:'ERROR',info:'INFO'}[category] || 'INFO';
+}
+
+// ─── Sidebar ─────────────────────────────────────────────────────────────
+function buildSidebar() {
+  const el = document.getElementById('sidebar');
+  let html = '';
+
+  // 任务概览
+  html += '<div style="padding: 8px 20px 16px; border-bottom: 1px solid var(--border); margin-bottom: 8px;">';
+  html += '<div style="font-size:11px;color:var(--text-muted);margin-bottom:4px;">TASK OVERVIEW</div>';
+  html += '<div style="font-size:12px;color:var(--text-secondary);line-height:1.5;">';
+  html += escapeHtml(DATA.task.description || 'N/A');
+  html += '</div></div>';
+
+  DATA.phases.forEach((phase, idx) => {
+    const phaseClass = phase.id;
+    html += '<div class="phase-block">';
+    html += `<div class="phase-header expanded" data-phase="${phase.id}" onclick="togglePhase(this)">`;
+    html += `<span class="phase-dot ${phaseClass}"></span>`;
+    html += `<span class="phase-label">${escapeHtml(phase.name)}</span>`;
+    html += `<span class="phase-duration">${fmtDuration(phase.duration_s)}</span>`;
+    html += '<span class="phase-chevron">▸</span>';
+    html += '</div>';
+    html += '<div class="phase-steps">';
+
+    // 获取该阶段的事件
+    const phaseEvents = getPhaseEvents(phase.id);
+    const keyEvents = phaseEvents.filter(e =>
+      ['executor_step','step_complete','blueprint_done','search_start','download_start',
+       'rank_start','rank_done','batch_cut','tts_success','duration_check',
+       'analysis_done','phase1_done','phase2_done','subtitle_fail','subtitle_layout','segment_merge',
+       'phase_tool_call','phase_tool_result'].includes(e.type)
+    );
+
+    keyEvents.forEach((e, i) => {
+      const icon = getEventIcon(e);
+      let text = e.message.substring(0, 60);
+      let badge = '';
+      if (e.level === 'WARNING') badge = '<span class="step-badge badge-warn">WARN</span>';
+      html += `<div class="step-item" onclick="scrollToEvent('${e.ts_ms}')" title="${escapeHtml(e.message)}">`;
+      html += `<span class="step-icon">${icon}</span>`;
+      html += `<span class="step-text">${escapeHtml(text)}</span>`;
+      html += badge;
+      html += '</div>';
+    });
+
+    html += '</div></div>';
+  });
+
+  el.innerHTML = html;
+}
+
+function togglePhase(header) {
+  header.classList.toggle('expanded');
+}
+
+function getPhaseEvents(phaseId) {
+  const phaseIdx = DATA.phases.findIndex(p => p.id === phaseId);
+  if (phaseIdx < 0) return [];
+
+  const startTs = DATA.phases[phaseIdx].start_ts;
+  const endTs = phaseIdx + 1 < DATA.phases.length ?
+    DATA.phases[phaseIdx + 1].start_ts : null;
+
+  return DATA.events.filter(e => {
+    if (endTs) return e.timestamp >= startTs && e.timestamp < endTs;
+    return e.timestamp >= startTs;
+  });
+}
+
+function scrollToEvent(tsMs) {
+  const card = document.querySelector(`[data-ts="${tsMs}"]`);
+  if (card) {
+    card.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    card.style.borderColor = 'var(--accent-blue)';
+    card.style.boxShadow = '0 0 16px rgba(88,166,255,0.2)';
+    setTimeout(() => {
+      card.style.borderColor = '';
+      card.style.boxShadow = '';
+    }, 2000);
+  }
+}
+
+// ─── Header ──────────────────────────────────────────────────────────────
+function buildHeader() {
+  const taskEl = document.getElementById('headerTask');
+  taskEl.textContent = DATA.task.description || 'N/A';
+  taskEl.title = DATA.task.description || '';
+
+  const statsEl = document.getElementById('headerStats');
+  const total = DATA.task.total_seconds ? fmtDuration(DATA.task.total_seconds) : 'N/A';
+  const eventCount = DATA.events.length;
+  const toolCalls = DATA.events.filter(e =>
+    ['search_start','download_start','rank_start','batch_cut','tts_success','analysis_native','segment_merge','duration_check','phase_tool_call','phase_tool_result','subtitle_layout'].includes(e.type)
+  ).length;
+
+  statsEl.innerHTML = `
+    <div class="stat-item">⏱️ <span class="stat-value">${total}</span></div>
+    <div class="stat-item">📊 <span class="stat-value">${eventCount}</span> events</div>
+    <div class="stat-item">🔧 <span class="stat-value">${toolCalls}</span> tool calls</div>
+  `;
+}
+
+// ─── Summary Cards ───────────────────────────────────────────────────────
+function buildSummary() {
+  const el = document.getElementById('summaryRow');
+  const total = DATA.task.total_seconds || 0;
+  const target = DATA.task.target_duration || 0;
+  const phases = DATA.phases.length;
+  const warns = DATA.events.filter(e => e.level === 'WARNING').length;
+
+  el.innerHTML = `
+    <div class="summary-card">
+      <span class="summary-label">总耗时</span>
+      <span class="summary-value blue">${fmtDuration(total)}</span>
+    </div>
+    <div class="summary-card">
+      <span class="summary-label">目标时长</span>
+      <span class="summary-value green">${target ? target + 's' : 'N/A'}</span>
+    </div>
+    <div class="summary-card">
+      <span class="summary-label">流水线阶段</span>
+      <span class="summary-value purple">${phases}</span>
+    </div>
+    <div class="summary-card">
+      <span class="summary-label">警告</span>
+      <span class="summary-value yellow">${warns}</span>
+    </div>
+  `;
+}
+
+// ─── Progress Bar ────────────────────────────────────────────────────────
+function buildProgress() {
+  const el = document.getElementById('progressBar');
+  const total = DATA.task.total_seconds || 1;
+  const segments = DATA.phases.map(p => {
+    const pct = (p.duration_s / total * 100).toFixed(1);
+    return { id: p.id, name: p.name, pct, duration: p.duration_s, icon: p.icon };
+  });
+
+  let barHtml = segments.map(s =>
+    `<div class="progress-segment ${s.id}" style="width:${s.pct}%" title="${s.name}: ${fmtDuration(s.duration)}"></div>`
+  ).join('');
+
+  let legendHtml = segments.map(s =>
+    `<div class="legend-item"><span class="legend-dot" style="background:var(--${s.id}-color)"></span>${s.icon} ${s.name} (${fmtDuration(s.duration)})</div>`
+  ).join('');
+
+  el.innerHTML = `
+    <div class="progress-bar-container">
+      <div class="progress-bar-label">
+        <span>Pipeline 时间分布</span>
+        <span>${fmtDuration(total)}</span>
+      </div>
+      <div class="progress-bar">${barHtml}</div>
+      <div class="progress-legend">${legendHtml}</div>
+    </div>
+  `;
+}
+
+// ─── Filter Bar ──────────────────────────────────────────────────────────
+let activeFilter = 'all';
+
+function buildFilterBar() {
+  const el = document.getElementById('filterBar');
+  const filters = [
+    { id: 'all', label: '全部' },
+    { id: 'phase', label: '🎯 阶段' },
+    { id: 'step', label: '🔧 步骤' },
+    { id: 'tool', label: '🔨 工具' },
+    { id: 'llm', label: '🤖 LLM' },
+    { id: 'warn', label: '⚠️ 警告' },
+  ];
+  el.innerHTML = filters.map(f =>
+    `<button class="filter-btn ${f.id === activeFilter ? 'active' : ''}" onclick="setFilter('${f.id}')">${f.label}</button>`
+  ).join('');
+}
+
+function setFilter(f) {
+  activeFilter = f;
+  buildFilterBar();
+  buildTimeline();
+}
+
+// ─── Timeline ────────────────────────────────────────────────────────────
+function buildTimeline() {
+  const el = document.getElementById('timeline');
+  let html = '';
+
+  DATA.phases.forEach((phase) => {
+    const events = getPhaseEvents(phase.id);
+    const filtered = activeFilter === 'all' ? events :
+      events.filter(e => getEventCategory(e) === activeFilter);
+
+    if (filtered.length === 0) return;
+
+    html += '<div class="timeline-section">';
+    html += `<div class="timeline-phase-title">`;
+    html += `<span class="timeline-phase-icon">${phase.icon}</span>`;
+    html += `<span class="timeline-phase-name">${escapeHtml(phase.name)}</span>`;
+    html += `<span class="timeline-phase-time">${fmtDuration(phase.duration_s)} · ${phase.tool_calls} tool calls${phase.warnings ? ' · ' + phase.warnings + ' warnings' : ''}</span>`;
+    html += '</div>';
+    html += '<div class="event-list">';
+
+    filtered.forEach((e, i) => {
+      const cat = getEventCategory(e);
+      const icon = getEventIcon(e);
+      const tag = getTagLabel(cat);
+      const tagCls = getTagClass(cat);
+      const warnCls = e.level === 'WARNING' ? ' warning' : (e.level === 'ERROR' ? ' error' : '');
+
+      html += `<div class="event-card${warnCls}" data-ts="${e.ts_ms}" onclick="this.classList.toggle('expanded')" style="animation-delay:${Math.min(i*20,500)}ms">`;
+      html += `<span class="event-time">${fmtShortTime(e.timestamp)}</span>`;
+      html += `<span class="event-icon">${icon}</span>`;
+      html += `<span class="event-msg">${escapeHtml(e.message)}</span>`;
+      html += `<span class="event-tag ${tagCls}">${tag}</span>`;
+      html += '</div>';
+    });
+
+    html += '</div></div>';
+  });
+
+  el.innerHTML = html;
+}
+
+// ─── Init ────────────────────────────────────────────────────────────────
+function init() {
+  const themeStorageKey = 'genvideo-trace-theme';
+  const themeToggle = document.getElementById('themeToggle');
+  const applyTheme = (theme) => {
+    const isLight = theme === 'light';
+    document.body.classList.toggle('theme-light', isLight);
+    if (themeToggle) themeToggle.textContent = isLight ? '🌙 深色' : '☀️ 浅色';
+  };
+  applyTheme(localStorage.getItem(themeStorageKey) || 'dark');
+  if (themeToggle) {
+    themeToggle.addEventListener('click', () => {
+      const next = document.body.classList.contains('theme-light') ? 'dark' : 'light';
+      localStorage.setItem(themeStorageKey, next);
+      applyTheme(next);
+    });
+  }
+
+  buildHeader();
+  buildSidebar();
+  buildSummary();
+  buildProgress();
+  buildFilterBar();
+  buildTimeline();
+}
+
+init();
+</script>
+</body>
+</html>

@@ -1,0 +1,9 @@
+2026-02-27 15:51:06,930 - agent - INFO - Agent日志已初始化: /data/liwenxi/agent/GenVideo/logs/agent_20260227_155106.log
+2026-02-27 15:51:10,939 - agent - INFO - ============================================================
+2026-02-27 15:51:10,940 - agent - INFO - 📋 新任务开始: Create an introduction video of Xinjiang University that lasts for about two minutes, please create a step-by-step introduction video process
+2026-02-27 15:51:10,940 - agent - INFO - ============================================================
+2026-02-27 15:51:10,975 - agent - INFO - 🧹 任务前已清理 temp 文件: 1
+2026-02-27 16:22:12,094 - agent - INFO - ⏱  任务完成，总耗时: 1861.1s
+2026-02-27 16:22:12,094 - agent - INFO - ============================================================
+2026-02-27 16:22:12,320 - agent - INFO - 🧹 任务后已清理中间文件: 49
+2026-02-27 16:22:12,320 - agent - INFO - 📌 任务后保留文件: clip_15_final_shot.mp4, xinjiang_university_intro_final.mp4

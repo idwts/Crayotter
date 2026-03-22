@@ -1,0 +1,426 @@
+2026-03-19 06:57:33,505 - agent - INFO - Agent日志已初始化: /data1/liwenxi/agent/GenVideo/logs/agent_20260319_065733.log
+2026-03-19 06:57:37,550 - agent - INFO - ============================================================
+2026-03-19 06:57:37,550 - agent - INFO - 📋 新任务开始: create a 2 mins video about xinjiang university.
+2026-03-19 06:57:37,550 - agent - INFO - ============================================================
+2026-03-19 06:57:37,609 - agent - INFO - 🧹 任务前已清理 temp 文件: 3
+2026-03-19 06:57:37,610 - graph - INFO - 🎯 Phase 1 — Planner 开始规划素材准备
+2026-03-19 06:57:37,611 - graph - INFO - 🔍 _get_llm() model=Qwen3.5-122B-A10B
+2026-03-19 06:57:37,676 - graph - INFO - 🔍 _get_llm() model=Qwen3.5-122B-A10B
+2026-03-19 06:57:47,102 - graph - INFO - 📋 素材准备计划 (7 步): 自动搜集并分析关于新疆大学的视频素材，为后续生成2分钟宣传视频做准备
+2026-03-19 06:57:47,103 - graph - INFO -    [1] 使用关键词'新疆大学'在Bilibili搜索视频，设置每页40条，共搜索3页，获取基础素材池。 → search_bilibili_video
+2026-03-19 06:57:47,103 - graph - INFO -    [2] 使用关键词'新疆大学 校园风景'在Bilibili搜索视频，设置每页40条，共搜索3页，补充风景类素材。 → search_bilibili_video
+2026-03-19 06:57:47,103 - graph - INFO -    [3] 使用关键词'新疆大学 历史 文化'在Bilibili搜索视频，设置每页40条，共搜索3页，补充人文历史类素材。 → search_bilibili_video
+2026-03-19 06:57:47,103 - graph - INFO -    [4] 使用关键词'新疆大学 图书馆 实验室'在Bilibili搜索视频，设置每页40条，共搜索3页，补充学术科研类素材。 → search_bilibili_video
+2026-03-19 06:57:47,103 - graph - INFO -    [5] 使用AI模型对所有搜索到的候选视频（上限180个）进行评分和排序，筛选出最适合制作2分钟宣传片的Top 12个视频。 → rank_video_candidates
+2026-03-19 06:57:47,103 - graph - INFO -    [6] 批量下载筛选出的Top 12个最优视频到工作目录。 → download_bilibili_video
+2026-03-19 06:57:47,103 - graph - INFO -    [7] 对下载的所有12个视频进行多模态深度分析，提取时间线、关键帧、场景描述及剪辑建议。 → analyze_video
+2026-03-19 06:57:47,104 - graph - INFO - ⏱ 目标时长: 120.0s
+2026-03-19 06:57:47,105 - graph - INFO - 🔧 Executor 步骤 [1]: 使用关键词'新疆大学'在Bilibili搜索视频，设置每页40条，共搜索3页，获取基础素材池。
+2026-03-19 06:57:47,106 - graph - INFO - 🔍 _get_llm() model=Qwen3.5-122B-A10B
+2026-03-19 06:57:47,121 - graph - INFO - 🧰 步骤 [1] 工具白名单: search_bilibili_video
+2026-03-19 06:57:48,562 - tools._shared - INFO - 🔍 开始搜索Bilibili视频: query='新疆大学', max_results=40, pages=3, expand_variants=3
+2026-03-19 06:57:49,969 - tools._shared - DEBUG - B站搜索返回结构: ['seid', 'page', 'pagesize', 'numResults', 'numPages', 'suggest_keyword', 'rqt_type', 'exp_list', 'is_hit_web_inf', 'egg_hit', 'result', 'show_column', 'in_black_key', 'in_white_key', 'next']
+2026-03-19 06:57:49,969 - tools._shared - DEBUG - 获取到 40 条搜索结果
+2026-03-19 06:57:50,357 - tools._shared - DEBUG - B站搜索返回结构: ['seid', 'page', 'pagesize', 'numResults', 'numPages', 'suggest_keyword', 'rqt_type', 'exp_list', 'is_hit_web_inf', 'egg_hit', 'result', 'show_column', 'in_black_key', 'in_white_key', 'next']
+2026-03-19 06:57:50,357 - tools._shared - DEBUG - 获取到 40 条搜索结果
+2026-03-19 06:57:50,742 - tools._shared - DEBUG - B站搜索返回结构: ['seid', 'page', 'pagesize', 'numResults', 'numPages', 'suggest_keyword', 'rqt_type', 'exp_list', 'is_hit_web_inf', 'egg_hit', 'result', 'show_column', 'in_black_key', 'in_white_key', 'next']
+2026-03-19 06:57:50,742 - tools._shared - DEBUG - 获取到 40 条搜索结果
+2026-03-19 06:57:51,156 - tools._shared - DEBUG - B站搜索返回结构: ['seid', 'page', 'pagesize', 'numResults', 'numPages', 'suggest_keyword', 'rqt_type', 'exp_list', 'is_hit_web_inf', 'egg_hit', 'result', 'show_column', 'in_black_key', 'in_white_key', 'next']
+2026-03-19 06:57:51,156 - tools._shared - DEBUG - 获取到 40 条搜索结果
+2026-03-19 06:57:51,591 - tools._shared - DEBUG - B站搜索返回结构: ['seid', 'page', 'pagesize', 'numResults', 'numPages', 'suggest_keyword', 'rqt_type', 'exp_list', 'is_hit_web_inf', 'egg_hit', 'result', 'show_column', 'in_black_key', 'in_white_key', 'next']
+2026-03-19 06:57:51,592 - tools._shared - DEBUG - 获取到 40 条搜索结果
+2026-03-19 06:57:52,019 - tools._shared - DEBUG - B站搜索返回结构: ['seid', 'page', 'pagesize', 'numResults', 'numPages', 'suggest_keyword', 'rqt_type', 'exp_list', 'is_hit_web_inf', 'egg_hit', 'result', 'show_column', 'in_black_key', 'in_white_key', 'next']
+2026-03-19 06:57:52,019 - tools._shared - DEBUG - 获取到 40 条搜索结果
+2026-03-19 06:57:52,421 - tools._shared - DEBUG - B站搜索返回结构: ['seid', 'page', 'pagesize', 'numResults', 'numPages', 'suggest_keyword', 'rqt_type', 'exp_list', 'is_hit_web_inf', 'egg_hit', 'result', 'show_column', 'in_black_key', 'in_white_key', 'next']
+2026-03-19 06:57:52,422 - tools._shared - DEBUG - 获取到 40 条搜索结果
+2026-03-19 06:57:52,820 - tools._shared - DEBUG - B站搜索返回结构: ['seid', 'page', 'pagesize', 'numResults', 'numPages', 'suggest_keyword', 'rqt_type', 'exp_list', 'is_hit_web_inf', 'egg_hit', 'result', 'show_column', 'in_black_key', 'in_white_key', 'next']
+2026-03-19 06:57:52,820 - tools._shared - DEBUG - 获取到 40 条搜索结果
+2026-03-19 06:57:53,209 - tools._shared - DEBUG - B站搜索返回结构: ['seid', 'page', 'pagesize', 'numResults', 'numPages', 'suggest_keyword', 'rqt_type', 'exp_list', 'is_hit_web_inf', 'egg_hit', 'result', 'show_column', 'in_black_key', 'in_white_key', 'next']
+2026-03-19 06:57:53,209 - tools._shared - DEBUG - 获取到 40 条搜索结果
+2026-03-19 06:57:53,610 - tools._shared - DEBUG - B站搜索返回结构: ['seid', 'page', 'pagesize', 'numResults', 'numPages', 'suggest_keyword', 'rqt_type', 'exp_list', 'is_hit_web_inf', 'egg_hit', 'result', 'show_column', 'in_black_key', 'in_white_key', 'next']
+2026-03-19 06:57:53,610 - tools._shared - DEBUG - 获取到 40 条搜索结果
+2026-03-19 06:57:53,989 - tools._shared - DEBUG - B站搜索返回结构: ['seid', 'page', 'pagesize', 'numResults', 'numPages', 'suggest_keyword', 'rqt_type', 'exp_list', 'is_hit_web_inf', 'egg_hit', 'result', 'show_column', 'in_black_key', 'in_white_key', 'next']
+2026-03-19 06:57:53,989 - tools._shared - DEBUG - 获取到 40 条搜索结果
+2026-03-19 06:57:54,332 - tools._shared - DEBUG - B站搜索返回结构: ['seid', 'page', 'pagesize', 'numResults', 'numPages', 'suggest_keyword', 'rqt_type', 'exp_list', 'is_hit_web_inf', 'egg_hit', 'result', 'show_column', 'in_black_key', 'in_white_key', 'next']
+2026-03-19 06:57:54,333 - tools._shared - DEBUG - 获取到 40 条搜索结果
+2026-03-19 06:57:54,335 - tools._shared - INFO - 📊 Bilibili搜索统计: 查询=4, 原始结果=479, 去重后=327, 过滤后=279, 超时长剔除=48, 时长未知剔除=0, 候选=180
+2026-03-19 06:58:26,541 - graph - INFO - ✅ 步骤 [1] 完成: 搜索任务已完成。
+
+**执行结果总结：**
+
+1.  **搜索关键词**: "新疆大学"
+2.  **搜索参数**:
+    *   每页数量 (`max_results`): 40
+    *   搜索页数 (`pages`): 3
+    *   候选总数上限 (`max_total_results`): 180
+    *   自动扩展变体数 (`expand_variants`): 3 (
+2026-03-19 06:58:26,542 - graph - INFO - 📌 Prep Router: 步骤 2/7，继续 Phase 1
+2026-03-19 06:58:26,543 - graph - INFO - 🔧 Executor 步骤 [2]: 使用关键词'新疆大学 校园风景'在Bilibili搜索视频，设置每页40条，共搜索3页，补充风景类素材。
+2026-03-19 06:58:26,543 - graph - INFO - 🧰 步骤 [2] 工具白名单: search_bilibili_video
+2026-03-19 06:58:28,449 - tools._shared - INFO - 🔍 开始搜索Bilibili视频: query='新疆大学 校园风景', max_results=40, pages=3, expand_variants=3
+2026-03-19 06:58:29,333 - tools._shared - DEBUG - B站搜索返回结构: ['seid', 'page', 'pagesize', 'numResults', 'numPages', 'suggest_keyword', 'rqt_type', 'exp_list', 'is_hit_web_inf', 'egg_hit', 'result', 'show_column', 'in_black_key', 'in_white_key', 'next']
+2026-03-19 06:58:29,333 - tools._shared - DEBUG - 获取到 40 条搜索结果
+2026-03-19 06:58:29,723 - tools._shared - DEBUG - B站搜索返回结构: ['seid', 'page', 'pagesize', 'numResults', 'numPages', 'suggest_keyword', 'rqt_type', 'exp_list', 'is_hit_web_inf', 'egg_hit', 'result', 'show_column', 'in_black_key', 'in_white_key', 'next']
+2026-03-19 06:58:29,724 - tools._shared - DEBUG - 获取到 40 条搜索结果
+2026-03-19 06:58:30,066 - tools._shared - DEBUG - B站搜索返回结构: ['seid', 'page', 'pagesize', 'numResults', 'numPages', 'suggest_keyword', 'rqt_type', 'exp_list', 'is_hit_web_inf', 'egg_hit', 'result', 'show_column', 'in_black_key', 'in_white_key', 'next']
+2026-03-19 06:58:30,066 - tools._shared - DEBUG - 获取到 40 条搜索结果
+2026-03-19 06:58:30,507 - tools._shared - DEBUG - B站搜索返回结构: ['seid', 'page', 'pagesize', 'numResults', 'numPages', 'suggest_keyword', 'rqt_type', 'exp_list', 'is_hit_web_inf', 'egg_hit', 'result', 'show_column', 'in_black_key', 'in_white_key', 'next']
+2026-03-19 06:58:30,507 - tools._shared - DEBUG - 获取到 40 条搜索结果
+2026-03-19 06:58:30,957 - tools._shared - DEBUG - B站搜索返回结构: ['seid', 'page', 'pagesize', 'numResults', 'numPages', 'suggest_keyword', 'rqt_type', 'exp_list', 'is_hit_web_inf', 'egg_hit', 'result', 'show_column', 'in_black_key', 'in_white_key', 'next']
+2026-03-19 06:58:30,957 - tools._shared - DEBUG - 获取到 40 条搜索结果
+2026-03-19 06:58:31,325 - tools._shared - DEBUG - B站搜索返回结构: ['seid', 'page', 'pagesize', 'numResults', 'numPages', 'suggest_keyword', 'rqt_type', 'exp_list', 'is_hit_web_inf', 'egg_hit', 'result', 'show_column', 'in_black_key', 'in_white_key', 'next']
+2026-03-19 06:58:31,326 - tools._shared - DEBUG - 获取到 40 条搜索结果
+2026-03-19 06:58:31,825 - tools._shared - DEBUG - B站搜索返回结构: ['seid', 'page', 'pagesize', 'numResults', 'numPages', 'suggest_keyword', 'rqt_type', 'exp_list', 'is_hit_web_inf', 'egg_hit', 'result', 'show_column', 'in_black_key', 'in_white_key', 'next']
+2026-03-19 06:58:31,826 - tools._shared - DEBUG - 获取到 40 条搜索结果
+2026-03-19 06:58:32,234 - tools._shared - DEBUG - B站搜索返回结构: ['seid', 'page', 'pagesize', 'numResults', 'numPages', 'suggest_keyword', 'rqt_type', 'exp_list', 'is_hit_web_inf', 'egg_hit', 'result', 'show_column', 'in_black_key', 'in_white_key', 'next']
+2026-03-19 06:58:32,235 - tools._shared - DEBUG - 获取到 40 条搜索结果
+2026-03-19 06:58:32,614 - tools._shared - DEBUG - B站搜索返回结构: ['seid', 'page', 'pagesize', 'numResults', 'numPages', 'suggest_keyword', 'rqt_type', 'exp_list', 'is_hit_web_inf', 'egg_hit', 'result', 'show_column', 'in_black_key', 'in_white_key', 'next']
+2026-03-19 06:58:32,614 - tools._shared - DEBUG - 获取到 40 条搜索结果
+2026-03-19 06:58:33,029 - tools._shared - DEBUG - B站搜索返回结构: ['seid', 'page', 'pagesize', 'numResults', 'numPages', 'suggest_keyword', 'rqt_type', 'exp_list', 'is_hit_web_inf', 'egg_hit', 'result', 'show_column', 'in_black_key', 'in_white_key', 'next']
+2026-03-19 06:58:33,030 - tools._shared - DEBUG - 获取到 40 条搜索结果
+2026-03-19 06:58:33,394 - tools._shared - DEBUG - B站搜索返回结构: ['seid', 'page', 'pagesize', 'numResults', 'numPages', 'suggest_keyword', 'rqt_type', 'exp_list', 'is_hit_web_inf', 'egg_hit', 'result', 'show_column', 'in_black_key', 'in_white_key', 'next']
+2026-03-19 06:58:33,394 - tools._shared - DEBUG - 获取到 40 条搜索结果
+2026-03-19 06:58:33,779 - tools._shared - DEBUG - B站搜索返回结构: ['seid', 'page', 'pagesize', 'numResults', 'numPages', 'suggest_keyword', 'rqt_type', 'exp_list', 'is_hit_web_inf', 'egg_hit', 'result', 'show_column', 'in_black_key', 'in_white_key', 'next']
+2026-03-19 06:58:33,779 - tools._shared - DEBUG - 获取到 40 条搜索结果
+2026-03-19 06:58:33,782 - tools._shared - INFO - 📊 Bilibili搜索统计: 查询=4, 原始结果=480, 去重后=361, 过滤后=277, 超时长剔除=84, 时长未知剔除=0, 候选=180
+2026-03-19 06:59:08,895 - graph - INFO - ✅ 步骤 [2] 完成: **执行结果总结：**
+
+1.  **搜索关键词**: "新疆大学 校园风景"
+2.  **搜索参数**:
+    *   每页数量 (`max_results`): 40
+    *   搜索页数 (`pages`): 3
+    *   候选总数上限 (`max_total_results`): 180
+    *   自动扩展变体数 (`expand_variants`): 3 (默认)
+3
+2026-03-19 06:59:08,897 - graph - INFO - 📌 Prep Router: 步骤 3/7，继续 Phase 1
+2026-03-19 06:59:08,898 - graph - INFO - 🔧 Executor 步骤 [3]: 使用关键词'新疆大学 历史 文化'在Bilibili搜索视频，设置每页40条，共搜索3页，补充人文历史类素材。
+2026-03-19 06:59:08,899 - graph - INFO - 🧰 步骤 [3] 工具白名单: search_bilibili_video
+2026-03-19 06:59:11,027 - tools._shared - INFO - 🔍 开始搜索Bilibili视频: query='新疆大学 历史 文化', max_results=40, pages=3, expand_variants=3
+2026-03-19 06:59:11,875 - tools._shared - DEBUG - B站搜索返回结构: ['seid', 'page', 'pagesize', 'numResults', 'numPages', 'suggest_keyword', 'rqt_type', 'exp_list', 'is_hit_web_inf', 'egg_hit', 'result', 'show_column', 'in_black_key', 'in_white_key', 'next']
+2026-03-19 06:59:11,876 - tools._shared - DEBUG - 获取到 40 条搜索结果
+2026-03-19 06:59:12,294 - tools._shared - DEBUG - B站搜索返回结构: ['seid', 'page', 'pagesize', 'numResults', 'numPages', 'suggest_keyword', 'rqt_type', 'exp_list', 'is_hit_web_inf', 'egg_hit', 'result', 'show_column', 'in_black_key', 'in_white_key', 'next']
+2026-03-19 06:59:12,294 - tools._shared - DEBUG - 获取到 40 条搜索结果
+2026-03-19 06:59:12,712 - tools._shared - DEBUG - B站搜索返回结构: ['seid', 'page', 'pagesize', 'numResults', 'numPages', 'suggest_keyword', 'rqt_type', 'exp_list', 'is_hit_web_inf', 'egg_hit', 'result', 'show_column', 'in_black_key', 'in_white_key', 'next']
+2026-03-19 06:59:12,712 - tools._shared - DEBUG - 获取到 40 条搜索结果
+2026-03-19 06:59:13,173 - tools._shared - DEBUG - B站搜索返回结构: ['seid', 'page', 'pagesize', 'numResults', 'numPages', 'suggest_keyword', 'rqt_type', 'exp_list', 'is_hit_web_inf', 'egg_hit', 'result', 'show_column', 'in_black_key', 'in_white_key', 'next']
+2026-03-19 06:59:13,173 - tools._shared - DEBUG - 获取到 40 条搜索结果
+2026-03-19 06:59:13,594 - tools._shared - DEBUG - B站搜索返回结构: ['seid', 'page', 'pagesize', 'numResults', 'numPages', 'suggest_keyword', 'rqt_type', 'exp_list', 'is_hit_web_inf', 'egg_hit', 'result', 'show_column', 'in_black_key', 'in_white_key', 'next']
+2026-03-19 06:59:13,594 - tools._shared - DEBUG - 获取到 40 条搜索结果
+2026-03-19 06:59:13,992 - tools._shared - DEBUG - B站搜索返回结构: ['seid', 'page', 'pagesize', 'numResults', 'numPages', 'suggest_keyword', 'rqt_type', 'exp_list', 'is_hit_web_inf', 'egg_hit', 'result', 'show_column', 'in_black_key', 'in_white_key', 'next']
+2026-03-19 06:59:13,993 - tools._shared - DEBUG - 获取到 40 条搜索结果
+2026-03-19 06:59:14,414 - tools._shared - DEBUG - B站搜索返回结构: ['seid', 'page', 'pagesize', 'numResults', 'numPages', 'suggest_keyword', 'rqt_type', 'exp_list', 'is_hit_web_inf', 'egg_hit', 'result', 'show_column', 'in_black_key', 'in_white_key', 'next']
+2026-03-19 06:59:14,414 - tools._shared - DEBUG - 获取到 40 条搜索结果
+2026-03-19 06:59:14,780 - tools._shared - DEBUG - B站搜索返回结构: ['seid', 'page', 'pagesize', 'numResults', 'numPages', 'suggest_keyword', 'rqt_type', 'exp_list', 'is_hit_web_inf', 'egg_hit', 'result', 'show_column', 'in_black_key', 'in_white_key', 'next']
+2026-03-19 06:59:14,780 - tools._shared - DEBUG - 获取到 40 条搜索结果
+2026-03-19 06:59:15,179 - tools._shared - DEBUG - B站搜索返回结构: ['seid', 'page', 'pagesize', 'numResults', 'numPages', 'suggest_keyword', 'rqt_type', 'exp_list', 'is_hit_web_inf', 'egg_hit', 'result', 'show_column', 'in_black_key', 'in_white_key', 'next']
+2026-03-19 06:59:15,180 - tools._shared - DEBUG - 获取到 40 条搜索结果
+2026-03-19 06:59:15,641 - tools._shared - DEBUG - B站搜索返回结构: ['seid', 'page', 'pagesize', 'numResults', 'numPages', 'suggest_keyword', 'rqt_type', 'exp_list', 'is_hit_web_inf', 'egg_hit', 'result', 'show_column', 'in_black_key', 'in_white_key', 'next']
+2026-03-19 06:59:15,641 - tools._shared - DEBUG - 获取到 40 条搜索结果
+2026-03-19 06:59:16,008 - tools._shared - DEBUG - B站搜索返回结构: ['seid', 'page', 'pagesize', 'numResults', 'numPages', 'suggest_keyword', 'rqt_type', 'exp_list', 'is_hit_web_inf', 'egg_hit', 'result', 'show_column', 'in_black_key', 'in_white_key', 'next']
+2026-03-19 06:59:16,008 - tools._shared - DEBUG - 获取到 40 条搜索结果
+2026-03-19 06:59:16,356 - tools._shared - DEBUG - B站搜索返回结构: ['seid', 'page', 'pagesize', 'numResults', 'numPages', 'suggest_keyword', 'rqt_type', 'exp_list', 'is_hit_web_inf', 'egg_hit', 'result', 'show_column', 'in_black_key', 'in_white_key', 'next']
+2026-03-19 06:59:16,356 - tools._shared - DEBUG - 获取到 40 条搜索结果
+2026-03-19 06:59:16,359 - tools._shared - INFO - 📊 Bilibili搜索统计: 查询=4, 原始结果=480, 去重后=364, 过滤后=204, 超时长剔除=160, 时长未知剔除=0, 候选=180
+2026-03-19 06:59:53,458 - graph - INFO - ✅ 步骤 [3] 完成: **执行结果总结：**
+
+1.  **搜索关键词**: "新疆大学 历史 文化"
+2.  **搜索参数**:
+    *   每页数量 (`max_results`): 40
+    *   搜索页数 (`pages`): 3
+    *   候选总数上限 (`max_total_results`): 180
+    *   自动扩展变体数 (`expand_variants`): 3 (默认，实
+2026-03-19 06:59:53,459 - graph - INFO - 📌 Prep Router: 步骤 4/7，继续 Phase 1
+2026-03-19 06:59:53,460 - graph - INFO - 🔧 Executor 步骤 [4]: 使用关键词'新疆大学 图书馆 实验室'在Bilibili搜索视频，设置每页40条，共搜索3页，补充学术科研类素材。
+2026-03-19 06:59:53,461 - graph - INFO - 🧰 步骤 [4] 工具白名单: search_bilibili_video
+2026-03-19 06:59:55,812 - tools._shared - INFO - 🔍 开始搜索Bilibili视频: query='新疆大学 图书馆 实验室', max_results=40, pages=3, expand_variants=3
+2026-03-19 06:59:56,719 - tools._shared - DEBUG - B站搜索返回结构: ['seid', 'page', 'pagesize', 'numResults', 'numPages', 'suggest_keyword', 'rqt_type', 'exp_list', 'is_hit_web_inf', 'egg_hit', 'result', 'show_column', 'in_black_key', 'in_white_key', 'next']
+2026-03-19 06:59:56,719 - tools._shared - DEBUG - 获取到 40 条搜索结果
+2026-03-19 06:59:57,302 - tools._shared - DEBUG - B站搜索返回结构: ['seid', 'page', 'pagesize', 'numResults', 'numPages', 'suggest_keyword', 'rqt_type', 'exp_list', 'is_hit_web_inf', 'egg_hit', 'result', 'show_column', 'in_black_key', 'in_white_key', 'next']
+2026-03-19 06:59:57,303 - tools._shared - DEBUG - 获取到 40 条搜索结果
+2026-03-19 06:59:57,749 - tools._shared - DEBUG - B站搜索返回结构: ['seid', 'page', 'pagesize', 'numResults', 'numPages', 'suggest_keyword', 'rqt_type', 'exp_list', 'is_hit_web_inf', 'egg_hit', 'result', 'show_column', 'in_black_key', 'in_white_key', 'next']
+2026-03-19 06:59:57,749 - tools._shared - DEBUG - 获取到 40 条搜索结果
+2026-03-19 06:59:58,230 - tools._shared - DEBUG - B站搜索返回结构: ['seid', 'page', 'pagesize', 'numResults', 'numPages', 'suggest_keyword', 'rqt_type', 'exp_list', 'is_hit_web_inf', 'egg_hit', 'result', 'show_column', 'in_black_key', 'in_white_key', 'next']
+2026-03-19 06:59:58,230 - tools._shared - DEBUG - 获取到 40 条搜索结果
+2026-03-19 06:59:58,643 - tools._shared - DEBUG - B站搜索返回结构: ['seid', 'page', 'pagesize', 'numResults', 'numPages', 'suggest_keyword', 'rqt_type', 'exp_list', 'is_hit_web_inf', 'egg_hit', 'result', 'show_column', 'in_black_key', 'in_white_key', 'next']
+2026-03-19 06:59:58,643 - tools._shared - DEBUG - 获取到 40 条搜索结果
+2026-03-19 06:59:59,034 - tools._shared - DEBUG - B站搜索返回结构: ['seid', 'page', 'pagesize', 'numResults', 'numPages', 'suggest_keyword', 'rqt_type', 'exp_list', 'is_hit_web_inf', 'egg_hit', 'result', 'show_column', 'in_black_key', 'in_white_key', 'next']
+2026-03-19 06:59:59,034 - tools._shared - DEBUG - 获取到 40 条搜索结果
+2026-03-19 06:59:59,414 - tools._shared - DEBUG - B站搜索返回结构: ['seid', 'page', 'pagesize', 'numResults', 'numPages', 'suggest_keyword', 'rqt_type', 'exp_list', 'is_hit_web_inf', 'egg_hit', 'result', 'show_column', 'in_black_key', 'in_white_key', 'next']
+2026-03-19 06:59:59,414 - tools._shared - DEBUG - 获取到 40 条搜索结果
+2026-03-19 06:59:59,735 - tools._shared - DEBUG - B站搜索返回结构: ['seid', 'page', 'pagesize', 'numResults', 'numPages', 'suggest_keyword', 'rqt_type', 'exp_list', 'is_hit_web_inf', 'egg_hit', 'result', 'show_column', 'in_black_key', 'in_white_key', 'next']
+2026-03-19 06:59:59,735 - tools._shared - DEBUG - 获取到 40 条搜索结果
+2026-03-19 07:00:00,105 - tools._shared - DEBUG - B站搜索返回结构: ['seid', 'page', 'pagesize', 'numResults', 'numPages', 'suggest_keyword', 'rqt_type', 'exp_list', 'is_hit_web_inf', 'egg_hit', 'result', 'show_column', 'in_black_key', 'in_white_key', 'next']
+2026-03-19 07:00:00,106 - tools._shared - DEBUG - 获取到 40 条搜索结果
+2026-03-19 07:00:00,555 - tools._shared - DEBUG - B站搜索返回结构: ['seid', 'page', 'pagesize', 'numResults', 'numPages', 'suggest_keyword', 'rqt_type', 'exp_list', 'is_hit_web_inf', 'egg_hit', 'result', 'show_column', 'in_black_key', 'in_white_key', 'next']
+2026-03-19 07:00:00,555 - tools._shared - DEBUG - 获取到 40 条搜索结果
+2026-03-19 07:00:00,959 - tools._shared - DEBUG - B站搜索返回结构: ['seid', 'page', 'pagesize', 'numResults', 'numPages', 'suggest_keyword', 'rqt_type', 'exp_list', 'is_hit_web_inf', 'egg_hit', 'result', 'show_column', 'in_black_key', 'in_white_key', 'next']
+2026-03-19 07:00:00,960 - tools._shared - DEBUG - 获取到 40 条搜索结果
+2026-03-19 07:00:01,376 - tools._shared - DEBUG - B站搜索返回结构: ['seid', 'page', 'pagesize', 'numResults', 'numPages', 'suggest_keyword', 'rqt_type', 'exp_list', 'is_hit_web_inf', 'egg_hit', 'result', 'show_column', 'in_black_key', 'in_white_key', 'next']
+2026-03-19 07:00:01,376 - tools._shared - DEBUG - 获取到 40 条搜索结果
+2026-03-19 07:00:01,379 - tools._shared - INFO - 📊 Bilibili搜索统计: 查询=4, 原始结果=480, 去重后=354, 过滤后=303, 超时长剔除=51, 时长未知剔除=0, 候选=180
+2026-03-19 07:00:37,936 - graph - INFO - ✅ 步骤 [4] 完成: **执行结果总结：**
+
+1.  **搜索关键词**: "新疆大学 图书馆 实验室"
+2.  **搜索参数**:
+    *   每页数量 (`max_results`): 40
+    *   搜索页数 (`pages`): 3
+    *   候选总数上限 (`max_total_results`): 180
+    *   自动扩展变体数 (`expand_variants`): 3 (实际
+2026-03-19 07:00:37,937 - graph - INFO - 📌 Prep Router: 步骤 5/7，继续 Phase 1
+2026-03-19 07:00:37,939 - graph - INFO - 🔧 Executor 步骤 [5]: 使用AI模型对所有搜索到的候选视频（上限180个）进行评分和排序，筛选出最适合制作2分钟宣传片的Top 12个视频。
+2026-03-19 07:00:37,939 - graph - INFO - 🔍 _get_llm() model=Qwen3.5-122B-A10B
+2026-03-19 07:00:37,951 - graph - INFO - 🧰 步骤 [5] 工具白名单: rank_video_candidates
+2026-03-19 07:00:39,906 - tools._shared - INFO - 🤖 MLLM筛选开始: 入参=0, 候选池=563, 聚合候选=563, 过滤后=563, 超时长剔除=0, 时长未知剔除=0, 实际评估=180, 目标保留=12
+2026-03-19 07:02:26,457 - tools._shared - INFO - ✅ MLLM筛选完成: 候选=563, 评估=180, 选中=12
+2026-03-19 07:03:10,340 - graph - INFO - ✅ 步骤 [5] 完成: **执行结果总结：**
+
+1.  **任务目标**：对累计的候选视频池进行AI评分与排序，筛选出最适合制作2分钟新疆大学宣传片的Top 12个视频。
+2.  **执行参数**：
+    *   候选池来源：自动加载之前所有搜索步骤（“新疆大学 校园风景”、“新疆大学 历史 文化”、“新疆大学 图书馆 实验室”）生成的候选池。
+    *   候选总数：563个。
+    *   评审数量 (`ma
+2026-03-19 07:03:10,342 - graph - INFO - 📌 Prep Router: 步骤 6/7，继续 Phase 1
+2026-03-19 07:03:10,343 - graph - INFO - 🔧 Executor 步骤 [6]: 批量下载筛选出的Top 12个最优视频到工作目录。
+2026-03-19 07:03:10,344 - graph - INFO - 📥 下载步骤走确定性路径: top_k=12, max_review=180
+2026-03-19 07:03:10,345 - tools._shared - INFO - ♻️ MLLM筛选命中缓存，跳过重复评估
+2026-03-19 07:03:10,349 - tools._shared - INFO - 📥 开始下载Bilibili视频: url='http://www.bilibili.com/video/av810331220', filename='selected_1_y1s7R8', prefer_h264=True
+2026-03-19 07:03:17,690 - tools._shared - INFO - 📥 开始下载Bilibili视频: url='http://www.bilibili.com/video/av112688214705608', filename='selected_2_2egEyN', prefer_h264=True
+2026-03-19 07:03:39,802 - tools._shared - INFO - 📥 开始下载Bilibili视频: url='http://www.bilibili.com/video/av1155938128', filename='selected_3_21M7ke', prefer_h264=True
+2026-03-19 07:03:55,775 - tools._shared - INFO - 📥 开始下载Bilibili视频: url='http://www.bilibili.com/video/av115271771620939', filename='selected_4_5zyEqn', prefer_h264=True
+2026-03-19 07:04:20,114 - tools._shared - INFO - 📥 开始下载Bilibili视频: url='http://www.bilibili.com/video/av640565431', filename='selected_5_y1H7Nz', prefer_h264=True
+2026-03-19 07:04:40,144 - tools._shared - INFO - 📥 开始下载Bilibili视频: url='http://www.bilibili.com/video/av674318193', filename='selected_6_y1n7D9', prefer_h264=True
+2026-03-19 07:05:09,786 - tools._shared - INFO - 📥 开始下载Bilibili视频: url='http://www.bilibili.com/video/av897152329', filename='selected_7_y1d78b', prefer_h264=True
+2026-03-19 07:05:25,360 - tools._shared - INFO - 📥 开始下载Bilibili视频: url='http://www.bilibili.com/video/av768681431', filename='selected_8_y1872C', prefer_h264=True
+2026-03-19 07:05:56,846 - tools._shared - INFO - 📥 开始下载Bilibili视频: url='http://www.bilibili.com/video/av591270067', filename='selected_9_y1R7Cq', prefer_h264=True
+2026-03-19 07:06:27,531 - tools._shared - INFO - 📥 开始下载Bilibili视频: url='http://www.bilibili.com/video/av1553260520', filename='selected_10_21R7VB', prefer_h264=True
+2026-03-19 07:06:46,049 - tools._shared - INFO - 📥 开始下载Bilibili视频: url='http://www.bilibili.com/video/av374353584', filename='selected_11_y1A7Lu', prefer_h264=True
+2026-03-19 07:07:06,809 - tools._shared - INFO - 📥 开始下载Bilibili视频: url='http://www.bilibili.com/video/av351891176', filename='selected_12_y1i7zX', prefer_h264=True
+2026-03-19 07:07:29,358 - graph - INFO - ✅ 步骤 [6] 完成(确定性下载): 下载步骤（确定性执行）完成
+- 计划下载: 12
+- 成功: 12
+- 失败: 0
+- 成功明细:
+1. {新疆大学博达校区} 简单的环绕延时摄影，浅拍了一下校内的建筑 -> /data1/liwenxi/agent/GenVideo/temp/selected_1_y1s7R8.mp4
+2. 2024年喀什大学招生宣传片 -> /data1/liwenxi/agent/GenVideo/temp/selected_2_2egEyN.m
+2026-03-19 07:07:29,360 - graph - INFO - 📌 Prep Router: 步骤 7/7，继续 Phase 1
+2026-03-19 07:07:29,360 - graph - INFO - 🔧 Executor 步骤 [7]: 对下载的所有12个视频进行多模态深度分析，提取时间线、关键帧、场景描述及剪辑建议。
+2026-03-19 07:07:29,361 - graph - INFO - 🧠 源视频过滤: 待分析=12, 已分析=0
+2026-03-19 07:07:29,361 - graph - INFO - 🔍 _get_llm() model=Qwen3.5-122B-A10B
+2026-03-19 07:07:29,374 - graph - INFO - 🧰 步骤 [7] 工具白名单: analyze_video
+2026-03-19 07:08:28,267 - tools._shared - INFO - 🕒 已生成时间戳分析视频: /data1/liwenxi/agent/GenVideo/temp/selected_1_y1s7R8_analysis_ts.mp4
+2026-03-19 07:08:28,268 - tools._shared - INFO - 多模态视频内容分析: model= is_omni=False video=/data1/liwenxi/agent/GenVideo/temp/selected_1_y1s7R8_analysis_ts.mp4
+2026-03-19 07:08:28,327 - tools._shared - INFO - 视频URLs: ['file:///data1/liwenxi/agent/GenVideo/temp/selected_1_y1s7R8_analysis_ts.mp4', 'file:///data1/liwenxi/agent/GenVideo/temp/selected_1_y1s7R8.mp4'] | 音频URLs: [] | is_omni=False
+2026-03-19 07:08:29,902 - tools._shared - INFO - 🕒 已生成时间戳分析视频: /data1/liwenxi/agent/GenVideo/temp/selected_7_y1d78b_analysis_ts.mp4
+2026-03-19 07:08:29,902 - tools._shared - INFO - 多模态视频内容分析: model= is_omni=False video=/data1/liwenxi/agent/GenVideo/temp/selected_7_y1d78b_analysis_ts.mp4
+2026-03-19 07:08:29,902 - tools._shared - INFO - 视频URLs: ['file:///data1/liwenxi/agent/GenVideo/temp/selected_7_y1d78b_analysis_ts.mp4', 'file:///data1/liwenxi/agent/GenVideo/temp/selected_7_y1d78b.mp4'] | 音频URLs: [] | is_omni=False
+2026-03-19 07:08:36,069 - tools._shared - INFO - 🕒 已生成时间戳分析视频: /data1/liwenxi/agent/GenVideo/temp/selected_3_21M7ke_analysis_ts.mp4
+2026-03-19 07:08:36,070 - tools._shared - INFO - 多模态视频内容分析: model= is_omni=False video=/data1/liwenxi/agent/GenVideo/temp/selected_3_21M7ke_analysis_ts.mp4
+2026-03-19 07:08:36,071 - tools._shared - INFO - 视频URLs: ['file:///data1/liwenxi/agent/GenVideo/temp/selected_3_21M7ke_analysis_ts.mp4', 'file:///data1/liwenxi/agent/GenVideo/temp/selected_3_21M7ke.mp4'] | 音频URLs: [] | is_omni=False
+2026-03-19 07:08:38,448 - tools._shared - INFO - 🕒 已生成时间戳分析视频: /data1/liwenxi/agent/GenVideo/temp/selected_9_y1R7Cq_analysis_ts.mp4
+2026-03-19 07:08:38,448 - tools._shared - INFO - 多模态视频内容分析: model= is_omni=False video=/data1/liwenxi/agent/GenVideo/temp/selected_9_y1R7Cq_analysis_ts.mp4
+2026-03-19 07:08:38,448 - tools._shared - INFO - 视频URLs: ['file:///data1/liwenxi/agent/GenVideo/temp/selected_9_y1R7Cq_analysis_ts.mp4', 'file:///data1/liwenxi/agent/GenVideo/temp/selected_9_y1R7Cq.mp4'] | 音频URLs: [] | is_omni=False
+2026-03-19 07:08:43,028 - tools._shared - INFO - 🕒 已生成时间戳分析视频: /data1/liwenxi/agent/GenVideo/temp/selected_4_5zyEqn_analysis_ts.mp4
+2026-03-19 07:08:43,028 - tools._shared - INFO - 多模态视频内容分析: model= is_omni=False video=/data1/liwenxi/agent/GenVideo/temp/selected_4_5zyEqn_analysis_ts.mp4
+2026-03-19 07:08:43,029 - tools._shared - INFO - 视频URLs: ['file:///data1/liwenxi/agent/GenVideo/temp/selected_4_5zyEqn_analysis_ts.mp4', 'file:///data1/liwenxi/agent/GenVideo/temp/selected_4_5zyEqn.mp4'] | 音频URLs: [] | is_omni=False
+2026-03-19 07:08:53,036 - tools._shared - INFO - 🕒 已生成时间戳分析视频: /data1/liwenxi/agent/GenVideo/temp/selected_10_21R7VB_analysis_ts.mp4
+2026-03-19 07:08:53,037 - tools._shared - INFO - 多模态视频内容分析: model= is_omni=False video=/data1/liwenxi/agent/GenVideo/temp/selected_10_21R7VB_analysis_ts.mp4
+2026-03-19 07:08:53,037 - tools._shared - INFO - 视频URLs: ['file:///data1/liwenxi/agent/GenVideo/temp/selected_10_21R7VB_analysis_ts.mp4', 'file:///data1/liwenxi/agent/GenVideo/temp/selected_10_21R7VB.mp4'] | 音频URLs: [] | is_omni=False
+2026-03-19 07:09:09,335 - tools._shared - INFO - 🕒 已生成时间戳分析视频: /data1/liwenxi/agent/GenVideo/temp/selected_2_2egEyN_analysis_ts.mp4
+2026-03-19 07:09:09,335 - tools._shared - INFO - 多模态视频内容分析: model= is_omni=False video=/data1/liwenxi/agent/GenVideo/temp/selected_2_2egEyN_analysis_ts.mp4
+2026-03-19 07:09:09,336 - tools._shared - INFO - 视频URLs: ['file:///data1/liwenxi/agent/GenVideo/temp/selected_2_2egEyN_analysis_ts.mp4', 'file:///data1/liwenxi/agent/GenVideo/temp/selected_2_2egEyN.mp4'] | 音频URLs: [] | is_omni=False
+2026-03-19 07:09:12,318 - tools._shared - INFO - 🕒 已生成时间戳分析视频: /data1/liwenxi/agent/GenVideo/temp/selected_8_y1872C_analysis_ts.mp4
+2026-03-19 07:09:12,318 - tools._shared - INFO - 多模态视频内容分析: model= is_omni=False video=/data1/liwenxi/agent/GenVideo/temp/selected_8_y1872C_analysis_ts.mp4
+2026-03-19 07:09:12,318 - tools._shared - INFO - 视频URLs: ['file:///data1/liwenxi/agent/GenVideo/temp/selected_8_y1872C_analysis_ts.mp4', 'file:///data1/liwenxi/agent/GenVideo/temp/selected_8_y1872C.mp4'] | 音频URLs: [] | is_omni=False
+2026-03-19 07:09:14,770 - tools._shared - INFO - 🕒 已生成时间戳分析视频: /data1/liwenxi/agent/GenVideo/temp/selected_11_y1A7Lu_analysis_ts.mp4
+2026-03-19 07:09:14,771 - tools._shared - INFO - 多模态视频内容分析: model= is_omni=False video=/data1/liwenxi/agent/GenVideo/temp/selected_11_y1A7Lu_analysis_ts.mp4
+2026-03-19 07:09:14,771 - tools._shared - INFO - 视频URLs: ['file:///data1/liwenxi/agent/GenVideo/temp/selected_11_y1A7Lu_analysis_ts.mp4', 'file:///data1/liwenxi/agent/GenVideo/temp/selected_11_y1A7Lu.mp4'] | 音频URLs: [] | is_omni=False
+2026-03-19 07:09:23,735 - tools._shared - INFO - 🕒 已生成时间戳分析视频: /data1/liwenxi/agent/GenVideo/temp/selected_5_y1H7Nz_analysis_ts.mp4
+2026-03-19 07:09:23,736 - tools._shared - INFO - 多模态视频内容分析: model= is_omni=False video=/data1/liwenxi/agent/GenVideo/temp/selected_5_y1H7Nz_analysis_ts.mp4
+2026-03-19 07:09:23,736 - tools._shared - INFO - 视频URLs: ['file:///data1/liwenxi/agent/GenVideo/temp/selected_5_y1H7Nz_analysis_ts.mp4', 'file:///data1/liwenxi/agent/GenVideo/temp/selected_5_y1H7Nz.mp4'] | 音频URLs: [] | is_omni=False
+2026-03-19 07:09:35,598 - tools._shared - INFO - 🕒 已生成时间戳分析视频: /data1/liwenxi/agent/GenVideo/temp/selected_12_y1i7zX_analysis_ts.mp4
+2026-03-19 07:09:35,599 - tools._shared - INFO - 多模态视频内容分析: model= is_omni=False video=/data1/liwenxi/agent/GenVideo/temp/selected_12_y1i7zX_analysis_ts.mp4
+2026-03-19 07:09:35,599 - tools._shared - INFO - 视频URLs: ['file:///data1/liwenxi/agent/GenVideo/temp/selected_12_y1i7zX_analysis_ts.mp4', 'file:///data1/liwenxi/agent/GenVideo/temp/selected_12_y1i7zX.mp4'] | 音频URLs: [] | is_omni=False
+2026-03-19 07:10:05,126 - tools._shared - INFO - 🕒 已生成时间戳分析视频: /data1/liwenxi/agent/GenVideo/temp/selected_6_y1n7D9_analysis_ts.mp4
+2026-03-19 07:10:05,126 - tools._shared - INFO - 多模态视频内容分析: model= is_omni=False video=/data1/liwenxi/agent/GenVideo/temp/selected_6_y1n7D9_analysis_ts.mp4
+2026-03-19 07:10:05,127 - tools._shared - INFO - 视频URLs: ['file:///data1/liwenxi/agent/GenVideo/temp/selected_6_y1n7D9_analysis_ts.mp4', 'file:///data1/liwenxi/agent/GenVideo/temp/selected_6_y1n7D9.mp4'] | 音频URLs: [] | is_omni=False
+2026-03-19 07:10:35,137 - tools._shared - INFO - 视频分析完成（视觉）: ### 全片分段分析
+
+#### t=0s-t=15s
+- **画面发生了什么**：视频开始时展示了一座大型建筑，外观现代，外墙主要为白色和棕色相间，正面有大面积玻璃窗。随着镜头移动，可以看到建筑前方
+2026-03-19 07:11:22,782 - tools._shared - INFO - 视频分析完成（视觉）: ### 全片分段分析
+
+#### t=0s-t=10s
+- **画面发生了什么**：视频开始时展示了一座现代化的建筑，可能是新疆大学博达校区的一部分。随后镜头转向一条宽阔的道路，路边有树木和路灯，远处
+2026-03-19 07:11:50,257 - tools._shared - INFO - 视频分析完成（视觉）: ### 全片分段分析
+
+#### t=0s-t=10s
+- **画面发生了什么**：视频开头展示了一位戴着宽边帽和墨镜的女性，背景是具有异域风情的建筑群，可能是某个旅游景点。随后画面切换到夜晚，女性戴
+2026-03-19 07:12:13,760 - tools._shared - INFO - 视频分析完成（视觉）: ### 全片分段分析
+
+#### t=0s-t=10s
+- **画面发生了什么**：视频开始时展示了一座现代化校园的全景，中央是一座大型建筑，两侧是红砖建筑。前景是一条宽阔的道路，两旁有绿化带和路灯。
+2026-03-19 07:12:28,198 - tools._shared - INFO - 视频分析完成（视觉）: ### 全片分段分析
+
+#### t=0s-t=5s
+- **画面发生了什么**：视频开始时展示了一座红色建筑，周围有黄色树叶的树木，天空晴朗。随后镜头切换到一个广场，背景是山脉和建筑物，前景有一个大
+2026-03-19 07:13:05,884 - tools._shared - INFO - 视频分析完成（视觉）: ### 全片分段分析
+
+#### t=0s-t=10s
+- **画面发生了什么**：视频开始时展示了一群穿着红色服装的人在广场上跳舞，背景是一个大型的建筑入口，周围有许多观众。随后镜头切换到一个城市的
+2026-03-19 07:13:29,339 - tools._shared - INFO - 视频分析完成（视觉）: ### 全片分段分析
+
+#### t=0s-t=10s
+- **画面发生了什么**：视频开始时展示了一个宁静的湖泊，湖面平静如镜，倒映着蓝天白云和远处的建筑物。随后镜头切换到一个舞台场景，舞台上灯光闪
+2026-03-19 07:13:39,244 - tools._shared - INFO - 视频分析完成（视觉）: ### 全片分段分析
+
+#### t=0s-t=5s
+- **画面发生了什么**：视频开始时，画面为一片白色，随后逐渐出现一些模糊的蓝色文字。
+- **镜头特征**：固定镜头，从全白到逐渐显现文字，色
+2026-03-19 07:14:15,618 - tools._shared - INFO - 视频分析完成（视觉）: ### 全片分段分析
+
+#### t=0s-t=10s
+- **画面发生了什么**：视频开始时，镜头聚焦在一面挂满留言卡的墙上，这些卡片上写满了各种祝福语和留言。随后，镜头转向一位戴着口罩的男子，他手
+2026-03-19 07:14:27,740 - tools._shared - INFO - 视频分析完成（视觉）: ### 全片分段分析
+
+#### t=0s-t=5s
+- **画面发生了什么**：视频开始时，画面为全黑，随后逐渐亮起，展示了一个雪景中的树木。
+- **镜头特征**：固定镜头，从全黑逐渐过渡到明亮的
+2026-03-19 07:15:43,823 - tools._shared - INFO - 视频分析完成（视觉）: ### 全片分段分析
+
+#### t=0s-t=10s
+- **画面发生了什么**：视频开始时展示了一座大型建筑的外观，这座建筑看起来像是一个大学或学院的校门。天空晴朗，蓝天白云，建筑前方是一条宽阔的
+2026-03-19 07:15:54,000 - tools._shared - INFO - 视频分析完成（视觉）: ### 全片分段分析
+
+#### t=0s-t=5s
+- **画面发生了什么**：视频开始时，展示了一个飞机窗外的景象，远处是连绵的山脉和夕阳。屏幕上出现了“Li's Vlog 1”和“终于开学辽！”
+2026-03-19 07:16:51,004 - graph - INFO - ✅ 步骤 [7] 完成: **执行结果总结：**
+
+已成功对下载的所有12个原始视频文件进行了多模态深度分析。分析过程遵循“每个视频仅分析一次”的原则，针对每个视频生成了详细的时间线分析、场景描述、情绪评估及剪辑建议。
+
+**分析详情：**
+
+1.  **selected_12_y1i7zX.mp4**
+    *   **分析结果文件**: `/data1/liwenxi/agent/GenVideo/temp/sele
+2026-03-19 07:16:51,005 - graph - INFO - ✅ Phase 1 完成: 12 个分析文件, 12 个源视频 → 进入 Phase 2 深度剪辑研究
+2026-03-19 07:16:51,006 - graph - INFO - 🔬 ═══ Phase 2 开始: 深度剪辑研究 ═══
+2026-03-19 07:16:51,014 - graph - INFO - 🔍 _get_llm() model=Qwen3.5-122B-A10B
+2026-03-19 07:16:51,016 - graph - INFO - 📝 分析上下文长度: 49818 字
+2026-03-19 07:16:51,016 - graph - INFO - 📝 总提示长度: 56869 字
+2026-03-19 07:18:06,705 - graph - INFO - 🔬 剪辑蓝图生成完成 (6447 字)
+2026-03-19 07:18:06,705 - graph - INFO - 📝 蓝图摘要: # 新疆大学 2 分钟宣传片剪辑蓝图
+
+## 第一阶段：素材深度理解
+
+基于对12个源视频的多模态分析数据，以下是核心素材的深度解构：
+
+### 1. 内容图谱与情绪光谱
+
+| 源视频 ID | 核心内容标签 | 信息密度 | 情绪光谱 | 视觉特征 | 音频特征 |
+| :--- | :--- | :--- | :--- :--- | :--- |
+| **S1 (y1s7R8)** | **校园导览** (图书馆、教学楼、食堂外观) | 中 | 沉稳、秩序、明亮 | 平移镜头，广角，色调明亮，建筑清晰 | 环境音为主，适合配音 |
+| **S2 (2egEyN)** | **官方宣传片** (城市全景、丝路地图、学生活动、实验室) | 高 | 激昂、宏大、自豪 | 航拍、地图动画、快切，色彩饱和度高 | 原声音乐宏大，有人声旁白（需替换或混音） |
+| **S3 (21M7ke)** | **生活纪实** (图书馆内部、食堂美食、学生交谈) | 高 | 温暖、亲切、烟火气 | 推镜头、特写（美食）、中景（人物），暖色调 | 现场人声（交谈、嘈杂声），适合保留或做背景 |
+| **S
+2026-03-19 07:18:06,707 - graph - INFO - 🎬 ═══ Phase 3 开始: ReAct Editor 自主创作 ═══
+2026-03-19 07:18:06,714 - graph - INFO - 🔍 _get_llm() model=Qwen3.5-122B-A10B
+2026-03-19 07:18:06,821 - graph - INFO - 🧰 ReAct Editor 工具集: analyze_video, recall_semantic_segments, batch_cut_video, cut_video, merge_videos, inspect_video_duration, list_transition_presets, plan_transition_timeline, add_transition, validate_narration_timeline, build_edit_timeline_from_segments, align_narration_to_timeline, validate_timeline_constraints, score_cut_continuity, recommend_transition_for_cut, duck_background_audio, normalize_loudness, add_narration, add_narration_segments, add_subtitles, export_video
+2026-03-19 07:18:06,821 - graph - INFO - 📝 分析上下文长度: 49818 字
+2026-03-19 07:27:35,117 - tools._shared - INFO - 📏 时长检测: /data1/liwenxi/agent/GenVideo/temp/transitioned_final.mp4 -> 111.20s (1920x1080)
+2026-03-19 07:27:54,901 - tools._shared - INFO - 🕒 已生成时间戳分析视频: /data1/liwenxi/agent/GenVideo/temp/transitioned_final_analysis_ts.mp4
+2026-03-19 07:27:54,901 - tools._shared - INFO - 多模态视频内容分析: model= is_omni=False video=/data1/liwenxi/agent/GenVideo/temp/transitioned_final_analysis_ts.mp4
+2026-03-19 07:27:54,902 - tools._shared - INFO - 视频URLs: ['file:///data1/liwenxi/agent/GenVideo/temp/transitioned_final_analysis_ts.mp4', 'file:///data1/liwenxi/agent/GenVideo/temp/transitioned_final.mp4'] | 音频URLs: [] | is_omni=False
+2026-03-19 07:28:51,685 - tools._shared - INFO - 视频分析完成（视觉）: ### 全片分段分析
+
+#### t=0s-t=5s
+- **画面发生了什么**：视频开始时，镜头从飞机窗口向外拍摄，展示了一片被雪覆盖的地面和远处的山脉。天空呈现出日出或日落时的橙色和紫色渐变。
+-
+2026-03-19 07:29:50,076 - tools._shared - INFO - TTS 生成成功: 跨越山海，只为这一场相遇。 (13 chars) -> narrated_final_seg1.mp3
+2026-03-19 07:29:51,159 - tools._shared - INFO - TTS 生成成功: 在新疆大学，每一寸土地都写着梦想的开始。 (20 chars) -> narrated_final_seg2.mp3
+2026-03-19 07:29:52,694 - tools._shared - INFO - TTS 生成成功: 这里是知识的殿堂。从宏伟的图书馆到现代化的教学楼，我们探索未 (35 chars) -> narrated_final_seg3.mp3
+2026-03-19 07:29:54,086 - tools._shared - INFO - TTS 生成成功: 在宽敞明亮的图书馆里，每一本书都承载着求知的渴望。 (25 chars) -> narrated_final_seg4.mp3
+2026-03-19 07:29:55,803 - tools._shared - INFO - TTS 生成成功: 当然，大学不只是书本。是食堂里热气腾腾的美食，是平凡日子里的 (35 chars) -> narrated_final_seg5.mp3
+2026-03-19 07:29:57,065 - tools._shared - INFO - TTS 生成成功: 在整洁有序的校园里，每一步都踏着青春的节奏。 (22 chars) -> narrated_final_seg6.mp3
+2026-03-19 07:29:58,365 - tools._shared - INFO - TTS 生成成功: 立足丝绸之路核心区，我们心怀家国，眼望世界。 (22 chars) -> narrated_final_seg7.mp3
+2026-03-19 07:29:59,333 - tools._shared - INFO - TTS 生成成功: 在前沿的实验室里，青春与时代同频共振。 (19 chars) -> narrated_final_seg8.mp3
+2026-03-19 07:30:00,803 - tools._shared - INFO - TTS 生成成功: 春夏秋冬，四季流转，校园的每一处风景都记录着时光的故事。 (28 chars) -> narrated_final_seg9.mp3
+2026-03-19 07:30:01,778 - tools._shared - INFO - TTS 生成成功: 新疆大学，等你书写属于你的故事。 (16 chars) -> narrated_final_seg10.mp3
+2026-03-19 07:36:03,036 - tools._shared - INFO - 📏 时长检测: /data1/liwenxi/agent/GenVideo/temp/narrated_final.mp4 -> 111.50s (1920x1080)
+2026-03-19 07:37:40,218 - graph - INFO - 🛠️ Phase3 工具调用: cut_video args={'input_path': '/data1/liwenxi/agent/GenVideo/temp/selected_12_y1i7zX.mp4', 'start_time': 0, 'end_time': 5, 'output_name': 'clip_01_plane'}
+2026-03-19 07:37:40,218 - graph - INFO - 🛠️ Phase3 工具调用: cut_video args={'input_path': '/data1/liwenxi/agent/GenVideo/temp/selected_4_5zyEqn.mp4', 'start_time': 0, 'end_time': 10, 'output_name': 'clip_02_aerial'}
+2026-03-19 07:37:40,218 - graph - INFO - 🛠️ Phase3 工具调用: cut_video args={'input_path': '/data1/liwenxi/agent/GenVideo/temp/selected_1_y1s7R8.mp4', 'start_time': 0, 'end_time': 15, 'output_name': 'clip_03_library_ext'}
+2026-03-19 07:37:40,219 - graph - INFO - 🛠️ Phase3 工具调用: cut_video args={'input_path': '/data1/liwenxi/agent/GenVideo/temp/selected_3_21M7ke.mp4', 'start_time': 10, 'end_time': 20, 'output_name': 'clip_04_library_int'}
+2026-03-19 07:37:40,219 - graph - INFO - 🛠️ Phase3 工具调用: cut_video args={'input_path': '/data1/liwenxi/agent/GenVideo/temp/selected_3_21M7ke.mp4', 'start_time': 40, 'end_time': 50, 'output_name': 'clip_05_food_close'}
+2026-03-19 07:37:40,219 - graph - INFO - 🛠️ Phase3 工具调用: cut_video args={'input_path': '/data1/liwenxi/agent/GenVideo/temp/selected_5_y1H7Nz.mp4', 'start_time': 30, 'end_time': 40, 'output_name': 'clip_06_canteen_order'}
+2026-03-19 07:37:40,219 - graph - INFO - 🛠️ Phase3 工具调用: cut_video args={'input_path': '/data1/liwenxi/agent/GenVideo/temp/selected_8_y1872C.mp4', 'start_time': 25, 'end_time': 35, 'output_name': 'clip_07_sports'}
+2026-03-19 07:37:40,219 - graph - INFO - 🛠️ Phase3 工具调用: cut_video args={'input_path': '/data1/liwenxi/agent/GenVideo/temp/selected_2_2egEyN.mp4', 'start_time': 20, 'end_time': 30, 'output_name': 'clip_08_flag_map'}
+2026-03-19 07:37:40,219 - graph - INFO - 🛠️ Phase3 工具调用: cut_video args={'input_path': '/data1/liwenxi/agent/GenVideo/temp/selected_2_2egEyN.mp4', 'start_time': 40, 'end_time': 50, 'output_name': 'clip_09_lab'}
+2026-03-19 07:37:40,219 - graph - INFO - 🛠️ Phase3 工具调用: cut_video args={'input_path': '/data1/liwenxi/agent/GenVideo/temp/selected_11_y1A7Lu.mp4', 'start_time': 0, 'end_time': 15, 'output_name': 'clip_10_seasons'}
+2026-03-19 07:37:40,219 - graph - INFO - 🛠️ Phase3 工具调用: cut_video args={'input_path': '/data1/liwenxi/agent/GenVideo/temp/selected_7_y1d78b.mp4', 'start_time': 0, 'end_time': 10, 'output_name': 'clip_11_sunset'}
+2026-03-19 07:37:40,219 - graph - INFO - 🛠️ Phase3 工具调用: cut_video args={'input_path': '/data1/liwenxi/agent/GenVideo/temp/selected_4_5zyEqn.mp4', 'start_time': 140, 'end_time': 145, 'output_name': 'clip_12_outro'}
+2026-03-19 07:37:40,220 - graph - INFO - 📦 Phase3 工具结果: cut_video -> {"status": "success", "path": "/data1/liwenxi/agent/GenVideo/temp/clip_01_plane.mp4", "duration": 5.0}
+2026-03-19 07:37:40,220 - graph - INFO - 📦 Phase3 工具结果: cut_video -> {"status": "success", "path": "/data1/liwenxi/agent/GenVideo/temp/clip_02_aerial.mp4", "duration": 10.0}
+2026-03-19 07:37:40,220 - graph - INFO - 📦 Phase3 工具结果: cut_video -> {"status": "success", "path": "/data1/liwenxi/agent/GenVideo/temp/clip_03_library_ext.mp4", "duration": 15.0}
+2026-03-19 07:37:40,220 - graph - INFO - 📦 Phase3 工具结果: cut_video -> {"status": "success", "path": "/data1/liwenxi/agent/GenVideo/temp/clip_04_library_int.mp4", "duration": 10.0}
+2026-03-19 07:37:40,220 - graph - INFO - 📦 Phase3 工具结果: cut_video -> {"status": "success", "path": "/data1/liwenxi/agent/GenVideo/temp/clip_05_food_close.mp4", "duration": 10.0}
+2026-03-19 07:37:40,220 - graph - INFO - 📦 Phase3 工具结果: cut_video -> {"status": "success", "path": "/data1/liwenxi/agent/GenVideo/temp/clip_06_canteen_order.mp4", "duration": 10.0}
+2026-03-19 07:37:40,220 - graph - INFO - 📦 Phase3 工具结果: cut_video -> {"status": "success", "path": "/data1/liwenxi/agent/GenVideo/temp/clip_07_sports.mp4", "duration": 10.0}
+2026-03-19 07:37:40,220 - graph - INFO - 📦 Phase3 工具结果: cut_video -> {"status": "success", "path": "/data1/liwenxi/agent/GenVideo/temp/clip_08_flag_map.mp4", "duration": 10.0}
+2026-03-19 07:37:40,220 - graph - INFO - 📦 Phase3 工具结果: cut_video -> {"status": "success", "path": "/data1/liwenxi/agent/GenVideo/temp/clip_09_lab.mp4", "duration": 10.0}
+2026-03-19 07:37:40,221 - graph - INFO - 📦 Phase3 工具结果: cut_video -> {"status": "success", "path": "/data1/liwenxi/agent/GenVideo/temp/clip_10_seasons.mp4", "duration": 15.0}
+2026-03-19 07:37:40,221 - graph - INFO - 📦 Phase3 工具结果: cut_video -> {"status": "success", "path": "/data1/liwenxi/agent/GenVideo/temp/clip_11_sunset.mp4", "duration": 10.0}
+2026-03-19 07:37:40,221 - graph - INFO - 📦 Phase3 工具结果: cut_video -> {"status": "success", "path": "/data1/liwenxi/agent/GenVideo/temp/clip_12_outro.mp4", "duration": 5.0}
+2026-03-19 07:37:40,221 - graph - INFO - 🛠️ Phase3 工具调用: merge_videos args={'video_paths': ['/data1/liwenxi/agent/GenVideo/temp/clip_01_plane.mp4', '/data1/liwenxi/agent/GenVideo/temp/clip_02_aerial.mp4', '/data1/liwenxi/agent/GenVideo/temp/clip_03_library_ext.mp4', '/data1/liwenxi/agent/GenVideo/temp/clip_04_library_int.mp4', '/data1/liwenxi/agent/GenVideo/temp/clip_05_food_close.mp4', '/data1/liwenxi/agent/GenVideo/temp/clip_06_canteen_order.mp4', '/data1/liwenxi/agent
+2026-03-19 07:37:40,221 - graph - INFO - 📦 Phase3 工具结果: merge_videos -> {"status": "success", "path": "/data1/liwenxi/agent/GenVideo/temp/merged_raw.mp4", "total_duration": 120.0, "num_clips": 12, "target_duration": 120.0}
+2026-03-19 07:37:40,221 - graph - INFO - 🛠️ Phase3 工具调用: list_transition_presets args={}
+2026-03-19 07:37:40,221 - graph - INFO - 📦 Phase3 工具结果: list_transition_presets -> {"status": "success", "count": 18, "presets": [{"name": "circle_crop", "ffmpeg_transition": "circlecrop", "default_duration": 0.9, "category": "stylized"}, {"name": "crossfade", "ffmpeg_transition": "fade", "default_duration": 0.8, "category": "basic"}, {"name": "distance", "ffmpeg_transition": "distance", "default_duration": 0.8, "category": "cinematic"}, {"name": "fade_through_black", "ffmpeg_transition": "fadeblack", "default_duration": 1.0, "category": "basic"}, {"name": "fade_through_white"
+2026-03-19 07:37:40,221 - graph - INFO - 🛠️ Phase3 工具调用: plan_transition_timeline args={'video_paths': ['/data1/liwenxi/agent/GenVideo/temp/clip_01_plane.mp4', '/data1/liwenxi/agent/GenVideo/temp/clip_02_aerial.mp4', '/data1/liwenxi/agent/GenVideo/temp/clip_03_library_ext.mp4', '/data1/liwenxi/agent/GenVideo/temp/clip_04_library_int.mp4', '/data1/liwenxi/agent/GenVideo/temp/clip_05_food_close.mp4', '/data1/liwenxi/agent/GenVideo/temp/clip_06_canteen_order.mp4', '/data1/liwenxi/agent
+2026-03-19 07:37:40,222 - graph - INFO - 📦 Phase3 工具结果: plan_transition_timeline -> {"status": "success", "style": "cinematic", "base_duration": 0.8, "transition_plan": [{"cut_index": 0, "from": "/data1/liwenxi/agent/GenVideo/temp/clip_01_plane.mp4", "to": "/data1/liwenxi/agent/GenVideo/temp/clip_02_aerial.mp4", "transition_type": "crossfade", "duration": 0.8, "reason": "cinematic 风格推荐"}, {"cut_index": 1, "from": "/data1/liwenxi/agent/GenVideo/temp/clip_02_aerial.mp4", "to": "/data1/liwenxi/agent/GenVideo/temp/clip_03_library_ext.mp4", "transition_type": "fade_through_black", "
+2026-03-19 07:37:40,222 - graph - INFO - 🛠️ Phase3 工具调用: add_transition args={'video_paths': ['/data1/liwenxi/agent/GenVideo/temp/clip_01_plane.mp4', '/data1/liwenxi/agent/GenVideo/temp/clip_02_aerial.mp4', '/data1/liwenxi/agent/GenVideo/temp/clip_03_library_ext.mp4', '/data1/liwenxi/agent/GenVideo/temp/clip_04_library_int.mp4', '/data1/liwenxi/agent/GenVideo/temp/clip_05_food_close.mp4', '/data1/liwenxi/agent/GenVideo/temp/clip_06_canteen_order.mp4', '/data1/liwenxi/agent
+2026-03-19 07:37:40,222 - graph - INFO - 📦 Phase3 工具结果: add_transition -> {"status": "success", "path": "/data1/liwenxi/agent/GenVideo/temp/transitioned_final.mp4", "transition": "crossfade", "duration_seconds": 111.2, "num_clips": 12, "applied_transition_plan": [{"cut_index": 0, "transition_type": "crossfade", "ffmpeg_transition": "fade", "duration": 0.8, "offset": 4.2}, {"cut_index": 1, "transition_type": "fade_through_black", "ffmpeg_transition": "fadeblack", "duration": 0.8, "offset": 13.4}, {"cut_index": 2, "transition_type": "zoom_in", "ffmpeg_transition": "zoom
+2026-03-19 07:37:40,222 - graph - INFO - 🛠️ Phase3 工具调用: inspect_video_duration args={'video_path': '/data1/liwenxi/agent/GenVideo/temp/transitioned_final.mp4'}
+2026-03-19 07:37:40,222 - graph - INFO - 📦 Phase3 工具结果: inspect_video_duration -> {"status": "success", "path": "/data1/liwenxi/agent/GenVideo/temp/transitioned_final.mp4", "duration_seconds": 111.2, "fps": 30.0, "resolution": "1920x1080", "width": 1920, "height": 1080}
+2026-03-19 07:37:40,222 - graph - INFO - 🛠️ Phase3 工具调用: analyze_video args={'video_path': '/data1/liwenxi/agent/GenVideo/temp/transitioned_final.mp4', 'analysis_goal': '按场景分析画面内容和情绪，为分段配音提供时间轴依据'}
+2026-03-19 07:37:40,222 - graph - INFO - 📦 Phase3 工具结果: analyze_video -> 视频分析完成（视觉）:
+
+- video_url: file:///data1/liwenxi/agent/GenVideo/temp/transitioned_final_analysis_ts.mp4
+- audio_url: N/A
+
+- analysis_json: /data1/liwenxi/agent/GenVideo/temp/transitioned_final_analysis.json
+
+### 全片分段分析
+
+#### t=0s-t=5s
+- **画面发生了什么**：视频开始时，镜头从飞机窗口向外拍摄，展示了一片被雪覆盖的地面和远处的山脉。天空呈现出日出或日落时的橙色和紫色渐变。
+- **镜头特征**：固定镜头，从飞机内部向外拍摄，色调温暖，光线柔和。
+- **情绪与叙事作用**：营造出一种宁静而美丽的氛围，暗示旅程的开始。
+- **是否适合用于解说剪辑**：是，适合作为视频的开场，吸引观众的注意力。
+
+#### t=5s-t=10s
+- **画面发生了什么**：镜头切换到一个机场的指示牌，显示“2号航站楼 Terminal 2”和“4 国内出发”。背景中可以看
+2026-03-19 07:37:40,222 - graph - INFO - 🛠️ Phase3 工具调用: build_edit_timeline_from_segments args={'video_paths': ['/data1/liwenxi/agent/GenVideo/temp/clip_01_plane.mp4', '/data1/liwenxi/agent/GenVideo/temp/clip_02_aerial.mp4', '/data1/liwenxi/agent/GenVideo/temp/clip_03_library_ext.mp4', '/data1/liwenxi/agent/GenVideo/temp/clip_04_library_int.mp4', '/data1/liwenxi/agent/GenVideo/temp/clip_05_food_close.mp4', '/data1/liwenxi/agent/GenVideo/temp/clip_06_canteen_order.mp4', '/data1/liwenxi/agent
+2026-03-19 07:37:40,222 - graph - INFO - 📦 Phase3 工具结果: build_edit_timeline_from_segments -> {"status": "success", "timeline": [{"clip_index": 0, "path": "/data1/liwenxi/agent/GenVideo/temp/clip_01_plane.mp4", "source_duration": 5.0, "source_in": 0.0, "source_out": 5.0, "timeline_start": 0.0, "timeline_end": 5.0, "timeline_duration": 5.0, "trimmed": false}, {"clip_index": 1, "path": "/data1/liwenxi/agent/GenVideo/temp/clip_02_aerial.mp4", "source_duration": 10.0, "source_in": 0.0, "source_out": 10.0, "timeline_start": 5.0, "timeline_end": 15.0, "timeline_duration": 10.0, "trimmed": fals
+2026-03-19 07:37:40,222 - graph - INFO - 🛠️ Phase3 工具调用: align_narration_to_timeline args={'timeline': [{'clip_index': 0, 'path': '/data1/liwenxi/agent/GenVideo/temp/clip_01_plane.mp4', 'source_duration': 5.0, 'source_in': 0.0, 'source_out': 5.0, 'timeline_start': 0.0, 'timeline_end': 5.0, 'timeline_duration': 5.0, 'trimmed': False}, {'clip_index': 1, 'path': '/data1/liwenxi/agent/GenVideo/temp/clip_02_aerial.mp4', 'source_duration': 10.0, 'source_in': 0.0, 'source_out': 10.0, 'timelin
+2026-03-19 07:37:40,222 - graph - INFO - 📦 Phase3 工具结果: align_narration_to_timeline -> {"status": "success", "segments": [{"text": "跨越山海，只为这一场相遇。", "start": 0.0, "end": 5.0, "duration": 5.0, "chars_per_sec": 2.6}, {"text": "在新疆大学，每一寸土地都写着梦想的开始。", "start": 5.0, "end": 15.0, "duration": 10.0, "chars_per_sec": 2.0}, {"text": "这里是知识的殿堂。从宏伟的图书馆到现代化的教学楼，我们探索未知的边界。", "start": 15.0, "end": 30.0, "duration": 15.0, "chars_per_sec": 2.33}, {"text": "在宽敞明亮的图书馆里，每一本书都承载着求知的渴望。", "start": 30.0, "end": 40.0, "duration": 10.0, "chars_per_sec": 2.5}, {"text": "当然，大学不只是书本。是食堂里热气腾腾的美食，是平凡日子里的欢声笑语。",
+2026-03-19 07:37:40,222 - graph - INFO - 🛠️ Phase3 工具调用: validate_narration_timeline args={'video_path': '/data1/liwenxi/agent/GenVideo/temp/transitioned_final.mp4', 'segments': [{'text': '跨越山海，只为这一场相遇。', 'start': 0.0, 'end': 5.0}, {'text': '在新疆大学，每一寸土地都写着梦想的开始。', 'start': 5.0, 'end': 15.0}, {'text': '这里是知识的殿堂。从宏伟的图书馆到现代化的教学楼，我们探索未知的边界。', 'start': 15.0, 'end': 30.0}, {'text': '在宽敞明亮的图书馆里，每一本书都承载着求知的渴望。', 'start': 30.0, 'end': 40.0}, {'text': '当然，大学不只是书本。是食堂里热气腾腾的美食，是平凡日子里的欢声笑语。', 'star
+2026-03-19 07:37:40,222 - graph - INFO - 📦 Phase3 工具结果: validate_narration_timeline -> {"status": "pass_with_warnings", "video_path": "/data1/liwenxi/agent/GenVideo/temp/transitioned_final.mp4", "video_duration": 111.2, "segment_count": 10, "narration_coverage_seconds": 111.2, "narration_coverage_ratio": 1.0, "normalized_segments": [{"index": 0, "text": "跨越山海，只为这一场相遇。", "start": 0.0, "end": 5.0}, {"index": 1, "text": "在新疆大学，每一寸土地都写着梦想的开始。", "start": 5.0, "end": 15.0}, {"index": 2, "text": "这里是知识的殿堂。从宏伟的图书馆到现代化的教学楼，我们探索未知的边界。", "start": 15.0, "end": 30.0}, {"index": 3, "text": "在宽敞
+2026-03-19 07:37:40,222 - graph - INFO - 🛠️ Phase3 工具调用: add_narration_segments args={'video_path': '/data1/liwenxi/agent/GenVideo/temp/transitioned_final.mp4', 'segments': [{'text': '跨越山海，只为这一场相遇。', 'start': 0.0, 'end': 5.0}, {'text': '在新疆大学，每一寸土地都写着梦想的开始。', 'start': 5.0, 'end': 15.0}, {'text': '这里是知识的殿堂。从宏伟的图书馆到现代化的教学楼，我们探索未知的边界。', 'start': 15.0, 'end': 30.0}, {'text': '在宽敞明亮的图书馆里，每一本书都承载着求知的渴望。', 'start': 30.0, 'end': 40.0}, {'text': '当然，大学不只是书本。是食堂里热气腾腾的美食，是平凡日子里的欢声笑语。', 'star
+2026-03-19 07:37:40,223 - graph - INFO - 📦 Phase3 工具结果: add_narration_segments -> {"status": "success", "path": "/data1/liwenxi/agent/GenVideo/temp/narrated_final.mp4", "total_segments": 10, "success_segments": 10, "has_subtitles": true, "subtitle_font_used": "/data1/liwenxi/agent/GenVideo/AlibabaPuHuiTi-3-55-Regular/AlibabaPuHuiTi-3-55-Regular.ttf", "target_narration_seconds": 111.2, "actual_narration_seconds": 48.16, "narration_coverage_ratio": 0.4319, "target_slot_coverage_ratio": 0.4331, "warnings": ["段 1: 旁白明显短于分配时段(2.72s/5.00s)，建议增加文案字数或缩短该段 end。", "段 2: 旁白明显短于分配时段(4.16
+2026-03-19 07:37:40,223 - graph - INFO - 🛠️ Phase3 工具调用: inspect_video_duration args={'video_path': '/data1/liwenxi/agent/GenVideo/temp/narrated_final.mp4'}
+2026-03-19 07:37:40,223 - graph - INFO - 📦 Phase3 工具结果: inspect_video_duration -> {"status": "success", "path": "/data1/liwenxi/agent/GenVideo/temp/narrated_final.mp4", "duration_seconds": 111.5, "fps": 30.0, "resolution": "1920x1080", "width": 1920, "height": 1080}
+2026-03-19 07:37:40,223 - graph - INFO - 🛠️ Phase3 工具调用: export_video args={'input_path': '/data1/liwenxi/agent/GenVideo/temp/narrated_final.mp4', 'output_name': 'xinjiang_university_promo_final', 'resolution': '1080p'}
+2026-03-19 07:37:40,223 - graph - INFO - 📦 Phase3 工具结果: export_video -> {"status": "success", "path": "/data1/liwenxi/agent/GenVideo/temp/xinjiang_university_promo_final.mp4", "resolution": "1080p", "duration": 111.5}
+2026-03-19 07:37:40,223 - graph - INFO - 🎬 ═══ Phase 3 完成 ═══
+2026-03-19 07:37:40,223 - graph - INFO - 📝 最终输出: ## 创作总结
+
+### 最终成品信息
+- **文件路径**: `/data1/liwenxi/agent/GenVideo/temp/xinjiang_university_promo_final.mp4`
+- **分辨率**: 1920x1080 (1080p)
+- **时长**: 111.5 秒
+- **帧率**: 30 fps
+- **旁白**: 10段分段配音，使用 "Cherry" 音色
+- **字幕**: 已添加（Alibaba普惠体）
+- **转场**: 11个切点，使用混合转场（crossfade, fade_through_black, zoom_in, smooth_ri
+2026-03-19 07:37:40,224 - agent - INFO - ⏱  任务完成，总耗时: 2402.6s
+2026-03-19 07:37:40,224 - agent - INFO - ============================================================
+2026-03-19 07:37:40,745 - agent - INFO - 🧹 任务后已清理中间文件: 62
+2026-03-19 07:37:40,745 - agent - INFO - 📌 任务后保留文件: narrated_final.mp4, transitioned_final.mp4, transitioned_final_analysis_ts.mp4, xinjiang_university_promo_final.mp4
