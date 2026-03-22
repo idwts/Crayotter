@@ -1,6 +1,10 @@
 # Crayotter
 
 <p align="center">
+  <a href="./README.md">English</a> | <a href="./README_CN.md">中文</a>
+</p>
+
+<p align="center">
   <img src="./logo.png" alt="Crayotter Logo" width="180" />
 </p>
 
@@ -85,7 +89,7 @@ python script\agent.py
 Single task mode:
 
 ```bash
-python script\agent.py "Create a 3-minute campus-themed promo video"
+python script\agent.py "Create a 1-minute campus-themed promo video"
 ```
 
 ---
