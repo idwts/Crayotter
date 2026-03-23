@@ -8,6 +8,12 @@
   <img src="./logo.png" alt="Crayotter Logo" width="180" />
 </p>
 
+<p align="center">
+  <a href="https://idwts.github.io/Crayotter" target="_blank" rel="noopener noreferrer">
+    <img src="https://img.shields.io/badge/🚀-在线演示-4CAF50?style=for-the-badge&logo=googlechrome&logoColor=white" alt="在线演示">
+  </a>
+</p>
+
 Crayotter 是一个多模态、Agent 驱动的视频自动编辑系统，可以把一条文本需求转化为完整成片。
 
 它将 **规划（planning）**、**深度剪辑研究（deep editing research）** 和 **工具执行（tool-based execution）** 组合为三阶段工作流，并通过完整日志与可视化轨迹来支持调试与迭代。

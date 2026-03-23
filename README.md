@@ -8,6 +8,12 @@
   <img src="./logo.png" alt="Crayotter Logo" width="180" />
 </p>
 
+<p align="center">
+  <a href="https://idwts.github.io/Crayotter" target="_blank" rel="noopener noreferrer">
+    <img src="https://img.shields.io/badge/🚀-Interactive%20Demo-4CAF50?style=for-the-badge&logo=googlechrome&logoColor=white" alt="Interactive Demo">
+  </a>
+</p>
+
 Crayotter is a multimodal, agent-driven video editing system that turns a single text request into a complete edited video.
 
 It combines **planning**, **deep editing research**, and **tool-based execution** into a three-phase workflow, with full logs and visual trace analysis for debugging and iteration.
