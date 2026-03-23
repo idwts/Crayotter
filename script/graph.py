@@ -42,6 +42,7 @@ from tools import ALL_TOOLS, MEMORY_EXPERIENCE_DIR, USER_WORKSPACE, WORKSPACE
 API_KEY: str = os.environ.get("OPENAI_API_KEY", "")
 BASE_URL: str = "https://api.openai.com/v1"
 MODEL_NAME: str = "gpt-4o"
+ENABLE_PHASE2_RESEARCH: bool = True
 
 graph_logger = logging.getLogger("graph")
 
@@ -929,6 +930,13 @@ def prep_router_node(state: AgentState) -> dict[str, Any]:
     ]
 
     if analysis_files:
+        if not ENABLE_PHASE2_RESEARCH:
+            graph_logger.info(
+                "✅ Phase 1 完成: %d 个分析文件, %d 个源视频 → Phase 2 已禁用，直接进入 Phase 3",
+                len(analysis_files),
+                len(source_videos),
+            )
+            return {"phase": "react"}
         graph_logger.info(
             "✅ Phase 1 完成: %d 个分析文件, %d 个源视频 → 进入 Phase 2 深度剪辑研究",
             len(analysis_files),
@@ -943,10 +951,12 @@ def prep_router_node(state: AgentState) -> dict[str, Any]:
 
 def route_after_prep_router(
     state: AgentState,
-) -> Literal["executor", "planner", "editing_research"]:
+) -> Literal["executor", "planner", "editing_research", "react_editor"]:
     """Prep Router 之后的路由。"""
     if state.phase == "researching":
         return "editing_research"
+    if state.phase == "react":
+        return "react_editor"
     if state.phase == "replan":
         return "planner"
     if state.plan and state.current_step_index < len(state.plan.steps):

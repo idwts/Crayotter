@@ -49,6 +49,9 @@ Crayotter uses a three-phase architecture:
    - Build a structured editing blueprint (narrative, rhythm, transitions, narration strategy)
    - No editing tools are called in this phase
 
+   This phase can be disabled with `ENABLE_PHASE2_RESEARCH = False` in `script\agent.py` to save tokens.
+   When disabled, the workflow becomes: Phase 1 → Phase 3.
+
 3. **Phase 3 — ReAct Editing Execution**
    - Execute cutting, merging, transition design, narration/subtitles, and final export
    - Log full tool-call trajectory for later trace visualization
@@ -75,6 +78,12 @@ pip install -r requirements.txt
 ### 3) Configure API Endpoints and Keys
 
 Edit the API configuration block in `script\agent.py` (model API, video API, and TTS API settings).
+
+You can also control whether Phase 2 runs:
+
+```python
+ENABLE_PHASE2_RESEARCH = True  # True: run Phase 2, False: skip to Phase 3
+```
 
 > Security note: never commit real API keys to version control.
 

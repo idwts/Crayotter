@@ -19,6 +19,10 @@ from openai import OpenAI
 API_KEY = "EMPTY"
 BASE_URL = "http://127.0.0.1:8902/v1"
 MODEL_NAME = "Qwen3.5-122B-A10B" 
+# 是否启用 Phase 2（深度剪辑研究）
+# True: 执行 Phase 1 -> Phase 2 -> Phase 3
+# False: 执行 Phase 1 -> Phase 3
+ENABLE_PHASE2_RESEARCH = True
 
 VIDEO_API_KEY = API_KEY
 VIDEO_BASE_URL = BASE_URL
@@ -454,6 +458,7 @@ if __name__ == "__main__":
     graph.API_KEY = API_KEY
     graph.BASE_URL = BASE_URL
     graph.MODEL_NAME = MODEL_NAME
+    graph.ENABLE_PHASE2_RESEARCH = ENABLE_PHASE2_RESEARCH
     tools.configure(
         api_key=API_KEY,
         base_url=BASE_URL,
@@ -469,6 +474,7 @@ if __name__ == "__main__":
     print(f"🔧 API配置:")
     print(f"   Base URL: {BASE_URL}")
     print(f"   Model: {MODEL_NAME}")
+    print(f"   Enable Phase 2 Research: {ENABLE_PHASE2_RESEARCH}")
     print(f"   Video Base URL: {VIDEO_BASE_URL}")
     print(f"   Video Model: {VIDEO_MODEL_NAME}  ({'Omni 音视频' if 'omni' in VIDEO_MODEL_NAME.lower() else '纯视觉'})")
     print(f"   TTS Base URL: {TTS_BASE_URL}")

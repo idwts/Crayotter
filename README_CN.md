@@ -48,6 +48,9 @@ Crayotter 使用三阶段架构：
    - 生成结构化剪辑蓝图（叙事、节奏、转场、配音策略）
    - 本阶段不调用剪辑工具
 
+   该阶段可通过 `script\agent.py` 中的 `ENABLE_PHASE2_RESEARCH = False` 关闭，以节省token。
+   关闭后流程变为：Phase 1 → Phase 3。
+
 3. **Phase 3 — ReAct 自动执行（ReAct Editing Execution）**
    - 执行裁剪、合并、转场、配音/字幕、最终导出
    - 记录完整工具调用轨迹，便于后续可视化复盘
@@ -74,6 +77,12 @@ pip install -r requirements.txt
 ### 3）配置 API
 
 编辑 `script\agent.py` 顶部的 API 配置（主模型、视频模型、TTS 等）。
+
+你也可以配置是否启用 Phase 2：
+
+```python
+ENABLE_PHASE2_RESEARCH = True  # True: 启用 Phase 2；False: 跳过 Phase 2 直达 Phase 3
+```
 
 > 安全提醒：不要把真实 API Key 提交到版本控制。
 
