@@ -12,26 +12,36 @@ from typing import Any
 
 from openai import OpenAI
 
+from dotenv import load_dotenv
+
+# 加载 .env 文件
+load_dotenv()
+
 # ═══════════════════════════════════════════════════════════════════════════
 # API 配置 - 请在此处设置你的密钥和中转站地址
 # ═══════════════════════════════════════════════════════════════════════════
 
-API_KEY = "EMPTY"
-BASE_URL = "http://127.0.0.1:8902/v1"
-MODEL_NAME = "Qwen3.5-122B-A10B" 
+API_KEY = os.getenv('API_KEY')
+BASE_URL = os.getenv('BASE_URL')
+MODEL_NAME = os.getenv('Qwen3.5-122B-A10B')
 # 是否启用 Phase 2（深度剪辑研究）
 # True: 执行 Phase 1 -> Phase 2 -> Phase 3
 # False: 执行 Phase 1 -> Phase 3
-ENABLE_PHASE2_RESEARCH = True
+ENABLE_PHASE2_RESEARCH = os.getenv('ENABLE_PHASE2_RESEARCH', 'True').lower() == 'true'
 
-VIDEO_API_KEY = API_KEY
-VIDEO_BASE_URL = BASE_URL
-VIDEO_MODEL_NAME = MODEL_NAME  
+VIDEO_API_KEY = os.getenv('VIDEO_API_KEY')
+VIDEO_BASE_URL = os.getenv('VIDEO_BASE_URL')
+VIDEO_MODEL_NAME = os.getenv('VIDEO_MODEL_NAME')
 
 # 配音 TTS API 配置（DashScope TTS 服务）
-TTS_API_KEY = "EMPTY"
-TTS_BASE_URL = "https://dashscope.aliyuncs.com/compatible-mode/v1"
-TTS_MODEL_NAME = "qwen3-tts-flash"
+TTS_API_KEY = os.getenv('TTS_API_KEY')
+TTS_BASE_URL = os.getenv('TTS_BASE_URL')
+TTS_MODEL_NAME = os.getenv('TTS_MODEL_NAME')
+
+# 检查三个 key 是否都为空
+if API_KEY == 'EMPTY' or VIDEO_API_KEY == 'EMPTY' or TTS_API_KEY == 'EMPTY':
+    print("❌ 错误：API_KEY、VIDEO_API_KEY、TTS_API_KEY 存在为空，请配置后再运行")
+    sys.exit(1)
 
 # 配置 agent 日志（始终写到仓库根目录 logs/）
 SCRIPT_DIR = Path(__file__).resolve().parent
