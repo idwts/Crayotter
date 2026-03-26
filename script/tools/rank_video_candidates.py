@@ -8,6 +8,7 @@ def rank_video_candidates(
     candidates_json: str,
     top_k: int = 5,
     max_review: int = 0,
+    request_timeout_seconds: int = 30,
 ) -> str:
     """使用 AI 模型对候选视频进行评分排序，选出最适合剪辑的 Top K 个视频。
     会自动聚合之前 search_bilibili_video / search_youtobe_video 写入的候选池。
@@ -103,11 +104,18 @@ def rank_video_candidates(
         client = _get_openai_client()
         scored_items: list[dict[str, Any]] = []
         batch_size = 35
+        request_timeout = max(5, int(request_timeout_seconds))
 
         for offset in range(0, len(reviewed), batch_size):
             batch = reviewed[offset: offset + batch_size]
             content = ""
             parsed_scored: list[dict[str, Any]] = []
+            logger.info(
+                "MLLM筛选批次: %s-%s / %s",
+                offset + 1,
+                offset + len(batch),
+                len(reviewed),
+            )
             try:
                 response = client.chat.completions.create(
                     model=MODEL_NAME,
@@ -117,12 +125,19 @@ def rank_video_candidates(
                     ],
                     temperature=0.1,
                     max_tokens=1800,
+                    timeout=request_timeout,
                 )
                 content = _extract_chat_content(response)
                 parsed = json.loads(content)
                 if isinstance(parsed, dict) and isinstance(parsed.get("scored"), list):
                     parsed_scored = [x for x in parsed.get("scored", []) if isinstance(x, dict)]
             except Exception:
+                logger.warning(
+                    "MLLM筛选批次失败，回退启发式评分: %s-%s / %s",
+                    offset + 1,
+                    offset + len(batch),
+                    len(reviewed),
+                )
                 parsed_scored = []
 
             used_indices: set[int] = set()

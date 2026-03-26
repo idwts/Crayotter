@@ -25,6 +25,8 @@ import logging
 import operator
 import os
 import re
+import threading
+import time
 from pathlib import Path
 from typing import Annotated, Any, Literal
 
@@ -42,9 +44,60 @@ from tools import ALL_TOOLS, MEMORY_EXPERIENCE_DIR, USER_WORKSPACE, WORKSPACE
 API_KEY: str = os.environ.get("OPENAI_API_KEY", "")
 BASE_URL: str = "https://api.openai.com/v1"
 MODEL_NAME: str = "gpt-4o"
-ENABLE_PHASE2_RESEARCH: bool = True
 
 graph_logger = logging.getLogger("graph")
+
+_HEARTBEAT_SECONDS = 15
+_DEFAULT_LLM_TIMEOUT_SECONDS = 300
+_DEEP_RESEARCH_TIMEOUT_SECONDS = 900
+_REACT_AGENT_TIMEOUT_SECONDS = 1800
+_REACT_AGENT_RECURSION_LIMIT = 40
+_REACT_EXECUTION_CONTEXT_MAX_CHARS = 6000
+
+
+def _run_with_heartbeat(
+    func: Any,
+    *,
+    label: str,
+    timeout_seconds: int = _DEFAULT_LLM_TIMEOUT_SECONDS,
+    heartbeat_seconds: int = _HEARTBEAT_SECONDS,
+) -> Any:
+    """Run a blocking call in a background thread while emitting heartbeat logs."""
+    result: dict[str, Any] = {}
+    error: dict[str, BaseException] = {}
+    done = threading.Event()
+
+    def _runner() -> None:
+        try:
+            result["value"] = func()
+        except BaseException as exc:  # preserve original traceback semantics for caller
+            error["exc"] = exc
+        finally:
+            done.set()
+
+    thread = threading.Thread(
+        target=_runner,
+        name=f"graph-heartbeat-{label}",
+        daemon=True,
+    )
+    thread.start()
+
+    started_at = time.monotonic()
+    while not done.wait(timeout=heartbeat_seconds):
+        elapsed = time.monotonic() - started_at
+        graph_logger.info("⏳ %s 进行中: elapsed=%.0fs", label, elapsed)
+        if elapsed >= timeout_seconds:
+            raise TimeoutError(f"{label} 超时（>{timeout_seconds}s）")
+
+    if "exc" in error:
+        raise error["exc"]
+    return result.get("value")
+
+
+def _truncate_for_execution(text: str, max_chars: int = _REACT_EXECUTION_CONTEXT_MAX_CHARS) -> str:
+    if len(text) <= max_chars:
+        return text
+    return text[:max_chars] + f"\n\n...[已截断，原始长度 {len(text)} 字]"
 
 
 def _log_react_tool_trace(result_state: dict[str, Any]) -> None:
@@ -194,8 +247,12 @@ def _extract_target_duration_seconds(user_request: str) -> float:
         "仅返回一个数字，不要输出其他内容。"
     )
     try:
-        response = llm.invoke(
-            [HumanMessage(content=f"{prompt}\n\n用户需求: {user_request}")]
+        response = _run_with_heartbeat(
+            lambda: llm.invoke(
+                [HumanMessage(content=f"{prompt}\n\n用户需求: {user_request}")]
+            ),
+            label="目标时长推断",
+            timeout_seconds=60,
         )
         text = str(response.content).strip()
         m = re.search(r"(\d+(?:\.\d+)?)", text)
@@ -328,6 +385,85 @@ def _iter_analysis_json_files() -> list[Path]:
             files.append(fp)
     files.sort(key=lambda p: p.stat().st_mtime, reverse=True)
     return files
+
+
+_DOWNLOAD_MANIFEST_PATH = WORKSPACE / "download_manifest.json"
+
+
+def _parse_json_object(raw: str) -> dict[str, Any] | None:
+    text = str(raw or "").strip()
+    if not text:
+        return None
+    try:
+        data = json.loads(text)
+    except Exception:
+        return None
+    return data if isinstance(data, dict) else None
+
+
+def _save_download_manifest(items: list[dict[str, Any]]) -> None:
+    try:
+        _DOWNLOAD_MANIFEST_PATH.write_text(
+            json.dumps({"items": items}, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+    except Exception as exc:
+        graph_logger.warning("⚠️ 无法保存下载清单: %s", exc)
+
+
+def _load_download_manifest() -> list[dict[str, Any]]:
+    if not _DOWNLOAD_MANIFEST_PATH.exists():
+        return []
+    try:
+        payload = json.loads(_DOWNLOAD_MANIFEST_PATH.read_text(encoding="utf-8"))
+    except Exception:
+        return []
+    items = payload.get("items", [])
+    return items if isinstance(items, list) else []
+
+
+def _iter_downloaded_source_videos() -> list[Path]:
+    videos: list[Path] = []
+    seen: set[str] = set()
+
+    for item in _load_download_manifest():
+        if not isinstance(item, dict):
+            continue
+        raw_path = str(item.get("path") or "").strip()
+        if not raw_path:
+            continue
+        path = Path(raw_path)
+        if not path.exists():
+            continue
+        key = str(path.resolve(strict=False))
+        if key in seen:
+            continue
+        seen.add(key)
+        videos.append(path)
+
+    if videos:
+        return videos
+
+    for pattern in ("selected_*.mp4", "BV*.mp4"):
+        for path in sorted(WORKSPACE.glob(pattern)):
+            key = str(path.resolve(strict=False))
+            if key in seen or not path.is_file():
+                continue
+            seen.add(key)
+            videos.append(path)
+    return videos
+
+
+def _collect_failed_prep_steps(plan: Plan | None) -> list[str]:
+    if plan is None:
+        return []
+    failed: list[str] = []
+    for step in plan.steps:
+        result = str(step.result or "").strip()
+        if step.status == "failed" or result.startswith("步骤执行失败"):
+            detail = result or "未提供失败详情"
+            failed.append(f"步骤 {step.id}（{step.description}）: {detail}")
+    return failed
 
 
 def _build_user_workspace_snapshot(max_files: int = 40) -> str:
@@ -494,12 +630,203 @@ def _infer_download_top_k(step_description: str, counts: dict[str, int]) -> int:
     return max(1, (low + high) // 2)
 
 
+def _extract_search_queries_from_step(
+    step_description: str,
+    user_request: str,
+    *,
+    max_queries: int = 5,
+) -> list[str]:
+    text = step_description or ""
+    queries: list[str] = []
+    seen: set[str] = set()
+
+    for pattern in (
+        r"'([^']+)'",
+        r'"([^"]+)"',
+        r"“([^”]+)”",
+        r"‘([^’]+)’",
+    ):
+        for match in re.findall(pattern, text):
+            candidate = str(match).strip()
+            if (
+                not candidate
+                or len(candidate) > 40
+                or "search_bilibili_video" in candidate
+                or "max_results" in candidate
+                or "pages=" in candidate
+            ):
+                continue
+            if candidate in seen:
+                continue
+            seen.add(candidate)
+            queries.append(candidate)
+            if len(queries) >= max_queries:
+                return queries
+
+    fallback = (user_request or "").strip()
+    if fallback and fallback not in seen:
+        queries.append(fallback)
+    return queries[:max_queries]
+
+
+def _run_deterministic_search_step(
+    step: Step,
+    user_request: str,
+    counts: dict[str, int],
+) -> str:
+    """搜索步骤走确定性执行，避免 ReAct 在一步里无限膨胀成多次搜索。"""
+    search_tool = _TOOL_NAME_MAP.get("search_bilibili_video")
+    if search_tool is None:
+        return "步骤执行失败: 缺少 search_bilibili_video 工具"
+
+    queries = _extract_search_queries_from_step(step.description, user_request)
+    if not queries:
+        return "步骤执行失败: 未能提取有效搜索词"
+
+    max_results = int(counts.get("search_per_source", 20))
+    pages = int(counts.get("search_pages", 2))
+    max_candidates = int(counts.get("max_candidates", max_results * max(1, pages)))
+    per_query_cap = max(12, max_candidates // max(1, len(queries)))
+    expand_variants = 1 if len(queries) > 1 else 3
+    per_request_timeout = 10 if len(queries) >= 4 else 15
+    total_timeout = 20 if len(queries) >= 4 else 30
+
+    graph_logger.info(
+        "🔎 搜索步骤走确定性执行: queries=%d, max_results=%d, pages=%d, expand_variants=%d",
+        len(queries),
+        max_results,
+        pages,
+        expand_variants,
+    )
+
+    success_items: list[str] = []
+    failed_items: list[str] = []
+    total_candidates = 0
+
+    for index, query in enumerate(queries, start=1):
+        graph_logger.info("🔎 搜索子查询 [%d/%d]: %s", index, len(queries), query)
+        try:
+            graph_logger.info("🔎 调用搜索工具 [%d/%d]: %s", index, len(queries), query)
+            raw = search_tool.invoke(
+                {
+                    "query": query,
+                    "max_results": max_results,
+                    "pages": pages,
+                    "expand_variants": expand_variants,
+                    "max_total_results": per_query_cap,
+                    "per_request_timeout_seconds": per_request_timeout,
+                    "total_timeout_seconds": total_timeout,
+                }
+            )
+        except Exception as exc:
+            failed_items.append(f"{index}. {query}: {exc}")
+            continue
+
+        text = str(raw or "").strip()
+        graph_logger.info(
+            "🔎 搜索工具返回 [%d/%d]: %s 字符",
+            index,
+            len(queries),
+            len(text),
+        )
+        try:
+            parsed = json.loads(text)
+        except Exception:
+            parsed = None
+
+        if isinstance(parsed, list):
+            count = len(parsed)
+            total_candidates += count
+            success_items.append(f"{index}. {query}: {count} 条候选")
+            continue
+
+        failed_items.append(f"{index}. {query}: {text[:160] or '未返回有效结果'}")
+
+    summary_parts = [
+        "搜索步骤（确定性执行）完成",
+        f"- 搜索词数: {len(queries)}",
+        f"- 成功: {len(success_items)}",
+        f"- 失败: {len(failed_items)}",
+        f"- 汇总候选: {total_candidates}",
+    ]
+    if success_items:
+        summary_parts.append("- 成功明细:")
+        summary_parts.extend(success_items[:10])
+    if failed_items:
+        summary_parts.append("- 失败明细:")
+        summary_parts.extend(failed_items[:10])
+    return "\n".join(summary_parts)
+
+
+def _run_deterministic_rank_step(step: Step, counts: dict[str, int]) -> str:
+    """筛选步骤走确定性执行，避免 ReAct 在单一步骤内卡在工具调用前。"""
+    rank_tool = _TOOL_NAME_MAP.get("rank_video_candidates")
+    if rank_tool is None:
+        return "步骤执行失败: 缺少 rank_video_candidates 工具"
+
+    top_k = _infer_download_top_k(step.description, counts)
+    max_review = int(counts.get("mllm_review", 30))
+    request_timeout = 20 if max_review >= 80 else 30
+
+    graph_logger.info(
+        "🏅 筛选步骤走确定性执行: top_k=%d, max_review=%d",
+        top_k,
+        max_review,
+    )
+
+    try:
+        graph_logger.info("🏅 调用筛选工具: top_k=%d, max_review=%d", top_k, max_review)
+        raw = rank_tool.invoke(
+            {
+                "candidates_json": "[]",
+                "top_k": top_k,
+                "max_review": max_review,
+                "request_timeout_seconds": request_timeout,
+            }
+        )
+    except Exception as exc:
+        return f"步骤执行失败: 筛选阶段异常: {exc}"
+
+    text = str(raw or "").strip()
+    graph_logger.info("🏅 筛选工具返回: %s 字符", len(text))
+    try:
+        parsed = json.loads(text)
+    except Exception:
+        parsed = None
+
+    if not isinstance(parsed, dict):
+        return f"步骤执行失败: 无法解析筛选结果: {text[:400]}"
+
+    selected_count = int(parsed.get("selected_count", 0) or 0)
+    reviewed = int(parsed.get("reviewed", 0) or 0)
+    candidate_total = int(parsed.get("candidate_total", 0) or 0)
+    ranked_videos = parsed.get("ranked_videos", [])
+    if not isinstance(ranked_videos, list):
+        ranked_videos = []
+
+    summary_parts = [
+        "筛选步骤（确定性执行）完成",
+        f"- 候选总数: {candidate_total}",
+        f"- 实际评估: {reviewed}",
+        f"- 选中数量: {selected_count}",
+    ]
+    if ranked_videos:
+        summary_parts.append("- Top 结果:")
+        for index, item in enumerate(ranked_videos[: min(5, len(ranked_videos))], start=1):
+            title = str(item.get("title", "")).strip() or f"候选 {index}"
+            score = item.get("selection_score", "")
+            summary_parts.append(f"{index}. {title} (score={score})")
+    return "\n".join(summary_parts)
+
+
 def _run_deterministic_download_step(step: Step, counts: dict[str, int]) -> str:
     """下载步骤的确定性执行：先获取 selected_videos，再逐个下载。"""
     rank_tool = _TOOL_NAME_MAP.get("rank_video_candidates")
     download_tool = _TOOL_NAME_MAP.get("download_bilibili_video")
     if rank_tool is None or download_tool is None:
         return "步骤执行失败: 缺少 rank_video_candidates 或 download_bilibili_video 工具"
+
+    _save_download_manifest([])
 
     top_k = _infer_download_top_k(step.description, counts)
     max_review = int(counts.get("mllm_review", 30))
@@ -521,7 +848,9 @@ def _run_deterministic_download_step(step: Step, counts: dict[str, int]) -> str:
         return f"步骤执行失败: 排序阶段异常: {e}"
 
     try:
-        rank_data = json.loads(str(rank_raw))
+        rank_data = _parse_json_object(str(rank_raw))
+        if not isinstance(rank_data, dict):
+            return f"步骤执行失败: 无法解析排序结果: {str(rank_raw)[:400]}"
     except Exception:
         return f"步骤执行失败: 无法解析排序结果: {str(rank_raw)[:400]}"
 
@@ -531,6 +860,7 @@ def _run_deterministic_download_step(step: Step, counts: dict[str, int]) -> str:
 
     success_items: list[str] = []
     fail_items: list[str] = []
+    manifest_items: list[dict[str, Any]] = []
 
     for i, video in enumerate(selected_videos, start=1):
         if not isinstance(video, dict):
@@ -548,16 +878,50 @@ def _run_deterministic_download_step(step: Step, counts: dict[str, int]) -> str:
             download_raw = download_tool.invoke(
                 {"url": url, "filename": filename, "prefer_h264": True}
             )
-            parsed = json.loads(str(download_raw))
-            if parsed.get("status") == "success":
-                path = str(parsed.get("path", ""))
+            raw_text = str(download_raw or "").strip()
+            parsed = _parse_json_object(raw_text)
+            if isinstance(parsed, dict) and parsed.get("status") == "success":
+                path = str(parsed.get("path", "")).strip()
+                alias_path = str(parsed.get("alias_path", "")).strip()
                 success_items.append(f"{i}. {title or bvid or url} -> {path}")
+                manifest_items.append(
+                    {
+                        "index": i,
+                        "title": title,
+                        "url": url,
+                        "bvid": bvid,
+                        "path": path,
+                        "alias_path": alias_path,
+                    }
+                )
+                _save_download_manifest(manifest_items)
+                graph_logger.info(
+                    "📥 下载完成 [%d/%d]: %s -> %s",
+                    i,
+                    len(selected_videos),
+                    title or bvid or url,
+                    path,
+                )
             else:
                 fail_items.append(
-                    f"{i}. {title or bvid or url}: {str(download_raw)[:180]}"
+                    f"{i}. {title or bvid or url}: {raw_text[:240] or '下载失败'}"
+                )
+                graph_logger.warning(
+                    "⚠️ 下载失败 [%d/%d]: %s -> %s",
+                    i,
+                    len(selected_videos),
+                    title or bvid or url,
+                    raw_text[:240] or "下载失败",
                 )
         except Exception as e:
             fail_items.append(f"{i}. {title or bvid or url}: {e}")
+            graph_logger.warning(
+                "⚠️ 下载异常 [%d/%d]: %s -> %s",
+                i,
+                len(selected_videos),
+                title or bvid or url,
+                e,
+            )
 
     summary_parts = [
         "下载步骤（确定性执行）完成",
@@ -565,13 +929,101 @@ def _run_deterministic_download_step(step: Step, counts: dict[str, int]) -> str:
         f"- 成功: {len(success_items)}",
         f"- 失败: {len(fail_items)}",
     ]
+    _save_download_manifest(manifest_items)
     if success_items:
         summary_parts.append("- 成功明细:")
         summary_parts.extend(success_items[:20])
     if fail_items:
         summary_parts.append("- 失败明细:")
         summary_parts.extend(fail_items[:20])
-    return "\n".join(summary_parts)
+    summary = "\n".join(summary_parts)
+    if not success_items:
+        return "步骤执行失败: 下载步骤未获得任何可用视频\n" + summary
+    return summary
+
+
+def _run_deterministic_analyze_step(step: Step) -> str:
+    """分析步骤的确定性执行：只分析成功下载的源视频，不再扫描 user_temp 猜测输入。"""
+    analyze_tool = _TOOL_NAME_MAP.get("analyze_video")
+    if analyze_tool is None:
+        return "步骤执行失败: 缺少 analyze_video 工具"
+
+    source_videos = _iter_downloaded_source_videos()
+    if not source_videos:
+        return "步骤执行失败: 没有任何成功下载的视频，无法进入分析步骤"
+
+    already_analyzed_stems = {
+        jp.stem.replace("_analysis", "") for jp in _iter_analysis_json_files()
+    }
+
+    pending_videos = [fp for fp in source_videos if fp.stem not in already_analyzed_stems]
+    skipped_videos = [fp for fp in source_videos if fp.stem in already_analyzed_stems]
+
+    if not pending_videos:
+        summary_parts = [
+            "分析步骤（确定性执行）完成",
+            f"- 计划分析: {len(source_videos)}",
+            f"- 新增成功: 0",
+            f"- 已有分析: {len(skipped_videos)}",
+            f"- 失败: 0",
+        ]
+        if skipped_videos:
+            summary_parts.append("- 已有分析明细:")
+            summary_parts.extend(f"{i}. {fp.name}" for i, fp in enumerate(skipped_videos[:20], start=1))
+        return "\n".join(summary_parts)
+
+    success_items: list[str] = []
+    fail_items: list[str] = []
+
+    for index, fp in enumerate(pending_videos, start=1):
+        graph_logger.info("🔬 分析源视频 [%d/%d]: %s", index, len(pending_videos), fp)
+        expected_json = WORKSPACE / f"{fp.stem}_analysis.json"
+        if expected_json.exists():
+            success_items.append(f"{index}. {fp.name} -> {expected_json}")
+            continue
+        try:
+            raw = analyze_tool.invoke(
+                {
+                    "video_path": str(fp),
+                    "analysis_goal": step.description,
+                }
+            )
+            text = str(raw or "").strip()
+        except Exception as exc:
+            fail_items.append(f"{index}. {fp.name}: {exc}")
+            continue
+
+        if expected_json.exists():
+            success_items.append(f"{index}. {fp.name} -> {expected_json}")
+        else:
+            fail_items.append(
+                f"{index}. {fp.name}: {text[:240] or '未生成 analysis.json'}"
+            )
+
+    summary_parts = [
+        "分析步骤（确定性执行）完成",
+        f"- 计划分析: {len(source_videos)}",
+        f"- 新增成功: {len(success_items)}",
+        f"- 已有分析: {len(skipped_videos)}",
+        f"- 失败: {len(fail_items)}",
+    ]
+    if success_items:
+        summary_parts.append("- 成功明细:")
+        summary_parts.extend(success_items[:20])
+    if skipped_videos:
+        summary_parts.append("- 已有分析明细:")
+        summary_parts.extend(
+            f"{index}. {fp.name}"
+            for index, fp in enumerate(skipped_videos[:20], start=1)
+        )
+    if fail_items:
+        summary_parts.append("- 失败明细:")
+        summary_parts.extend(fail_items[:20])
+
+    summary = "\n".join(summary_parts)
+    if fail_items:
+        return "步骤执行失败: 视频分析未全部完成\n" + summary
+    return summary
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -665,10 +1117,14 @@ def planner_node(state: AgentState) -> dict[str, Any]:
         for i, r in enumerate(state.step_results, start=1):
             context_parts.append(f"步骤 {i}: {r[:300]}")
 
-    response = llm.invoke([
-        SystemMessage(content=prompt),
-        HumanMessage(content="\n".join(context_parts)),
-    ])
+    response = _run_with_heartbeat(
+        lambda: llm.invoke([
+            SystemMessage(content=prompt),
+            HumanMessage(content="\n".join(context_parts)),
+        ]),
+        label="Phase 1 素材准备规划",
+        timeout_seconds=180,
+    )
 
     # 解析 JSON 计划
     try:
@@ -838,15 +1294,37 @@ def executor_node(state: AgentState) -> dict[str, Any]:
     # 分析步骤：注入源视频过滤提示
     tool_hint_lower = (step.tool_hint or "").strip().lower()
 
+    # 搜索步骤：走确定性执行，避免 ReAct 在单一步骤内无限膨胀搜索调用
+    if tool_hint_lower == "search_bilibili_video":
+        final_msg = _run_deterministic_search_step(step, state.user_request, counts)
+        step.status = "done" if "步骤执行失败" not in final_msg else "failed"
+        step.result = final_msg
+        graph_logger.info("✅ 步骤 [%d] 完成(确定性搜索): %s", step.id, final_msg[:220])
+        return {"step_results": [final_msg], "current_step_index": idx + 1}
+
+    # 筛选步骤：走确定性执行，避免 ReAct 在工具调用前挂起
+    if tool_hint_lower == "rank_video_candidates":
+        final_msg = _run_deterministic_rank_step(step, counts)
+        step.status = "done" if "步骤执行失败" not in final_msg else "failed"
+        step.result = final_msg
+        graph_logger.info("✅ 步骤 [%d] 完成(确定性筛选): %s", step.id, final_msg[:220])
+        return {"step_results": [final_msg], "current_step_index": idx + 1}
+
     # 下载步骤：走确定性执行，避免模型使用占位BV号
     if tool_hint_lower == "download_bilibili_video":
         final_msg = _run_deterministic_download_step(step, counts)
-        step.status = "done" if "成功" in final_msg else "failed"
+        step.status = "failed" if final_msg.startswith("步骤执行失败:") else "done"
         step.result = final_msg
         graph_logger.info("✅ 步骤 [%d] 完成(确定性下载): %s", step.id, final_msg[:220])
         return {"step_results": [final_msg], "current_step_index": idx + 1}
 
     if tool_hint_lower == "analyze_video":
+        final_msg = _run_deterministic_analyze_step(step)
+        step.status = "failed" if final_msg.startswith("步骤执行失败:") else "done"
+        step.result = final_msg
+        graph_logger.info("✅ 步骤 [%d] 完成(确定性分析): %s", step.id, final_msg[:220])
+        return {"step_results": [final_msg], "current_step_index": idx + 1}
+
         already_analyzed_stems: set[str] = set()
         for jp in _iter_analysis_json_files():
             already_analyzed_stems.add(jp.stem.replace("_analysis", ""))
@@ -924,19 +1402,9 @@ def prep_router_node(state: AgentState) -> dict[str, Any]:
 
     # ── 所有准备步骤已执行完 → 检查分析 JSON ──
     analysis_files = _iter_analysis_json_files()
-    source_videos = [
-        fp
-        for fp in _iter_source_videos()
-    ]
+    source_videos = [fp for fp in _iter_downloaded_source_videos()]
 
     if analysis_files:
-        if not ENABLE_PHASE2_RESEARCH:
-            graph_logger.info(
-                "✅ Phase 1 完成: %d 个分析文件, %d 个源视频 → Phase 2 已禁用，直接进入 Phase 3",
-                len(analysis_files),
-                len(source_videos),
-            )
-            return {"phase": "react"}
         graph_logger.info(
             "✅ Phase 1 完成: %d 个分析文件, %d 个源视频 → 进入 Phase 2 深度剪辑研究",
             len(analysis_files),
@@ -945,18 +1413,41 @@ def prep_router_node(state: AgentState) -> dict[str, Any]:
         return {"phase": "researching"}
 
     # ── 无分析 JSON → 需要重新规划 ──
-    graph_logger.warning("⚠️ 准备步骤已完成但无分析 JSON，触发重新规划")
-    return {"phase": "replan", "plan": None}
+    graph_logger.warning("⚠️ 准备步骤已完成但无分析 JSON，开始失败归因并终止任务")
+    failed_steps = _collect_failed_prep_steps(plan)
+    if failed_steps:
+        final_output = (
+            "素材准备失败，任务已停止，不再自动重规划。\n\n"
+            + "\n\n".join(failed_steps[:6])
+        )
+        graph_logger.error("❌ Phase 1 失败，停止任务: %s", final_output.replace("\n", " | "))
+        return {
+            "phase": "done",
+            "should_end": True,
+            "final_output": final_output,
+        }
+
+    final_output = "素材准备阶段结束，但没有生成任何分析结果，任务已停止。"
+    if not source_videos:
+        final_output += "\n\n未检测到成功下载的视频，请先修复下载环节后再重试。"
+    else:
+        final_output += "\n\n已存在下载视频，但没有产出 *_analysis.json，请检查多模态分析配置。"
+    graph_logger.error("❌ Phase 1 未产出分析结果，停止任务")
+    return {
+        "phase": "done",
+        "should_end": True,
+        "final_output": final_output,
+    }
 
 
 def route_after_prep_router(
     state: AgentState,
-) -> Literal["executor", "planner", "editing_research", "react_editor"]:
+) -> Literal["executor", "planner", "editing_research", "__end__"]:
     """Prep Router 之后的路由。"""
+    if state.should_end or state.phase == "done":
+        return "__end__"
     if state.phase == "researching":
         return "editing_research"
-    if state.phase == "react":
-        return "react_editor"
     if state.phase == "replan":
         return "planner"
     if state.plan and state.current_step_index < len(state.plan.steps):
@@ -1135,14 +1626,18 @@ def editing_research_node(state: AgentState) -> dict[str, Any]:
     graph_logger.info("📝 总提示长度: %d 字", len(user_message) + len(EDITING_RESEARCH_PROMPT))
 
     try:
-        response = llm.invoke([
-            SystemMessage(content=EDITING_RESEARCH_PROMPT),
-            HumanMessage(content=user_message),
-        ])
+        response = _run_with_heartbeat(
+            lambda: llm.invoke([
+                SystemMessage(content=EDITING_RESEARCH_PROMPT),
+                HumanMessage(content=user_message),
+            ]),
+            label="Phase 2 深度剪辑研究",
+            timeout_seconds=_DEEP_RESEARCH_TIMEOUT_SECONDS,
+        )
         blueprint = str(response.content).strip()
     except Exception as e:
-        blueprint = ""
         graph_logger.error("❌ 剪辑研究异常: %s", e, exc_info=True)
+        raise RuntimeError(f"剪辑研究阶段异常: {e}") from e
 
     if not blueprint:
         graph_logger.warning("⚠️ 剪辑研究未产出蓝图，Phase 3 将自行决策")
@@ -1298,6 +1793,9 @@ def react_editor_node(state: AgentState) -> dict[str, Any]:
     workspace_snapshot = _build_workspace_snapshot()
     user_workspace_snapshot = _build_user_workspace_snapshot()
     memory_experience_text = _load_latest_memory_experience(max_chars=12000)
+    compact_analysis_context = _truncate_for_execution(analysis_context)
+    compact_blueprint = _truncate_for_execution(state.editing_blueprint, max_chars=8000)
+    compact_experience = _truncate_for_execution(memory_experience_text, max_chars=4000)
 
     user_msg_parts: list[str] = [
         f"## 用户需求\n{state.user_request}",
@@ -1310,7 +1808,7 @@ def react_editor_node(state: AgentState) -> dict[str, Any]:
     # 剪辑蓝图 (来自 Phase 2 深度研究)
     if state.editing_blueprint:
         user_msg_parts.append(
-            f"\n## 剪辑蓝图（由专业剪辑研究员事先制定，请以此为核心指导）\n{state.editing_blueprint}"
+            f"\n## 剪辑蓝图（由专业剪辑研究员事先制定，请以此为核心指导）\n{compact_blueprint}"
         )
 
     # Phase 1 准备结果摘要
@@ -1324,13 +1822,15 @@ def react_editor_node(state: AgentState) -> dict[str, Any]:
 
     user_msg_parts.extend(
         [
-            f"\n## 已有素材分析数据\n"
-            f"以下是所有视频的多模态分析结果，可供交叉参考:\n\n{analysis_context}",
+            f"\n## 已有素材分析数据（执行阶段精简版）\n"
+            f"以下是供执行参考的分析摘录；如需更细粒度信息，请优先使用剪辑蓝图和现有分析文件路径，而不是重新大范围推理：\n\n{compact_analysis_context}",
             f"\n## 当前工作目录文件\n{workspace_snapshot}",
             f"\n## 用户素材目录文件（可直接作为素材参与剪辑）\n{user_workspace_snapshot}",
-            f"\n## 历史经验（skills，请优先遵循）\n{memory_experience_text}",
+            f"\n## 历史经验（skills，请优先遵循）\n{compact_experience}",
             "\n## 开始执行\n"
-            "请先核对剪辑蓝图中的片段与分析数据，确认无误后按蓝图顺序执行剪辑。"
+            "请严格以剪辑蓝图为主，不要重新发散式设计整片，不要重新做大范围素材研究。"
+            "优先按以下顺序执行：裁剪片段 -> 检查时长 -> 合并 -> 规划转场 -> 添加转场 -> 对成片做必要校验 -> 对齐旁白 -> 校验旁白时间线 -> 分段配音/字幕 -> 导出。"
+            "如果已有 `transitioned.mp4` 或其他中间产物，优先复用，不要重复回到最前面。"
             "完成后请总结你的创作过程和最终成品信息。",
         ]
     )
@@ -1354,17 +1854,22 @@ def react_editor_node(state: AgentState) -> dict[str, Any]:
         ", ".join(getattr(t, "name", "") for t in EDITING_TOOLS),
     )
     graph_logger.info("📝 分析上下文长度: %d 字", len(analysis_context))
+    graph_logger.info("📝 Phase 3 执行上下文长度(精简后): %d 字", len(user_message))
 
     try:
-        result_state = react_agent.invoke(
-            {"messages": [("user", user_message)]},
-            config={"recursion_limit": 100},
+        result_state = _run_with_heartbeat(
+            lambda: react_agent.invoke(
+                {"messages": [("user", user_message)]},
+                config={"recursion_limit": _REACT_AGENT_RECURSION_LIMIT},
+            ),
+            label="Phase 3 ReAct Editor",
+            timeout_seconds=_REACT_AGENT_TIMEOUT_SECONDS,
         )
         _log_react_tool_trace(result_state)
         final_msg = _extract_final_message(result_state)
     except Exception as e:
-        final_msg = f"ReAct 创作阶段异常: {e}"
         graph_logger.error("❌ ReAct Editor 异常: %s", e, exc_info=True)
+        raise RuntimeError(f"ReAct 创作阶段异常: {e}") from e
 
     graph_logger.info("🎬 ═══ Phase 3 完成 ═══")
     graph_logger.info("📝 最终输出: %s", final_msg[:300])

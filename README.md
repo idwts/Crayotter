@@ -1,17 +1,7 @@
 # Crayotter
 
 <p align="center">
-  <a href="./README.md">English</a> | <a href="./README_CN.md">中文</a>
-</p>
-
-<p align="center">
   <img src="./logo.png" alt="Crayotter Logo" width="180" />
-</p>
-
-<p align="center">
-  <a href="https://idwts.github.io/Crayotter" target="_blank" rel="noopener noreferrer">
-    <img src="https://img.shields.io/badge/🚀-Interactive%20Demo-4CAF50?style=for-the-badge&logo=googlechrome&logoColor=white" alt="Interactive Demo">
-  </a>
 </p>
 
 Crayotter is a multimodal, agent-driven video editing system that turns a single text request into a complete edited video.
@@ -55,9 +45,6 @@ Crayotter uses a three-phase architecture:
    - Build a structured editing blueprint (narrative, rhythm, transitions, narration strategy)
    - No editing tools are called in this phase
 
-   This phase can be disabled with `ENABLE_PHASE2_RESEARCH = False` in `script\agent.py` to save tokens.
-   When disabled, the workflow becomes: Phase 1 → Phase 3.
-
 3. **Phase 3 — ReAct Editing Execution**
    - Execute cutting, merging, transition design, narration/subtitles, and final export
    - Log full tool-call trajectory for later trace visualization
@@ -85,12 +72,6 @@ pip install -r requirements.txt
 
 Edit the API configuration block in `script\agent.py` (model API, video API, and TTS API settings).
 
-You can also control whether Phase 2 runs:
-
-```python
-ENABLE_PHASE2_RESEARCH = True  # True: run Phase 2, False: skip to Phase 3
-```
-
 > Security note: never commit real API keys to version control.
 
 ### 4) Run the Agent
@@ -104,7 +85,7 @@ python script\agent.py
 Single task mode:
 
 ```bash
-python script\agent.py "Create a 1-minute campus-themed promo video"
+python script\agent.py "Create a 3-minute campus-themed promo video"
 ```
 
 ---

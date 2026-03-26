@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 from pathlib import Path
+import threading
+import time
 from typing import Any
 from urllib.parse import urlparse
 
@@ -18,6 +20,10 @@ from ._shared import (
     logger,
     tool,
 )
+
+
+_ANALYSIS_HEARTBEAT_SECONDS = 15
+_ANALYSIS_REQUEST_TIMEOUT_SECONDS = 300
 
 
 def _format_api_error(exc: Exception) -> str:
@@ -107,6 +113,43 @@ def _extract_dashscope_content(response: Any) -> str:
         return str(content).strip()
     except Exception:
         return ""
+
+
+def _call_with_heartbeat(
+    func: Any,
+    *,
+    label: str,
+    timeout_seconds: int = _ANALYSIS_REQUEST_TIMEOUT_SECONDS,
+) -> Any:
+    result: dict[str, Any] = {}
+    error: dict[str, Exception] = {}
+    done = threading.Event()
+
+    def _runner() -> None:
+        try:
+            result["value"] = func()
+        except Exception as exc:
+            error["exc"] = exc
+        finally:
+            done.set()
+
+    thread = threading.Thread(
+        target=_runner,
+        name="crayotter-video-analysis-call",
+        daemon=True,
+    )
+    thread.start()
+
+    started = time.monotonic()
+    while not done.wait(timeout=_ANALYSIS_HEARTBEAT_SECONDS):
+        elapsed = time.monotonic() - started
+        logger.info("⏳ 视频分析进行中: %s, elapsed=%.0fs", label, elapsed)
+        if elapsed >= timeout_seconds:
+            raise TimeoutError(f"视频分析请求超时（>{timeout_seconds}s）: {label}")
+
+    if "exc" in error:
+        raise error["exc"]
+    return result.get("value")
 
 
 _ANALYSIS_PROMPT_OMNI = (
@@ -250,17 +293,21 @@ def analyze_video(
             for vitem in video_inputs:
                 vdisplay = vitem["display"]
                 try:
-                    response = dashscope.MultiModalConversation.call(
-                        model=_shared.VIDEO_MODEL_NAME,
-                        messages=[
-                            {
-                                "role": "user",
-                                "content": [
-                                    {"video": vitem["value"]},
-                                    {"text": analysis_prompt},
-                                ],
-                            }
-                        ],
+                    response = _call_with_heartbeat(
+                        lambda: dashscope.MultiModalConversation.call(
+                            model=_shared.VIDEO_MODEL_NAME,
+                            messages=[
+                                {
+                                    "role": "user",
+                                    "content": [
+                                        {"video": vitem["value"]},
+                                        {"text": analysis_prompt},
+                                    ],
+                                }
+                            ],
+                            timeout=_ANALYSIS_REQUEST_TIMEOUT_SECONDS,
+                        ),
+                        label=f"{resolved_video.name} -> {vdisplay}",
                     )
                     status_code = getattr(response, "status_code", None)
                     if status_code == 200:
@@ -321,11 +368,15 @@ def analyze_video(
                         content.append({"type": "audio_url", "audio_url": {"url": acontent}})
                     content.append({"type": "text", "text": analysis_prompt})
 
-                    response = client.chat.completions.create(
-                        model=_shared.VIDEO_MODEL_NAME,
-                        messages=[{"role": "user", "content": content}],
-                        max_tokens=40960,
-                        temperature=0.2,
+                    response = _call_with_heartbeat(
+                        lambda: client.chat.completions.create(
+                            model=_shared.VIDEO_MODEL_NAME,
+                            messages=[{"role": "user", "content": content}],
+                            max_tokens=40960,
+                            temperature=0.2,
+                            timeout=_ANALYSIS_REQUEST_TIMEOUT_SECONDS,
+                        ),
+                        label=f"{resolved_video.name} -> {vdisplay}",
                     )
                     analysis = _extract_chat_content(response)
                     if analysis:

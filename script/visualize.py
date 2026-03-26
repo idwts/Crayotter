@@ -1058,18 +1058,30 @@ class Handler(BaseHTTPRequestHandler):
 
 
 def find_latest_log(log_dir: str = "logs") -> str:
-    """找到 logs 目录下最新的日志文件"""
-    abs_log_dir = (
-        log_dir
-        if os.path.isabs(log_dir)
-        else os.path.join(PROJECT_ROOT, log_dir)
-    )
-    pattern = os.path.join(abs_log_dir, "video_agent_*.log")
-    files = glob.glob(pattern)
-    if not files:
-        print(f"❌ 在 {abs_log_dir} 中未找到日志文件")
-        sys.exit(1)
-    return max(files, key=os.path.getmtime)
+    """找到最新的 video_agent 日志文件"""
+    candidates: list[str] = []
+
+    if os.path.isabs(log_dir):
+        candidates.append(log_dir)
+    else:
+        if log_dir == "logs":
+            candidates.extend(
+                [
+                    os.path.join(PROJECT_ROOT, "runtime_logs"),
+                    os.path.join(PROJECT_ROOT, "logs"),
+                ]
+            )
+        else:
+            candidates.append(os.path.join(PROJECT_ROOT, log_dir))
+
+    for abs_log_dir in candidates:
+        pattern = os.path.join(abs_log_dir, "video_agent_*.log")
+        files = glob.glob(pattern)
+        if files:
+            return max(files, key=os.path.getmtime)
+
+    print(f"❌ 未在这些目录中找到日志文件: {', '.join(candidates)}")
+    sys.exit(1)
 
 
 def main():

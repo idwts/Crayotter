@@ -57,7 +57,14 @@ def _ffprobe_binary() -> str:
 
 def _ffmpeg_run(cmd: list[str], timeout: int = 900) -> tuple[bool, str]:
     try:
-        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
+        proc = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="ignore",
+            timeout=timeout,
+        )
         if proc.returncode == 0:
             # ffmpeg/ffprobe 在不同平台可能将有效输出写入 stdout 或 stderr。
             return True, (proc.stdout or proc.stderr or "")
@@ -68,22 +75,18 @@ def _ffmpeg_run(cmd: list[str], timeout: int = 900) -> tuple[bool, str]:
 
 
 def _has_audio_stream(video_path: Path) -> bool:
-    cmd = [
-        _ffprobe_binary(),
-        "-v",
-        "error",
-        "-select_streams",
-        "a",
-        "-show_entries",
-        "stream=index",
-        "-of",
-        "csv=p=0",
-        str(video_path),
-    ]
-    ok, out = _ffmpeg_run(cmd, timeout=60)
-    if not ok:
+    # MoviePy is already a runtime dependency and gives us a portable
+    # way to detect whether audio exists without requiring ffprobe.
+    try:
+        from moviepy.video.io.VideoFileClip import VideoFileClip
+
+        clip = VideoFileClip(str(video_path))
+        try:
+            return clip.audio is not None
+        finally:
+            clip.close()
+    except Exception:
         return False
-    return bool((out or "").strip())
 
 
 def _normalize_clip_for_transition(

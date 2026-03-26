@@ -1,2 +1,10 @@
 __pycache__/
 *.pyc
+app_state/
+logs/
+runtime_logs/
+temp/
+.python_deps/
+.vscode/
+user_temp/
+memory_experience/experience_*.md

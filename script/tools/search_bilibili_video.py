@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import asyncio
+
 from ._shared import *
 
 
@@ -10,6 +12,8 @@ def search_bilibili_video(
     pages: int = 2,
     expand_variants: int = 3,
     max_total_results: int | None = None,
+    per_request_timeout_seconds: int = 30,
+    total_timeout_seconds: int = 120,
 ) -> str:
     """在 Bilibili 上搜索视频资源，返回视频标题、BV号、时长、播放量等信息。
     搜索结果会自动写入候选池，供后续 rank_video_candidates 聚合使用。
@@ -33,6 +37,8 @@ def search_bilibili_video(
         pages,
         expand_variants,
     )
+    per_request_timeout = max(5, int(per_request_timeout_seconds))
+    total_timeout = max(per_request_timeout, int(total_timeout_seconds))
     try:
         queries = _expand_queries(query, max_variants=expand_variants)
 
@@ -69,12 +75,24 @@ def search_bilibili_video(
 
             for q in queries:
                 for page in range(1, max(1, pages) + 1):
-                    result = await bili_search.search_by_type(
-                        keyword=q,
-                        search_type=bili_search.SearchObjectType.VIDEO,
-                        page=page,
-                        page_size=max_results,
-                    )
+                    try:
+                        result = await asyncio.wait_for(
+                            bili_search.search_by_type(
+                                keyword=q,
+                                search_type=bili_search.SearchObjectType.VIDEO,
+                                page=page,
+                                page_size=max_results,
+                            ),
+                            timeout=per_request_timeout,
+                        )
+                    except asyncio.TimeoutError:
+                        logger.warning(
+                            "Bilibili搜索超时: query='%s', page=%s, timeout=%ss",
+                            q,
+                            page,
+                            per_request_timeout,
+                        )
+                        continue
 
                     logger.debug(
                         "B站搜索返回结构: %s",
@@ -119,7 +137,11 @@ def search_bilibili_video(
 
             return all_videos
 
-        all_videos = sync(do_search())
+        try:
+            all_videos = sync(asyncio.wait_for(do_search(), timeout=total_timeout))
+        except asyncio.TimeoutError:
+            logger.warning("Bilibili整体搜索超时: query='%s', timeout=%ss", query, total_timeout)
+            return f"Bilibili 搜索超时（>{total_timeout}s），请稍后重试或缩小搜索范围。"
         total_found = len(all_videos)
         deduped = _dedupe_by_key(all_videos, "bvid")
         duration_filtered, dropped_long, dropped_unknown = _filter_candidates_by_max_duration(

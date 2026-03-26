@@ -5,7 +5,14 @@ from ._shared import Path, json, subprocess, tool, _resolve_workspace_input_path
 
 def _run_ffmpeg(cmd: list[str], timeout: int = 900) -> tuple[bool, str]:
     try:
-        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
+        proc = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="ignore",
+            timeout=timeout,
+        )
         if proc.returncode == 0:
             return True, ""
         return False, (proc.stderr or proc.stdout or "")[-1200:]
