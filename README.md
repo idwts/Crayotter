@@ -21,6 +21,12 @@ It combines **planning**, **deep editing research**, and **tool-based execution*
 
 ---
 
+## NEWS
+
+- 2026.3.30: The first release version is now available. See [v0.1.0-demo](https://github.com/idwts/Crayotter/releases/tag/v0.1.0-demo).
+
+---
+
 ## Overview
 
 This repository centers around four core components:
