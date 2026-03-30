@@ -139,6 +139,15 @@ def _coerce_bool(value: Any, default: bool) -> bool:
     return default
 
 
+def _coerce_runtime_text(value: Any, default: str = "") -> str:
+    text = str(value or "").strip()
+    if not text:
+        return default
+    if text in {"EMPTY", "sk-your-api-key-here", "None", "null"}:
+        return default
+    return text
+
+
 def apply_runtime_config(config: Mapping[str, Any] | None = None) -> dict[str, str]:
     global API_KEY, BASE_URL, MODEL_NAME, ENABLE_PHASE2_RESEARCH
     global VIDEO_API_KEY, VIDEO_BASE_URL, VIDEO_MODEL_NAME
@@ -146,21 +155,27 @@ def apply_runtime_config(config: Mapping[str, Any] | None = None) -> dict[str, s
 
     config = dict(config or {})
 
-    API_KEY = str(config.get("api_key") or API_KEY or "").strip()
-    BASE_URL = str(config.get("base_url") or BASE_URL or "").strip()
-    MODEL_NAME = str(config.get("model_name") or MODEL_NAME or "").strip()
+    API_KEY = _coerce_runtime_text(config.get("api_key"), _coerce_runtime_text(API_KEY))
+    BASE_URL = _coerce_runtime_text(config.get("base_url"), _coerce_runtime_text(BASE_URL))
+    MODEL_NAME = _coerce_runtime_text(config.get("model_name"), _coerce_runtime_text(MODEL_NAME))
     ENABLE_PHASE2_RESEARCH = _coerce_bool(
         config.get("enable_phase2_research"),
         ENABLE_PHASE2_RESEARCH,
     )
 
-    VIDEO_API_KEY = str(config.get("video_api_key") or VIDEO_API_KEY or API_KEY).strip()
-    VIDEO_BASE_URL = str(config.get("video_base_url") or VIDEO_BASE_URL or BASE_URL).strip()
-    VIDEO_MODEL_NAME = str(config.get("video_model_name") or VIDEO_MODEL_NAME or "").strip()
+    VIDEO_API_KEY = _coerce_runtime_text(config.get("video_api_key"), API_KEY)
+    VIDEO_BASE_URL = _coerce_runtime_text(config.get("video_base_url"), BASE_URL)
+    VIDEO_MODEL_NAME = _coerce_runtime_text(
+        config.get("video_model_name"),
+        _coerce_runtime_text(VIDEO_MODEL_NAME, MODEL_NAME),
+    )
 
-    TTS_API_KEY = str(config.get("tts_api_key") or TTS_API_KEY or API_KEY).strip()
-    TTS_BASE_URL = str(config.get("tts_base_url") or TTS_BASE_URL or BASE_URL).strip()
-    TTS_MODEL_NAME = str(config.get("tts_model_name") or TTS_MODEL_NAME or "").strip()
+    TTS_API_KEY = _coerce_runtime_text(config.get("tts_api_key"), API_KEY)
+    TTS_BASE_URL = _coerce_runtime_text(config.get("tts_base_url"), BASE_URL)
+    TTS_MODEL_NAME = _coerce_runtime_text(
+        config.get("tts_model_name"),
+        _coerce_runtime_text(TTS_MODEL_NAME),
+    )
 
     import graph as graph_module
     import tools as tools_module
