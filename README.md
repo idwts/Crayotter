@@ -107,6 +107,41 @@ Single task mode:
 python script\agent.py "Create a 1-minute campus-themed promo video"
 ```
 
+### 5) Run the Workbench GUI
+
+Start the local backend service:
+
+```bash
+python script\run_backend.py --host 127.0.0.1 --port 8765
+```
+
+Then open the local workbench in your browser:
+
+```text
+http://127.0.0.1:8765/ui/
+```
+
+The workbench supports:
+
+- task creation in `demo` and `agent` modes
+- local configuration management
+- task history
+- structured logs and event viewing
+- artifact preview and download
+
+The backend also exposes local runtime routes such as:
+
+- `GET /health`
+- `GET /config`
+- `PUT /config`
+- `GET /jobs`
+- `POST /jobs`
+- `GET /jobs/{job_id}`
+- `GET /jobs/{job_id}/events`
+- `POST /jobs/{job_id}/cancel`
+
+> The GUI stores local runtime state under `app_state/`. Do not commit `app_state/config.json`.
+
 ---
 
 ## Log Trace Visualization

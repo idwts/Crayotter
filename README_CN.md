@@ -106,6 +106,41 @@ python script\agent.py
 python script\agent.py "制作一个1分钟校园主题宣传片"
 ```
 
+### 5）运行图形化工作台
+
+启动本地后端服务：
+
+```bash
+python script\run_backend.py --host 127.0.0.1 --port 8765
+```
+
+然后在浏览器打开：
+
+```text
+http://127.0.0.1:8765/ui/
+```
+
+工作台当前支持：
+
+- 创建 `demo` 和 `agent` 任务
+- 本地配置管理
+- 任务历史查看
+- 结构化日志与事件查看
+- 产物预览与打开
+
+后端同时暴露这些本地接口：
+
+- `GET /health`
+- `GET /config`
+- `PUT /config`
+- `GET /jobs`
+- `POST /jobs`
+- `GET /jobs/{job_id}`
+- `GET /jobs/{job_id}/events`
+- `POST /jobs/{job_id}/cancel`
+
+> 图形化工作台会把本地运行状态写到 `app_state/`。不要提交 `app_state/config.json`。
+
 ---
 
 ## 日志轨迹可视化
