@@ -26,6 +26,8 @@ import mimetypes
 
 import shutil
 
+import time
+
 try:
     import certifi
     os.environ['SSL_CERT_FILE'] = certifi.where()
@@ -60,8 +62,12 @@ import cv2
 from langchain_core.tools import tool
 
 from openai import OpenAI
+from app.runtime_paths import configure_runtime_environment, get_bundle_root, get_runtime_root
 
-CURRENT_DIR = Path(__file__).resolve().parent.parent.parent
+configure_runtime_environment()
+
+BUNDLE_DIR = get_bundle_root()
+CURRENT_DIR = get_runtime_root()
 
 WORKSPACE = CURRENT_DIR / "temp"
 
@@ -69,7 +75,25 @@ USER_WORKSPACE = CURRENT_DIR / "user_temp"
 
 MEMORY_EXPERIENCE_DIR = CURRENT_DIR / "memory_experience"
 
-LOGS_DIR = CURRENT_DIR / "logs"
+def _select_logs_dir() -> Path:
+    primary = CURRENT_DIR / "logs"
+    fallback = CURRENT_DIR / "runtime_logs"
+
+    for candidate in (primary, fallback):
+        try:
+            candidate.mkdir(parents=True, exist_ok=True)
+            probe = candidate / ".write_test"
+            probe.write_text("ok", encoding="utf-8")
+            probe.unlink(missing_ok=True)
+            return candidate
+        except Exception:
+            continue
+
+    fallback.mkdir(parents=True, exist_ok=True)
+    return fallback
+
+
+LOGS_DIR = _select_logs_dir()
 
 WORKSPACE.mkdir(parents=True, exist_ok=True)
 
@@ -238,12 +262,21 @@ def _generate_query_variants(query: str, max_variants: int) -> list[str]:
 
 def _expand_queries(query: str, max_variants: int = 3) -> list[str]:
     base = query.strip()
-    expanded = [base] if base else []
-    variants = _generate_query_variants(base, max_variants)
+    if not base:
+        return []
+
+    # max_variants 表示“最终最多保留多少条查询”，包含原始 query 本身。
+    expanded = [base]
+    if max_variants <= 1:
+        return expanded
+
+    variants = _generate_query_variants(base, max_variants=max_variants - 1)
     for v in variants:
         if v not in expanded:
             expanded.append(v)
-    return expanded
+        if len(expanded) >= max_variants:
+            break
+    return expanded[:max_variants]
 
 def _dedupe_by_key(items: list[dict[str, Any]], key: str) -> list[dict[str, Any]]:
     seen: set[str] = set()
@@ -854,7 +887,14 @@ def _extract_audio_for_analysis(video_path: Path) -> Path | None:
         str(audio_path),
     ]
     try:
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
+        result = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="ignore",
+            timeout=120,
+        )
         if result.returncode == 0 and audio_path.exists() and audio_path.stat().st_size > 0:
             return audio_path
         logger.warning("⚠️ ffmpeg 提取音频失败: %s", (result.stderr or "")[:300])
@@ -899,11 +939,39 @@ def _prepare_timestamped_video_for_analysis(video_path: Path) -> Path | None:
         str(stamped_path),
     ]
     try:
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
-        if result.returncode == 0 and stamped_path.exists() and stamped_path.stat().st_size > 0:
+        process = subprocess.Popen(
+            cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            encoding="utf-8",
+            errors="ignore",
+        )
+        heartbeat_interval = 15
+        timeout_seconds = 300
+        started = time.monotonic()
+        stderr_text = ""
+        while True:
+            try:
+                _, stderr_text = process.communicate(timeout=heartbeat_interval)
+                break
+            except subprocess.TimeoutExpired:
+                elapsed = time.monotonic() - started
+                logger.info(
+                    "⏳ 时间戳分析视频生成中: %s, elapsed=%.0fs",
+                    video_path.name,
+                    elapsed,
+                )
+                if elapsed >= timeout_seconds:
+                    process.kill()
+                    _, stderr_text = process.communicate()
+                    logger.warning("⚠️ 生成时间戳分析视频超时: %s", video_path.name)
+                    return None
+
+        if process.returncode == 0 and stamped_path.exists() and stamped_path.stat().st_size > 0:
             logger.info("🕒 已生成时间戳分析视频: %s", stamped_path)
             return stamped_path
-        logger.warning("⚠️ 生成时间戳分析视频失败: %s", (result.stderr or "")[:300])
+        logger.warning("⚠️ 生成时间戳分析视频失败: %s", (stderr_text or "")[:300])
     except Exception as e:
         logger.warning("⚠️ 生成时间戳分析视频异常: %s", e)
     return None

@@ -1,2 +1,11 @@
 __pycache__/
 *.pyc
+app_state/
+temp/
+user_temp/
+runtime_logs/
+dist/
+build/
+app/bin/
+packaging/
+requirements-desktop.txt

@@ -1,0 +1,131 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Crayotter 创作助手</title>
+  <link rel="stylesheet" href="./styles.css">
+</head>
+<body>
+  <div class="app-shell">
+    <aside id="sidebar" class="sidebar">
+      <div class="sidebar-top">
+        <div class="sidebar-top-actions">
+          <button id="toggleSidebarBtn" class="icon-button" type="button" aria-label="收起或展开任务历史">☰</button>
+          <button id="newChatBtn" class="icon-button" type="button" aria-label="新对话" title="新对话">＋</button>
+        </div>
+        <div class="sidebar-title-group">
+          <div class="sidebar-title">任务历史</div>
+          <div id="jobsMeta" class="sidebar-meta">0 个任务</div>
+        </div>
+        <button id="refreshJobsBtn" class="ghost-button compact" type="button">刷新</button>
+      </div>
+
+      <div id="jobsList" class="jobs-list empty-state">
+        还没有历史任务。
+      </div>
+    </aside>
+
+    <main class="main-panel">
+      <header class="topbar">
+        <div class="topbar-left">
+          <h1>创作助手</h1>
+          <p id="healthText" class="topbar-subtitle">正在连接服务...</p>
+        </div>
+        <div class="topbar-actions">
+          <input id="uploadInput" type="file" accept=".mp4,.mov,.mkv,.avi,.webm,.m4v,.mpeg,.mpg,video/*" multiple hidden>
+          <button id="uploadBtn" class="ghost-button" type="button">上传视频</button>
+          <button id="apiSettingsBtn" class="ghost-button" type="button">API 设置与更改</button>
+        </div>
+      </header>
+
+      <section class="workspace">
+        <section id="uploadPanel" class="upload-panel">
+          <div class="upload-panel-head">
+            <div class="upload-panel-head-main">
+              <h2>本地素材</h2>
+              <p class="upload-panel-subtitle">上传后会保存到 <code>user_temp</code>，任务规划时会自动看到这些视频。</p>
+            </div>
+            <div class="upload-panel-head-actions">
+              <button id="toggleUploadsBtn" class="ghost-button compact" type="button" aria-pressed="false" title="收起或展开本地素材面板">收起素材</button>
+              <button id="refreshUploadsBtn" class="ghost-button compact" type="button">刷新素材</button>
+            </div>
+          </div>
+          <div id="uploadsList" class="uploads-list empty-state">
+            还没有上传本地素材。
+          </div>
+        </section>
+        <section class="chat-panel">
+          <div id="chatMessages" class="chat-messages"></div>
+        </section>
+      </section>
+
+      <section class="composer-shell">
+        <form id="jobForm" class="composer-form">
+          <div class="composer-input-shell">
+            <textarea id="taskInput" rows="4" placeholder="输入你的任务，例如：做一个 1 分钟的校园宣传短片，风格清新，有字幕和旁白。"></textarea>
+            <div class="composer-actions">
+              <button id="phase2ToggleBtn" class="ghost-button compact phase2-toggle-button" type="button" aria-pressed="true" title="切换是否启用 Phase 2 深度研究">Phase 2 开</button>
+              <select id="modeSelect">
+                <option value="demo">演示模式</option>
+                <option value="agent">真实 Agent</option>
+              </select>
+              <button id="actionJobBtn" class="primary-button icon-action-button" type="button" aria-label="发送任务" title="发送任务">↑</button>
+            </div>
+          </div>
+        </form>
+      </section>
+    </main>
+  </div>
+
+  <div id="settingsModal" class="modal hidden">
+    <div class="modal-backdrop" data-close-modal="true"></div>
+    <section class="modal-card">
+      <div class="modal-head">
+        <div>
+          <h2>API 设置</h2>
+          <p class="modal-text">第一次进入先配置一次。保存后，后续会默认记住，你只需要在这里修改。</p>
+        </div>
+        <button id="closeSettingsBtn" class="ghost-button modal-close-button" type="button" aria-label="关闭">×</button>
+      </div>
+
+      <form id="configForm" class="stack-form">
+        <label>
+          <span>接口密钥</span>
+          <input id="apiKeyInput" type="password" placeholder="填入你的 API Key">
+        </label>
+
+        <details class="advanced-box">
+          <summary>高级配置</summary>
+          <div class="advanced-fields">
+            <label>
+              <span>服务地址</span>
+              <input id="baseUrlInput" type="text" placeholder="https://.../v1">
+            </label>
+            <label>
+              <span>主模型</span>
+              <input id="modelInput" type="text" placeholder="qwen-plus">
+            </label>
+            <label>
+              <span>视频模型</span>
+              <input id="videoModelInput" type="text" placeholder="qwen-vl-max-latest">
+            </label>
+            <label>
+              <span>语音模型</span>
+              <input id="ttsModelInput" type="text" placeholder="qwen-tts-latest">
+            </label>
+          </div>
+        </details>
+
+        <div class="modal-actions">
+          <button id="reloadConfigBtn" class="ghost-button" type="button">重新读取</button>
+          <button class="primary-button" type="submit">保存</button>
+        </div>
+        <div id="configMessage" class="inline-message"></div>
+      </form>
+    </section>
+  </div>
+
+  <script src="./app.js"></script>
+</body>
+</html>
