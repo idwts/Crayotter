@@ -29,19 +29,19 @@ def export_video(
         if resolved_input is None:
             return f"导出出错: 输入视频不存在或不在WORKSPACE: {input_path}"
 
-        res_map = {"720p": (1280, 720), "1080p": (1920, 1080), "4k": (3840, 2160)}
-        target = res_map.get(resolution, (1920, 1080))
         output_path = _safe_output_video_path(output_name, default_stem="output_final")
 
-        clip = VideoFileClip(str(resolved_input))
-        if clip.size != target:
-            clip = clip.resized(target)
+        source_clip = VideoFileClip(str(resolved_input))
+        target = _pick_export_target_size(resolution, source_clip.size)
+        clip = source_clip if source_clip.size == target else _fit_clip_to_canvas(source_clip, target)
         clip.write_videofile(
             str(output_path), codec="libx264", audio_codec="aac",
             bitrate="8000k", logger=None
         )
         dur = clip.duration
         clip.close()
+        if clip is not source_clip:
+            source_clip.close()
 
         return json.dumps({
             "status": "success",

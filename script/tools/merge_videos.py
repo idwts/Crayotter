@@ -54,21 +54,35 @@ def merge_videos(
         if not clips:
             return "合并出错: 没有可合并的有效片段"
 
-        target_w, target_h = clips[0].size
-        resized: list[Any] = []
+        landscape_clips = [clip for clip in clips if clip.size[0] >= clip.size[1]]
+        portrait_clips = [clip for clip in clips if clip.size[1] > clip.size[0]]
+        anchor_clip = (
+            portrait_clips[0]
+            if portrait_clips and len(portrait_clips) > len(landscape_clips)
+            else landscape_clips[0]
+            if landscape_clips
+            else clips[0]
+        )
+        target_w, target_h = anchor_clip.size
+        fitted_clips: list[Any] = []
         for c in clips:
-            if c.size != (target_w, target_h):
-                c = c.resized((target_w, target_h))
-            resized.append(c)
+            fitted_clips.append(_fit_clip_to_canvas(c, (target_w, target_h)))
 
-        final = concatenate_videoclips(resized, method="compose")
+        final = concatenate_videoclips(fitted_clips, method="compose")
         final.write_videofile(
             str(output_path), codec="libx264", audio_codec="aac", logger=None
         )
         total_dur = sum(c.duration for c in clips)
-        for c in clips:
-            c.close()
         final.close()
+        seen_ids: set[int] = set()
+        for clip_obj in [*fitted_clips, *clips]:
+            if id(clip_obj) in seen_ids:
+                continue
+            seen_ids.add(id(clip_obj))
+            try:
+                clip_obj.close()
+            except Exception:
+                pass
 
         return json.dumps({
             "status": "success",
@@ -76,6 +90,7 @@ def merge_videos(
             "total_duration": round(total_dur, 1),
             "num_clips": len(clips),
             "target_duration": target_duration,
+            "canvas_size": f"{target_w}x{target_h}",
         }, ensure_ascii=False)
     except Exception as e:
         return f"合并出错: {e}"

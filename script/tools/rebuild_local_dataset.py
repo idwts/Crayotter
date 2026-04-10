@@ -14,11 +14,7 @@ def rebuild_local_dataset(
     便于后续时间线规划、转场规划、旁白规划工具复用。
     """
     try:
-        analysis_files = sorted(
-            WORKSPACE.glob("*_analysis.json"),
-            key=lambda p: p.stat().st_mtime,
-            reverse=True,
-        )
+        analysis_files = _iter_analysis_json_files()
         if not analysis_files:
             return "数据集重构出错: 未找到 *_analysis.json，请先执行 analyze_video"
 

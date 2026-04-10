@@ -57,7 +57,7 @@ def search_youtobe_video(
                 duration_seconds = _parse_duration_to_seconds(
                     data.get("duration", data.get("duration_string"))
                 )
-                all_videos.append({
+                candidate = {
                     "title": data.get("title", "N/A"),
                     "url": data.get("url")
                     or f"https://www.youtube.com/watch?v={data.get('id', '')}",
@@ -66,7 +66,11 @@ def search_youtobe_video(
                     "description": (data.get("description") or "")[:200],
                     "source": "youtube",
                     "query": q,
-                })
+                }
+                orientation_hint, orientation_source = _detect_candidate_orientation(candidate)
+                candidate["orientation_hint"] = orientation_hint
+                candidate["orientation_source"] = orientation_source
+                all_videos.append(candidate)
 
         total_found = len(all_videos)
         deduped = _dedupe_by_key(all_videos, "url")

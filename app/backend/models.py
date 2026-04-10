@@ -46,6 +46,10 @@ class AppConfig(BaseModel):
     )
     allow_demo_jobs: bool = True
     workspace_root: str = "app_state"
+    enable_phase2_research: bool = True
+    direct_phase3_execution: bool = False
+    prefer_local_materials: bool = False
+    agent_stall_timeout_seconds: int = Field(default=150, ge=10)
 
     def get_profile(self, profile_name: str | None = None) -> ServiceProfile:
         name = profile_name or self.active_profile
@@ -59,7 +63,9 @@ class JobRequest(BaseModel):
     task: str = Field(min_length=1)
     mode: Literal["agent", "demo"] = "agent"
     profile: str | None = None
-    enable_phase2_research: bool = True
+    enable_phase2_research: bool | None = None
+    direct_phase3_execution: bool | None = None
+    prefer_local_materials: bool | None = None
 
 
 class RuntimeEvent(BaseModel):
@@ -75,6 +81,8 @@ class JobRecord(BaseModel):
     task: str
     mode: Literal["agent", "demo"]
     enable_phase2_research: bool = True
+    direct_phase3_execution: bool = False
+    prefer_local_materials: bool = False
     status: Literal["queued", "running", "completed", "failed", "cancelled"] = "queued"
     profile: str | None = None
     created_at: str = Field(default_factory=utc_now_iso)

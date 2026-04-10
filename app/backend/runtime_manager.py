@@ -18,7 +18,7 @@ from app.runtime_paths import configure_runtime_environment, get_bundle_root, ge
 
 
 class ManagedJob:
-    def __init__(self, record: JobRecord, job_dir: Path) -> None:
+    def __init__(self, record: JobRecord, job_dir: Path, stall_timeout_seconds: int = 150) -> None:
         self.record = record
         self.job_dir = job_dir
         self.bus = EventBus()
@@ -29,10 +29,11 @@ class ManagedJob:
         self.summary_path = job_dir / "summary.json"
         self.lock = threading.RLock()
         self.last_activity_monotonic = time.monotonic()
+        self.stall_timeout_seconds = max(10, int(stall_timeout_seconds))
 
 
 class RuntimeManager:
-    AGENT_STALL_TIMEOUT_SECONDS = 150
+    AGENT_STALL_TIMEOUT_SECONDS = 600
 
     def __init__(self, config_store: ConfigStore) -> None:
         self.config_store = config_store
@@ -76,6 +77,23 @@ class RuntimeManager:
         if request.mode == "demo" and not config.allow_demo_jobs:
             raise ValueError("Demo jobs are disabled in configuration.")
 
+        enable_phase2_research = (
+            config.enable_phase2_research
+            if request.enable_phase2_research is None
+            else request.enable_phase2_research
+        )
+        direct_phase3_execution = (
+            config.direct_phase3_execution
+            if request.direct_phase3_execution is None
+            else request.direct_phase3_execution
+        )
+        prefer_local_materials = (
+            config.prefer_local_materials
+            if request.prefer_local_materials is None
+            else request.prefer_local_materials
+        )
+        stall_timeout_seconds = max(10, int(config.agent_stall_timeout_seconds or self.AGENT_STALL_TIMEOUT_SECONDS))
+
         with self._lock:
             running = [
                 job.record.job_id
@@ -94,11 +112,17 @@ class RuntimeManager:
                 job_id=job_id,
                 task=request.task,
                 mode=request.mode,
-                enable_phase2_research=request.enable_phase2_research,
+                enable_phase2_research=enable_phase2_research,
+                direct_phase3_execution=direct_phase3_execution,
+                prefer_local_materials=prefer_local_materials,
                 profile=request.profile or config.active_profile,
                 job_dir=str(job_dir),
             )
-            job = ManagedJob(record=record, job_dir=job_dir)
+            job = ManagedJob(
+                record=record,
+                job_dir=job_dir,
+                stall_timeout_seconds=stall_timeout_seconds,
+            )
             self._jobs[job_id] = job
 
         self._write_summary(job)
@@ -172,12 +196,25 @@ class RuntimeManager:
             self._mark_failed(job, str(exc))
 
     def _run_demo_job(self, job: ManagedJob, request: JobRequest) -> None:
-        phase_steps = [
-            ("phase1", "planner", "拆解任务并估算素材需求", "search_bilibili_video", "已整理出 4 个素材检索方向"),
-            ("phase1", "executor", "筛选最合适的候选素材", "rank_video_candidates", "已筛出 6 条高匹配候选"),
-            ("phase3", "react_editor", "裁剪、合并并添加旁白", "add_narration_segments", "已完成转场与分段配音"),
-        ]
-        if request.enable_phase2_research:
+        if job.record.direct_phase3_execution:
+            phase_steps = [
+                ("phase1", "executor", "复用现有本地素材并补齐多模态分析", "analyze_video", "已完成本地素材分析，直接进入创作阶段"),
+                ("phase3", "react_editor", "裁剪、合并并添加旁白", "add_narration_segments", "已完成转场与分段配音"),
+            ]
+        elif job.record.prefer_local_materials:
+            phase_steps = [
+                ("phase1", "executor", "优先分析本地素材并评估覆盖度", "analyze_video", "已完成本地素材分析，发现主体内容已具备"),
+                ("phase1", "planner", "仅在本地素材不足时补充搜索", "search_bilibili_video", "已检索到少量补充素材"),
+                ("phase1", "executor", "筛选最合适的补充素材", "rank_video_candidates", "已筛出 3 条高匹配补充候选"),
+                ("phase3", "react_editor", "裁剪、合并并添加旁白", "add_narration_segments", "已完成转场与分段配音"),
+            ]
+        else:
+            phase_steps = [
+                ("phase1", "planner", "拆解任务并估算素材需求", "search_bilibili_video", "已整理出 4 个素材检索方向"),
+                ("phase1", "executor", "筛选最合适的候选素材", "rank_video_candidates", "已筛出 6 条高匹配候选"),
+                ("phase3", "react_editor", "裁剪、合并并添加旁白", "add_narration_segments", "已完成转场与分段配音"),
+            ]
+        if job.record.enable_phase2_research and not job.record.direct_phase3_execution:
             phase_steps.insert(
                 2,
                 ("phase2", "editing_research", "生成剪辑蓝图", "", "蓝图已生成，包含 5 段叙事结构"),
@@ -241,13 +278,16 @@ class RuntimeManager:
         profile = config.get_profile(request.profile)
         if not profile.api_key:
             raise RuntimeError(
-                "The selected profile does not have an API key. Update app_state/config.json or call PUT /config first."
+                "The selected profile does not have an API key. Update runtime .env or call PUT /config first."
             )
 
         config_path = job.job_dir / "runtime_profile.json"
         task_path = job.job_dir / "task.txt"
         runtime_config = profile.to_runtime_config()
-        runtime_config["enable_phase2_research"] = request.enable_phase2_research
+        runtime_config["enable_phase2_research"] = job.record.enable_phase2_research
+        runtime_config["direct_phase3_execution"] = job.record.direct_phase3_execution
+        runtime_config["prefer_local_materials"] = job.record.prefer_local_materials
+        runtime_config["agent_stall_timeout_seconds"] = job.stall_timeout_seconds
         config_path.write_text(
             json.dumps(runtime_config, ensure_ascii=False, indent=2),
             encoding="utf-8",
@@ -375,11 +415,11 @@ class RuntimeManager:
                 return
 
             idle_seconds = time.monotonic() - job.last_activity_monotonic
-            if idle_seconds < self.AGENT_STALL_TIMEOUT_SECONDS:
+            if idle_seconds < job.stall_timeout_seconds:
                 time.sleep(2)
                 continue
 
-            timeout_seconds = self.AGENT_STALL_TIMEOUT_SECONDS
+            timeout_seconds = job.stall_timeout_seconds
             self._publish(
                 job,
                 "job_stalled",

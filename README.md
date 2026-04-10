@@ -23,6 +23,7 @@ It combines **planning**, **deep editing research**, and **tool-based execution*
 
 ## NEWS
 
+- 2026.4.10：The release has been updated.
 - 2026.3.30: The first release version is now available. See [v0.1.0-demo](https://github.com/idwts/Crayotter/releases/tag/v0.1.0-demo).
 
 ---
@@ -41,7 +42,7 @@ Supporting folders:
 - **`temp\`**: Intermediate and output artifacts during execution.
 - **`user_temp\`**: User-provided local source assets.
 - **`logs\`**: Runtime logs (`video_agent_*.log`).
-- **`memory_experience\`**: Persisted post-task skills/memory summaries.
+- **`memory_experience\`**: Concise historical-case notes kept for reference only; they must not override the current task goal.
 - **`website\`**: Static launch site and GitHub Pages assets.
 
 ---
@@ -61,7 +62,7 @@ Crayotter uses a three-phase architecture:
    - Build a structured editing blueprint (narrative, rhythm, transitions, narration strategy)
    - No editing tools are called in this phase
 
-   This phase can be disabled with `ENABLE_PHASE2_RESEARCH = False` in `script\agent.py` to save tokens.
+   This phase can be disabled with `CRAYOTTER_ENABLE_PHASE2_RESEARCH=false` in the runtime `.env` to save tokens.
    When disabled, the workflow becomes: Phase 1 → Phase 3.
 
 3. **Phase 3 — ReAct Editing Execution**
@@ -87,15 +88,38 @@ python -m venv .venv
 pip install -r requirements.txt
 ```
 
-### 3) Configure API Endpoints and Keys
+### 3) Configure API Endpoints and Runtime Options
 
-Edit the API configuration block in `script\agent.py` (model API, video API, and TTS API settings).
+Copy `.env.example` to `.env`, then edit the values there:
 
-You can also control whether Phase 2 runs:
-
-```python
-ENABLE_PHASE2_RESEARCH = True  # True: run Phase 2, False: skip to Phase 3
+```bash
+copy .env.example .env
 ```
+
+Common options:
+
+```env
+CRAYOTTER_API_KEY=your-key
+CRAYOTTER_BASE_URL=https://dashscope.aliyuncs.com/compatible-mode/v1
+CRAYOTTER_MODEL_NAME=qwen-plus
+CRAYOTTER_VIDEO_MODEL_NAME=qwen-vl-max-latest
+CRAYOTTER_TTS_MODEL_NAME=qwen-tts-latest
+
+CRAYOTTER_ENABLE_PHASE2_RESEARCH=true
+CRAYOTTER_DIRECT_PHASE3_EXECUTION=false
+CRAYOTTER_PREFER_LOCAL_MATERIALS=false
+CRAYOTTER_AGENT_STALL_TIMEOUT_SECONDS=150
+```
+
+Notes:
+
+- `CRAYOTTER_DIRECT_PHASE3_EXECUTION=true` skips material search/download and goes straight into the existing-material analysis + Phase 3 execution path.
+- `CRAYOTTER_PREFER_LOCAL_MATERIALS=true` analyzes local materials first and only searches online when the current materials are not enough.
+- `CRAYOTTER_AGENT_STALL_TIMEOUT_SECONDS` controls the “no new progress” watchdog threshold for running jobs.
+- The workbench UI writes API settings, Phase 2, direct Phase 3, local-first mode, and timeout changes back to the same `.env`.
+- Candidate ranking now treats target orientation as a scoring factor: landscape by default, portrait when the user explicitly asks for it. Merge/export also use scale-to-cover plus centered crop instead of direct stretching.
+- For videos under `user_temp`, Crayotter now writes the matching `*_analysis.json` back into `user_temp`, reuses it on later runs, and removes the paired JSON when that upload is deleted from the workbench.
+- `memory_experience\latest_skills.md` is automatically compacted into bounded, reference-only case notes so it does not grow indefinitely or redefine future task goals.
 
 > Security note: never commit real API keys to version control.
 
@@ -130,7 +154,7 @@ http://127.0.0.1:8765/ui/
 The workbench supports:
 
 - task creation in `demo` and `agent` modes
-- local configuration management
+- local configuration management with `.env` sync
 - task history
 - structured logs and event viewing
 - artifact preview and download
@@ -146,7 +170,7 @@ The backend also exposes local runtime routes such as:
 - `GET /jobs/{job_id}/events`
 - `POST /jobs/{job_id}/cancel`
 
-> The GUI stores local runtime state under `app_state/`. Do not commit `app_state/config.json`.
+> The GUI uses the runtime-root `.env` as the only configuration source of truth. Do not commit real `.env` values.
 
 ---
 

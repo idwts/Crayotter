@@ -484,6 +484,8 @@ textarea {
 
 .upload-card-main {
   min-width: 0;
+  display: grid;
+  gap: 4px;
 }
 
 .upload-card-title {
@@ -493,8 +495,41 @@ textarea {
   word-break: break-word;
 }
 
+.upload-card-title-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.upload-analysis-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 11px;
+  line-height: 1.4;
+  white-space: nowrap;
+}
+
+.upload-analysis-badge.ready {
+  color: var(--success);
+  background: rgba(15, 118, 110, 0.08);
+}
+
+.upload-analysis-badge.missing {
+  color: #8a4a18;
+  background: rgba(180, 106, 51, 0.1);
+}
+
 .upload-card-meta {
-  margin-top: 4px;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--ink-soft);
+  word-break: break-word;
+}
+
+.upload-card-note {
   font-size: 12px;
   line-height: 1.5;
   color: var(--ink-soft);
@@ -755,7 +790,7 @@ select:focus {
 textarea {
   resize: none;
   min-height: 62px;
-  padding: 12px 14px 52px 14px;
+  padding: 12px 14px 96px 14px;
 }
 
 .composer-actions {
@@ -765,17 +800,21 @@ textarea {
   display: flex;
   align-items: center;
   gap: 8px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  max-width: calc(100% - 28px);
 }
 
 .composer-actions select {
   width: auto;
-  min-width: 120px;
+  min-width: 112px;
   height: 38px;
   padding: 8px 12px;
   background: rgba(251, 248, 243, 0.96);
 }
 
-.phase2-toggle-button {
+.phase2-toggle-button,
+.phase-toggle-button {
   min-width: 108px;
   height: 38px;
   padding: 8px 12px;
@@ -784,7 +823,8 @@ textarea {
   color: #7a4b24;
 }
 
-.phase2-toggle-button.is-disabled {
+.phase2-toggle-button.is-disabled,
+.phase-toggle-button.is-disabled {
   border-color: rgba(107, 114, 128, 0.18);
   background: linear-gradient(180deg, rgba(246, 242, 236, 0.98) 0%, rgba(234, 229, 223, 0.98) 100%);
   color: var(--ink-soft);
@@ -813,20 +853,22 @@ textarea {
 
 .modal-card {
   position: relative;
-  width: min(500px, calc(100% - 24px));
+  width: min(680px, calc(100% - 24px));
+  max-height: calc(100vh - 96px);
   margin: 68px auto 0;
   padding: 22px 22px 18px;
   border-radius: 24px;
   background: rgba(252, 248, 241, 0.98);
   box-shadow: 0 24px 60px rgba(56, 43, 31, 0.18);
   animation: modal-in 240ms var(--ease-smooth);
+  overflow: auto;
 }
 
 .modal-text {
   margin: 4px 0 0;
   line-height: 1.55;
   font-size: 13px;
-  max-width: 360px;
+  max-width: 100%;
 }
 
 .modal-close-button {
@@ -856,6 +898,7 @@ textarea {
 
 .advanced-fields {
   margin-top: 12px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
 }
 
 .sidebar.collapsed .sidebar-top {
@@ -987,6 +1030,10 @@ textarea {
   .ghost-button,
   .primary-button {
     width: 100%;
+  }
+
+  .advanced-fields {
+    grid-template-columns: 1fr;
   }
 
   .detail-inline-list {

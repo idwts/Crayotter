@@ -13,6 +13,11 @@ from typing import Any, Callable, Mapping
 
 from openai import OpenAI
 from app.runtime_paths import configure_runtime_environment, get_runtime_root, runtime_path
+from memory_reference import (
+    STORAGE_MEMORY_CHAR_LIMIT,
+    load_memory_reference,
+    sanitize_memory_reference,
+)
 
 # ═══════════════════════════════════════════════════════════════════════════
 # API 配置 - 请在此处设置你的密钥和中转站地址
@@ -26,6 +31,12 @@ MODEL_NAME = os.environ.get("CRAYOTTER_MODEL_NAME", "qwen-plus")
 ENABLE_PHASE2_RESEARCH = str(
     os.environ.get("CRAYOTTER_ENABLE_PHASE2_RESEARCH", "true")
 ).strip().lower() not in {"0", "false", "no", "off"}
+DIRECT_PHASE3_EXECUTION = str(
+    os.environ.get("CRAYOTTER_DIRECT_PHASE3_EXECUTION", "false")
+).strip().lower() not in {"0", "false", "no", "off"}
+PREFER_LOCAL_MATERIALS = str(
+    os.environ.get("CRAYOTTER_PREFER_LOCAL_MATERIALS", "false")
+).strip().lower() not in {"0", "false", "no", "off"}
 
 VIDEO_API_KEY = os.environ.get("CRAYOTTER_VIDEO_API_KEY") or API_KEY
 VIDEO_BASE_URL = os.environ.get("CRAYOTTER_VIDEO_BASE_URL", BASE_URL)
@@ -35,6 +46,13 @@ VIDEO_MODEL_NAME = os.environ.get("CRAYOTTER_VIDEO_MODEL_NAME", "qwen-vl-max-lat
 TTS_API_KEY = os.environ.get("CRAYOTTER_TTS_API_KEY") or API_KEY
 TTS_BASE_URL = os.environ.get("CRAYOTTER_TTS_BASE_URL", "https://dashscope.aliyuncs.com/compatible-mode/v1")
 TTS_MODEL_NAME = os.environ.get("CRAYOTTER_TTS_MODEL_NAME", "qwen-tts-latest")
+try:
+    AGENT_STALL_TIMEOUT_SECONDS = max(
+        10,
+        int(os.environ.get("CRAYOTTER_AGENT_STALL_TIMEOUT_SECONDS", "150") or 150),
+    )
+except (TypeError, ValueError):
+    AGENT_STALL_TIMEOUT_SECONDS = 150
 
 # 配置 agent 日志（始终写到仓库根目录 logs/）
 SCRIPT_DIR = Path(__file__).resolve().parent
@@ -109,12 +127,15 @@ def _emit_runtime_event(
     )
 
 
-def _build_runtime_settings() -> dict[str, str]:
+def _build_runtime_settings() -> dict[str, Any]:
     return {
         "api_key": API_KEY,
         "base_url": BASE_URL,
         "model_name": MODEL_NAME,
         "enable_phase2_research": ENABLE_PHASE2_RESEARCH,
+        "direct_phase3_execution": DIRECT_PHASE3_EXECUTION,
+        "prefer_local_materials": PREFER_LOCAL_MATERIALS,
+        "agent_stall_timeout_seconds": AGENT_STALL_TIMEOUT_SECONDS,
         "video_api_key": VIDEO_API_KEY,
         "video_base_url": VIDEO_BASE_URL,
         "video_model_name": VIDEO_MODEL_NAME,
@@ -148,8 +169,17 @@ def _coerce_runtime_text(value: Any, default: str = "") -> str:
     return text
 
 
-def apply_runtime_config(config: Mapping[str, Any] | None = None) -> dict[str, str]:
+def _coerce_positive_int(value: Any, default: int) -> int:
+    try:
+        parsed = int(str(value or "").strip())
+    except (TypeError, ValueError):
+        return default
+    return parsed if parsed > 0 else default
+
+
+def apply_runtime_config(config: Mapping[str, Any] | None = None) -> dict[str, Any]:
     global API_KEY, BASE_URL, MODEL_NAME, ENABLE_PHASE2_RESEARCH
+    global DIRECT_PHASE3_EXECUTION, PREFER_LOCAL_MATERIALS, AGENT_STALL_TIMEOUT_SECONDS
     global VIDEO_API_KEY, VIDEO_BASE_URL, VIDEO_MODEL_NAME
     global TTS_API_KEY, TTS_BASE_URL, TTS_MODEL_NAME
 
@@ -161,6 +191,18 @@ def apply_runtime_config(config: Mapping[str, Any] | None = None) -> dict[str, s
     ENABLE_PHASE2_RESEARCH = _coerce_bool(
         config.get("enable_phase2_research"),
         ENABLE_PHASE2_RESEARCH,
+    )
+    DIRECT_PHASE3_EXECUTION = _coerce_bool(
+        config.get("direct_phase3_execution"),
+        DIRECT_PHASE3_EXECUTION,
+    )
+    PREFER_LOCAL_MATERIALS = _coerce_bool(
+        config.get("prefer_local_materials"),
+        PREFER_LOCAL_MATERIALS,
+    )
+    AGENT_STALL_TIMEOUT_SECONDS = _coerce_positive_int(
+        config.get("agent_stall_timeout_seconds"),
+        AGENT_STALL_TIMEOUT_SECONDS,
     )
 
     VIDEO_API_KEY = _coerce_runtime_text(config.get("video_api_key"), API_KEY)
@@ -184,6 +226,8 @@ def apply_runtime_config(config: Mapping[str, Any] | None = None) -> dict[str, s
     graph_module.BASE_URL = BASE_URL
     graph_module.MODEL_NAME = MODEL_NAME
     graph_module.ENABLE_PHASE2_RESEARCH = ENABLE_PHASE2_RESEARCH
+    graph_module.DIRECT_PHASE3_EXECUTION = DIRECT_PHASE3_EXECUTION
+    graph_module.PREFER_LOCAL_MATERIALS = PREFER_LOCAL_MATERIALS
     tools_module.configure(
         api_key=API_KEY,
         base_url=BASE_URL,
@@ -473,21 +517,7 @@ def _find_latest_output_video() -> Path | None:
 
 
 def _load_latest_skills(max_chars: int = 24000) -> str:
-    latest = MEMORY_EXPERIENCE_DIR / "latest_skills.md"
-    if latest.exists():
-        text = _load_file_text(latest, max_chars=max_chars).strip()
-        if text:
-            return text
-    candidates = sorted(
-        MEMORY_EXPERIENCE_DIR.glob("experience_*.md"),
-        key=lambda p: p.stat().st_mtime,
-        reverse=True,
-    )
-    for p in candidates:
-        text = _load_file_text(p, max_chars=max_chars).strip()
-        if text:
-            return text
-    return "(暂无历史经验)"
+    return load_memory_reference(MEMORY_EXPERIENCE_DIR, max_chars=max_chars)
 
 
 def _get_experience_client() -> OpenAI:
@@ -521,31 +551,35 @@ def _build_experience_prompt(
     tool_trace: str,
     previous_skills: str,
 ) -> str:
-    return f"""你是视频自动剪辑系统的资深复盘专家。请输出一份“skills风格”的最新经验文件。
+    return f"""你是视频自动剪辑系统的资深复盘专家。请输出一份“历史案例 memory”文件。
 
 目标:
-1) 提炼工具使用经验（何时用哪个工具、常见失败模式、规避策略）。
-2) 提炼剪辑流程经验（节奏、流畅度、音画同步、旁白衔接、转场策略）。
-3) 重点评估并总结:
-   - 画面流畅度与叙事连续性
-   - 音频/配音/字幕与画面的同步与匹配度
-4) 结合“历史经验”进行去重与升级，给出最新版本，不要简单拼接。
+1) 只提炼“可跨任务复用”的工具与流程经验。
+2) 历史案例 memory 仅供参考，绝不能改写未来任务的目标、题材、风格、素材类型、目标时长或搜索方向。
+3) 删除当前案例中的专属目标描述，不要把它们写成默认偏好或默认策略。
+4) 结合“历史经验”进行去重与升级，但必须输出一份全新的精简版本，不能越积越长。
 
 输出格式（严格）:
-# Skills: Video Editing Agent Experience
-## Context
-- user_request: ...
-- key_result: ...
-## Tool Usage Skills
+# Historical Case Memory
+## Reference Boundary
 - ...
-## Editing Workflow Skills
+## Reusable Tool Patterns
 - ...
-## Quality Checklist (必须可执行)
+## Reusable Workflow Patterns
 - ...
-## Common Failure Patterns & Fixes
+## Failure Guards
 - ...
-## Version Notes
+## Quick Checklist
 - ...
+## Notes
+- ...
+
+硬性限制:
+- 全文必须控制在 {STORAGE_MEMORY_CHAR_LIMIT} 字以内。
+- 每个 section 最多 5 条，`Quick Checklist` 最多 4 条，`Notes` 最多 3 条。
+- 不要包含 `user_request`、`key_result`、具体题材、具体人物/地点、具体搜索词、具体镜头内容、具体素材类型偏好。
+- 不要输出“某类视频默认更适合”“默认搜索某关键词”这类会影响未来任务目标判断的表述。
+- 只保留通用方法、校验规则、失败防护和流程经验。
 
 输入信息如下：
 [本次用户需求]
@@ -584,20 +618,28 @@ def _synthesize_experience(
         resp = client.chat.completions.create(
             model=MODEL_NAME,
             messages=[
-                {"role": "system", "content": "你输出高质量、可执行、去重后的skills经验文档。"},
+                {
+                    "role": "system",
+                    "content": (
+                        "你输出高质量、可执行、精简的历史案例 memory。"
+                        "它只能保留可复用方法，不能携带会污染未来任务目标的案例信息。"
+                    ),
+                },
                 {"role": "user", "content": prompt},
             ],
             temperature=0.2,
             max_tokens=4096,
         )
         text = _extract_chat_content(resp)
-        return text if text else previous
+        normalized = sanitize_memory_reference(text, max_chars=STORAGE_MEMORY_CHAR_LIMIT)
+        return normalized if normalized.strip() else previous
     except Exception as e:
         agent_logger.warning("⚠️ 经验合成失败，回退历史经验: %s", e)
         return previous
 
 
 def _write_experience_files(content: str) -> tuple[Path, Path]:
+    content = sanitize_memory_reference(content, max_chars=STORAGE_MEMORY_CHAR_LIMIT)
     ts = datetime.now().strftime("%Y%m%d_%H%M%S")
     versioned = MEMORY_EXPERIENCE_DIR / f"experience_{ts}.md"
     latest = MEMORY_EXPERIENCE_DIR / "latest_skills.md"
@@ -806,6 +848,9 @@ if __name__ == "__main__":
     print(f"   Base URL: {settings['base_url']}")
     print(f"   Model: {settings['model_name']}")
     print(f"   Enable Phase 2 Research: {settings['enable_phase2_research']}")
+    print(f"   Direct Phase 3: {settings['direct_phase3_execution']}")
+    print(f"   Prefer Local Materials: {settings['prefer_local_materials']}")
+    print(f"   Agent Stall Timeout: {settings['agent_stall_timeout_seconds']}s")
     print(f"   Video Base URL: {settings['video_base_url']}")
     print(
         f"   Video Model: {settings['video_model_name']}  "

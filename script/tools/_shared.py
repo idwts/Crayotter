@@ -62,6 +62,7 @@ import cv2
 from langchain_core.tools import tool
 
 from openai import OpenAI
+from app.media_index import build_analysis_index, iter_analysis_files, match_analysis_files
 from app.runtime_paths import configure_runtime_environment, get_bundle_root, get_runtime_root
 
 configure_runtime_environment()
@@ -480,6 +481,89 @@ def _parse_duration_to_seconds(duration: Any) -> float | None:
 
     return None
 
+def _detect_requested_orientation(text: str, default: str = "landscape") -> str:
+    raw = str(text or "").strip().lower()
+    if not raw:
+        return default
+
+    portrait_markers = ("竖屏", "竖版", "9:16", "portrait", "vertical", "shorts", "reels")
+    landscape_markers = ("横屏", "横版", "16:9", "landscape", "horizontal", "宽屏")
+
+    has_portrait = any(marker in raw for marker in portrait_markers)
+    has_landscape = any(marker in raw for marker in landscape_markers)
+    if has_portrait and not has_landscape:
+        return "portrait"
+    if has_landscape and not has_portrait:
+        return "landscape"
+    return default
+
+def _parse_resolution_pair(value: Any) -> tuple[int, int] | None:
+    if isinstance(value, str):
+        match = re.search(r"(\d{2,5})\s*[xX×]\s*(\d{2,5})", value)
+        if match:
+            return int(match.group(1)), int(match.group(2))
+        return None
+    return None
+
+def _detect_candidate_orientation(item: dict[str, Any]) -> tuple[str, str]:
+    width = int(item.get("width") or 0)
+    height = int(item.get("height") or 0)
+    if width > 0 and height > 0:
+        return ("portrait", "resolution") if height > width else ("landscape", "resolution")
+
+    resolution_pair = _parse_resolution_pair(item.get("resolution", ""))
+    if resolution_pair is not None:
+        w, h = resolution_pair
+        return ("portrait", "resolution") if h > w else ("landscape", "resolution")
+
+    text = " ".join(
+        str(item.get(key, "") or "")
+        for key in ("title", "description", "intro", "tag", "typename", "query")
+    ).lower()
+    portrait_markers = ("竖屏", "竖版", "9:16", "portrait", "vertical", "shorts", "reels")
+    landscape_markers = ("横屏", "横版", "16:9", "landscape", "horizontal", "宽屏")
+    has_portrait = any(marker in text for marker in portrait_markers)
+    has_landscape = any(marker in text for marker in landscape_markers)
+    if has_portrait and not has_landscape:
+        return "portrait", "text"
+    if has_landscape and not has_portrait:
+        return "landscape", "text"
+    return "unknown", "unknown"
+
+def _orientation_bonus(target_orientation: str, candidate_orientation: str) -> float:
+    if candidate_orientation == "unknown":
+        return 0.0
+    if target_orientation == "portrait":
+        return 1.1 if candidate_orientation == "portrait" else -1.1
+    return 0.7 if candidate_orientation == "landscape" else -1.0
+
+def _fit_clip_to_canvas(clip: Any, target_size: tuple[int, int]) -> Any:
+    from moviepy.video.compositing.CompositeVideoClip import CompositeVideoClip
+
+    target_w, target_h = int(target_size[0]), int(target_size[1])
+    src_w, src_h = int(clip.size[0]), int(clip.size[1])
+    if src_w <= 0 or src_h <= 0:
+        return clip
+    if (src_w, src_h) == (target_w, target_h):
+        return clip
+
+    scale = max(target_w / src_w, target_h / src_h)
+    resized_w = max(1, int(round(src_w * scale)))
+    resized_h = max(1, int(round(src_h * scale)))
+    fitted = clip.resized((resized_w, resized_h)).with_position(("center", "center"))
+    composite = CompositeVideoClip([fitted], size=(target_w, target_h))
+    if getattr(clip, "audio", None) is not None:
+        composite = composite.with_audio(clip.audio)
+    return composite
+
+def _pick_export_target_size(resolution: str, source_size: tuple[int, int]) -> tuple[int, int]:
+    res_map = {"720p": (1280, 720), "1080p": (1920, 1080), "4k": (3840, 2160)}
+    base_w, base_h = res_map.get(resolution, (1920, 1080))
+    src_w, src_h = int(source_size[0]), int(source_size[1])
+    if src_h > src_w:
+        return base_h, base_w
+    return base_w, base_h
+
 def _filter_candidates_by_max_duration(
     candidates: list[dict[str, Any]],
     max_seconds: int = MAX_DOWNLOAD_DURATION_SECONDS,
@@ -701,7 +785,12 @@ def _save_analysis_json(
     audio_url_used: str,
 ) -> Path | None:
     try:
-        output_path = WORKSPACE / f"{source_video.stem}_analysis.json"
+        try:
+            source_video.resolve(strict=False).relative_to(USER_WORKSPACE.resolve(strict=False))
+            output_root = USER_WORKSPACE
+        except Exception:
+            output_root = WORKSPACE
+        output_path = output_root / f"{source_video.stem}_analysis.json"
         semantic_segments = _extract_semantic_segments_from_analysis(analysis_text)
         semantic_segments = _prepare_semantic_segments(semantic_segments)
         payload = {
@@ -722,6 +811,15 @@ def _save_analysis_json(
     except Exception as e:
         logger.warning("⚠️ 保存分析JSON失败: %s", e)
         return None
+
+def _iter_analysis_json_files() -> list[Path]:
+    return iter_analysis_files([WORKSPACE, USER_WORKSPACE])
+
+def _match_analysis_json_files(video_path: Path) -> list[Path]:
+    return match_analysis_files(
+        video_path,
+        analysis_index=build_analysis_index([WORKSPACE, USER_WORKSPACE]),
+    )
 
 def _get_video_meta(video_path: str) -> dict[str, Any]:
     cap = cv2.VideoCapture(video_path)

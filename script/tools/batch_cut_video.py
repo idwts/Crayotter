@@ -44,11 +44,8 @@ def batch_cut_video(
 
         if analysis_data is None:
             # 自动查找：先精确匹配源视频 stem，再取最新
-            for fp in sorted(
-                WORKSPACE.glob("*_analysis.json"),
-                key=lambda p: p.stat().st_mtime,
-                reverse=True,
-            ):
+            candidates = _match_analysis_json_files(resolved_input) or _iter_analysis_json_files()
+            for fp in candidates:
                 try:
                     with fp.open("r", encoding="utf-8") as f:
                         data = json.load(f)

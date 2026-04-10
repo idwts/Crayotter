@@ -35,7 +35,7 @@
         <div class="topbar-actions">
           <input id="uploadInput" type="file" accept=".mp4,.mov,.mkv,.avi,.webm,.m4v,.mpeg,.mpg,video/*" multiple hidden>
           <button id="uploadBtn" class="ghost-button" type="button">上传视频</button>
-          <button id="apiSettingsBtn" class="ghost-button" type="button">API 设置与更改</button>
+          <button id="apiSettingsBtn" class="ghost-button" type="button">API 与运行设置</button>
         </div>
       </header>
 
@@ -44,7 +44,7 @@
           <div class="upload-panel-head">
             <div class="upload-panel-head-main">
               <h2>本地素材</h2>
-              <p class="upload-panel-subtitle">上传后会保存到 <code>user_temp</code>，任务规划时会自动看到这些视频。</p>
+              <p class="upload-panel-subtitle">上传后会保存到 <code>user_temp</code>。用户视频分析完成后，关联的 <code>*_analysis.json</code> 也会回写到这里；后续会自动复用，删除视频时也会一起清理。</p>
             </div>
             <div class="upload-panel-head-actions">
               <button id="toggleUploadsBtn" class="ghost-button compact" type="button" aria-pressed="false" title="收起或展开本地素材面板">收起素材</button>
@@ -66,6 +66,8 @@
             <textarea id="taskInput" rows="4" placeholder="输入你的任务，例如：做一个 1 分钟的校园宣传短片，风格清新，有字幕和旁白。"></textarea>
             <div class="composer-actions">
               <button id="phase2ToggleBtn" class="ghost-button compact phase2-toggle-button" type="button" aria-pressed="true" title="切换是否启用 Phase 2 深度研究">Phase 2 开</button>
+              <button id="directPhase3ToggleBtn" class="ghost-button compact phase-toggle-button" type="button" aria-pressed="false" title="跳过素材搜索与下载，直接进入分析/执行链路">直达 P3 关</button>
+              <button id="localPriorityToggleBtn" class="ghost-button compact phase-toggle-button" type="button" aria-pressed="false" title="优先分析本地素材，只有不足时才联网补充">本地优先关</button>
               <select id="modeSelect">
                 <option value="demo">演示模式</option>
                 <option value="agent">真实 Agent</option>
@@ -81,13 +83,13 @@
   <div id="settingsModal" class="modal hidden">
     <div class="modal-backdrop" data-close-modal="true"></div>
     <section class="modal-card">
-      <div class="modal-head">
-        <div>
-          <h2>API 设置</h2>
-          <p class="modal-text">第一次进入先配置一次。保存后，后续会默认记住，你只需要在这里修改。</p>
+        <div class="modal-head">
+          <div>
+            <h2>API 与运行设置</h2>
+            <p class="modal-text">这里的保存会同步写入运行根目录的 <code>.env</code>，Web 与本地运行会共用同一份配置。</p>
+          </div>
+          <button id="closeSettingsBtn" class="ghost-button modal-close-button" type="button" aria-label="关闭">×</button>
         </div>
-        <button id="closeSettingsBtn" class="ghost-button modal-close-button" type="button" aria-label="关闭">×</button>
-      </div>
 
       <form id="configForm" class="stack-form">
         <label>
@@ -99,7 +101,7 @@
           <summary>高级配置</summary>
           <div class="advanced-fields">
             <label>
-              <span>服务地址</span>
+              <span>主服务地址</span>
               <input id="baseUrlInput" type="text" placeholder="https://.../v1">
             </label>
             <label>
@@ -107,15 +109,40 @@
               <input id="modelInput" type="text" placeholder="qwen-plus">
             </label>
             <label>
+              <span>视频接口密钥（留空时跟随主接口）</span>
+              <input id="videoApiKeyInput" type="password" placeholder="可选：单独的视频 API Key">
+            </label>
+            <label>
+              <span>视频服务地址（留空时跟随主服务）</span>
+              <input id="videoBaseUrlInput" type="text" placeholder="可选：https://.../v1">
+            </label>
+            <label>
               <span>视频模型</span>
               <input id="videoModelInput" type="text" placeholder="qwen-vl-max-latest">
+            </label>
+            <label>
+              <span>语音接口密钥（留空时跟随主接口）</span>
+              <input id="ttsApiKeyInput" type="password" placeholder="可选：单独的 TTS API Key">
+            </label>
+            <label>
+              <span>语音服务地址（留空时跟随主服务）</span>
+              <input id="ttsBaseUrlInput" type="text" placeholder="可选：https://.../v1">
             </label>
             <label>
               <span>语音模型</span>
               <input id="ttsModelInput" type="text" placeholder="qwen-tts-latest">
             </label>
+            <label>
+              <span>任务卡住超时（秒）</span>
+              <input id="stallTimeoutInput" type="number" min="10" step="10" placeholder="150">
+            </label>
           </div>
         </details>
+
+        <p class="modal-text">
+          <strong>Phase 2 / 直达 Phase 3 / 本地素材优先</strong>
+          由底部发送区按钮控制，切换后会自动同步到 <code>.env</code>。
+        </p>
 
         <div class="modal-actions">
           <button id="reloadConfigBtn" class="ghost-button" type="button">重新读取</button>

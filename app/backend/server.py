@@ -17,6 +17,7 @@ from urllib.parse import parse_qs, urlparse
 from .config_store import ConfigStore
 from .models import JobRequest
 from .runtime_manager import RuntimeManager
+from app.media_index import build_analysis_index, is_video_file, match_analysis_files
 from app.runtime_paths import configure_runtime_environment, get_bundle_root, get_runtime_root, resource_path, runtime_path
 
 
@@ -327,23 +328,41 @@ class BackendHandler(BaseHTTPRequestHandler):
         return (Path("user_temp") / relative).as_posix()
 
     @classmethod
-    def _serialize_upload_item(cls, path: Path) -> dict[str, Any]:
+    def _serialize_upload_item(
+        cls,
+        path: Path,
+        *,
+        analysis_index: dict[str, list[Path]] | None = None,
+    ) -> dict[str, Any]:
         stat = path.stat()
+        analysis_matches = match_analysis_files(path, analysis_index=analysis_index or {}) if is_video_file(path) else []
+        latest_analysis = analysis_matches[0] if analysis_matches else None
         return {
             "name": path.name,
             "path": str(path.resolve()),
             "display_path": cls._display_upload_path(path),
             "size_bytes": stat.st_size,
             "modified_at": datetime.fromtimestamp(stat.st_mtime, tz=timezone.utc).isoformat(),
+            "kind": "video" if is_video_file(path) else "file",
+            "has_analysis": bool(analysis_matches),
+            "analysis_count": len(analysis_matches),
+            "analysis_path": str(latest_analysis.resolve()) if latest_analysis is not None else "",
+            "analysis_display_path": cls._display_upload_path(latest_analysis) if latest_analysis is not None else "",
+            "analysis_modified_at": (
+                datetime.fromtimestamp(latest_analysis.stat().st_mtime, tz=timezone.utc).isoformat()
+                if latest_analysis is not None
+                else ""
+            ),
         }
 
     @classmethod
     def _list_upload_items(cls) -> list[dict[str, Any]]:
+        analysis_index = build_analysis_index([UPLOADS_DIR])
         items: list[dict[str, Any]] = []
         for path in sorted(UPLOADS_DIR.rglob("*"), key=lambda item: item.stat().st_mtime, reverse=True):
-            if not path.is_file():
+            if not is_video_file(path):
                 continue
-            items.append(cls._serialize_upload_item(path))
+            items.append(cls._serialize_upload_item(path, analysis_index=analysis_index))
         return items
 
     @classmethod
@@ -404,8 +423,33 @@ class BackendHandler(BaseHTTPRequestHandler):
             raise ValueError("Upload path is outside user_temp.")
         if not resolved.exists() or not resolved.is_file():
             raise FileNotFoundError(f"Upload not found: {raw_path}")
+        deleted_analysis: list[dict[str, str]] = []
+        if is_video_file(resolved):
+            analysis_index = build_analysis_index([UPLOADS_DIR])
+            for analysis_path in match_analysis_files(resolved, analysis_index=analysis_index):
+                if not analysis_path.exists() or not analysis_path.is_file():
+                    continue
+                try:
+                    analysis_resolved = analysis_path.resolve(strict=False)
+                    if analysis_resolved == resolved.resolve(strict=False):
+                        continue
+                    analysis_path.unlink()
+                    deleted_analysis.append(
+                        {
+                            "path": str(analysis_resolved),
+                            "display_path": self._display_upload_path(analysis_path),
+                        }
+                    )
+                except FileNotFoundError:
+                    continue
         resolved.unlink()
-        return {"deleted": True, "path": str(resolved), "display_path": self._display_upload_path(resolved)}
+        return {
+            "deleted": True,
+            "path": str(resolved),
+            "display_path": self._display_upload_path(resolved),
+            "deleted_analysis_count": len(deleted_analysis),
+            "deleted_analysis": deleted_analysis,
+        }
 
     def _stream_events(self, job_id: str, after_sequence: int = 0) -> None:
         self.send_response(HTTPStatus.OK)

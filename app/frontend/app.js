@@ -3,7 +3,6 @@
     sidebarCollapsed: "crayotter.sidebarCollapsed",
     uploadsCollapsed: "crayotter.uploadsCollapsed",
     lastMode: "crayotter.lastMode",
-    lastPhase2: "crayotter.lastPhase2",
   };
 
   const state = {
@@ -19,8 +18,11 @@
     logExpanded: false,
     logShowAll: false,
     enablePhase2Research: true,
+    directPhase3Execution: false,
+    preferLocalMaterials: false,
     uploading: false,
     uploadsCollapsed: false,
+    configMessageTimer: null,
   };
 
   const LOG_PREVIEW_LIMIT = 40;
@@ -57,7 +59,14 @@
     taskInput: $("#taskInput"),
     modeSelect: $("#modeSelect"),
     phase2ToggleBtn: $("#phase2ToggleBtn"),
+    directPhase3ToggleBtn: $("#directPhase3ToggleBtn"),
+    localPriorityToggleBtn: $("#localPriorityToggleBtn"),
     actionJobBtn: $("#actionJobBtn"),
+    videoApiKeyInput: $("#videoApiKeyInput"),
+    videoBaseUrlInput: $("#videoBaseUrlInput"),
+    ttsApiKeyInput: $("#ttsApiKeyInput"),
+    ttsBaseUrlInput: $("#ttsBaseUrlInput"),
+    stallTimeoutInput: $("#stallTimeoutInput"),
   };
 
   const trashIcon = "🗑";
@@ -107,11 +116,30 @@
     return `${sized >= 10 || index === 0 ? sized.toFixed(0) : sized.toFixed(1)} ${units[index]}`;
   };
 
+  const uploadAnalysisBadgeLabel = (item) => (item?.has_analysis ? "已有关联分析" : "需首次分析");
+
+  const uploadAnalysisHint = (item) => {
+    if (item?.has_analysis) {
+      const countSuffix = Number(item.analysis_count || 0) > 1 ? `（共 ${Number(item.analysis_count)} 份，优先复用最新）` : "";
+      const pathText = item.analysis_display_path || item.analysis_path || "";
+      return `已检测到分析文件：${pathText}${countSuffix}。下次运行会直接跳过该视频的多模态分析。`;
+    }
+    return "暂未检测到同名 *_analysis.json。首次运行会先对该视频做多模态分析。";
+  };
+
   const fileUrl = (path) => `/files?path=${encodeURIComponent(path)}`;
 
   const modeLabel = (mode) => (mode === "agent" ? "真实 Agent" : "演示模式");
 
   const phase2ModeLabel = (enabled) => (enabled ? "开启 Phase 2 深研" : "跳过 Phase 2，直达 Phase 3");
+  const directPhase3ModeLabel = (enabled) => (enabled ? "开启直达 Phase 3" : "保留素材搜集阶段");
+  const localPriorityModeLabel = (enabled) => (enabled ? "开启本地素材优先" : "允许直接联网搜集");
+  const workflowSummaryLabel = (job) =>
+    [
+      job.enable_phase2_research !== false ? "P2 开" : "P2 关",
+      job.direct_phase3_execution === true ? "直达 P3 开" : "直达 P3 关",
+      job.prefer_local_materials === true ? "本地优先开" : "本地优先关",
+    ].join(" · ");
 
   const displayTaskTitle = (job) => {
     const task = String(job?.task || "");
@@ -145,7 +173,7 @@
 
   const phaseLabel = (phase) => {
     const map = {
-      phase1: "正在拆解任务和搜集素材",
+      phase1: "正在准备素材并完成分析",
       phase2: "正在整理内容和搭建结构",
       phase3: "正在合成最终结果",
     };
@@ -156,6 +184,7 @@
     const map = {
       search_bilibili_video: "搜索素材",
       rank_video_candidates: "筛选候选素材",
+      analyze_video: "分析素材",
       add_narration_segments: "生成旁白片段",
     };
     return map[toolName] || toolName || "调用工具";
@@ -196,7 +225,7 @@
   };
 
   const updateConfigButton = () => {
-    elements.apiSettingsBtn.textContent = state.hasSavedConfig ? "API 设置与更改" : "请先设置 API";
+    elements.apiSettingsBtn.textContent = state.hasSavedConfig ? "API 与运行设置" : "请先设置 API";
   };
 
   const updateUploadsPanelState = (collapsed) => {
@@ -208,12 +237,47 @@
     localStorage.setItem(STORAGE_KEYS.uploadsCollapsed, collapsed ? "1" : "0");
   };
 
+  const setWorkflowToggleState = (button, enabled, activeText, inactiveText, activeTitle, inactiveTitle) => {
+    button.textContent = enabled ? activeText : inactiveText;
+    button.title = enabled ? activeTitle : inactiveTitle;
+    button.setAttribute("aria-pressed", enabled ? "true" : "false");
+    button.classList.toggle("is-disabled", !enabled);
+  };
+
   const updatePhase2ToggleButton = () => {
     const enabled = state.enablePhase2Research;
-    elements.phase2ToggleBtn.textContent = enabled ? "Phase 2 开" : "Phase 2 关";
-    elements.phase2ToggleBtn.title = enabled ? "当前启用 Phase 2 深度研究" : "当前跳过 Phase 2，直接进入 Phase 3";
-    elements.phase2ToggleBtn.setAttribute("aria-pressed", enabled ? "true" : "false");
-    elements.phase2ToggleBtn.classList.toggle("is-disabled", !enabled);
+    setWorkflowToggleState(
+      elements.phase2ToggleBtn,
+      enabled,
+      "Phase 2 开",
+      "Phase 2 关",
+      "当前启用 Phase 2 深度研究",
+      "当前跳过 Phase 2，直接进入 Phase 3",
+    );
+  };
+
+  const updateDirectPhase3ToggleButton = () => {
+    const enabled = state.directPhase3Execution;
+    setWorkflowToggleState(
+      elements.directPhase3ToggleBtn,
+      enabled,
+      "直达 P3 开",
+      "直达 P3 关",
+      "当前跳过素材搜索与下载，直接进入分析/执行链路",
+      "当前保留素材搜索与下载阶段",
+    );
+  };
+
+  const updateLocalPriorityToggleButton = () => {
+    const enabled = state.preferLocalMaterials;
+    setWorkflowToggleState(
+      elements.localPriorityToggleBtn,
+      enabled,
+      "本地优先开",
+      "本地优先关",
+      "当前会优先分析本地素材，不足时再联网补充",
+      "当前允许任务直接走联网搜集流程",
+    );
   };
 
   const updateUploadButton = () => {
@@ -234,17 +298,21 @@
         (item) => `
           <article class="upload-card">
             <div class="upload-card-main">
-              <div class="upload-card-title">${escapeHtml(item.name || "--")}</div>
+              <div class="upload-card-title-row">
+                <div class="upload-card-title">${escapeHtml(item.name || "--")}</div>
+                <span class="upload-analysis-badge ${item.has_analysis ? "ready" : "missing"}">${escapeHtml(uploadAnalysisBadgeLabel(item))}</span>
+              </div>
               <div class="upload-card-meta">
                 ${escapeHtml(item.display_path || item.name || "--")} ·
                 ${escapeHtml(formatBytes(item.size_bytes))} ·
                 ${escapeHtml(formatDate(item.modified_at))}
               </div>
+              <div class="upload-card-note">${escapeHtml(uploadAnalysisHint(item))}</div>
             </div>
             <div class="upload-card-actions">
               <button class="ghost-button compact" type="button" data-upload-insert="${escapeHtml(item.display_path || "")}">插入任务</button>
               <a class="ghost-button compact" href="${escapeHtml(fileUrl(item.path))}" target="_blank" rel="noreferrer">打开</a>
-              <button class="ghost-button compact upload-delete-button" type="button" data-upload-delete="${escapeHtml(item.display_path || "")}">删除</button>
+              <button class="ghost-button compact upload-delete-button" type="button" data-upload-delete="${escapeHtml(item.display_path || "")}" data-upload-has-analysis="${item.has_analysis ? "1" : "0"}">删除</button>
             </div>
           </article>
         `,
@@ -264,8 +332,9 @@
     elements.uploadsList.querySelectorAll("[data-upload-delete]").forEach((button) => {
       button.addEventListener("click", () => {
         const displayPath = button.getAttribute("data-upload-delete");
+        const hasAnalysis = button.getAttribute("data-upload-has-analysis") === "1";
         if (!displayPath) return;
-        deleteUpload(displayPath).catch((error) => window.alert(error.message));
+        deleteUpload(displayPath, hasAnalysis).catch((error) => window.alert(error.message));
       });
     });
   };
@@ -303,6 +372,8 @@
       ["任务状态", statusLabel(job.status)],
       ["运行方式", modeLabel(job.mode)],
       ["Phase 2 设置", phase2ModeLabel(job.enable_phase2_research !== false)],
+      ["直达 Phase 3", directPhase3ModeLabel(job.direct_phase3_execution === true)],
+      ["本地素材优先", localPriorityModeLabel(job.prefer_local_materials === true)],
       ["创建时间", formatDate(job.created_at)],
       ["开始时间", formatDate(job.started_at)],
       ["完成时间", formatDate(job.completed_at)],
@@ -338,6 +409,8 @@
       ["任务状态", statusLabel(job.status)],
       ["运行方式", modeLabel(job.mode)],
       ["Phase 2 设置", phase2ModeLabel(job.enable_phase2_research !== false)],
+      ["直达 Phase 3", directPhase3ModeLabel(job.direct_phase3_execution === true)],
+      ["本地素材优先", localPriorityModeLabel(job.prefer_local_materials === true)],
       ["创建时间", formatDate(job.created_at)],
       ["开始时间", formatDate(job.started_at)],
       ["完成时间", formatDate(job.completed_at)],
@@ -562,8 +635,11 @@
     }
   };
 
-  const deleteUpload = async (displayPath) => {
-    if (!window.confirm(`删除素材 ${displayPath} 后，将无法在后续任务中继续引用。继续吗？`)) {
+  const deleteUpload = async (displayPath, hasAnalysis = false) => {
+    const message = hasAnalysis
+      ? `删除素材 ${displayPath} 后，会同时删除同名分析文件。继续吗？`
+      : `删除素材 ${displayPath} 后，将无法在后续任务中继续引用。继续吗？`;
+    if (!window.confirm(message)) {
       return;
     }
     await request(`/uploads?path=${encodeURIComponent(displayPath)}`, {
@@ -585,13 +661,12 @@
     elements.jobsList.innerHTML = state.jobs
       .map((job) => {
       const active = job.job_id === state.selectedJobId ? " active" : "";
-      const phase2Text = phase2ModeLabel(job.enable_phase2_research !== false);
         return `
           <article class="job-card${active}" data-job-id="${escapeHtml(job.job_id)}">
             <button class="job-delete-button" type="button" data-delete-job-id="${escapeHtml(job.job_id)}" aria-label="删除任务" title="删除任务">${trashIcon}</button>
             <div class="job-card-main">
               <div class="job-card-title">${escapeHtml(displayTaskTitle(job))}</div>
-              <div class="job-card-meta">${escapeHtml(modeLabel(job.mode))} · ${escapeHtml(phase2Text)} · ${escapeHtml(formatDate(job.created_at))}</div>
+              <div class="job-card-meta">${escapeHtml(modeLabel(job.mode))} · ${escapeHtml(workflowSummaryLabel(job))} · ${escapeHtml(formatDate(job.created_at))}</div>
             </div>
             <span class="status-pill ${escapeHtml(job.status)}">${escapeHtml(statusLabel(job.status))}</span>
           </article>
@@ -866,16 +941,68 @@
     renderJobs();
   };
 
-  const loadConfig = async () => {
-    const config = await request("/config");
+  const flashConfigMessage = (message) => {
+    elements.configMessage.textContent = message;
+    if (state.configMessageTimer) {
+      window.clearTimeout(state.configMessageTimer);
+    }
+    state.configMessageTimer = window.setTimeout(() => {
+      elements.configMessage.textContent = "";
+      state.configMessageTimer = null;
+    }, 2400);
+  };
+
+  const applyConfigPayload = (config) => {
     const profile = config.profiles?.[config.active_profile] || {};
     elements.apiKeyInput.value = profile.api_key || "";
     elements.baseUrlInput.value = profile.base_url || "";
     elements.modelInput.value = profile.model_name || "";
+    elements.videoApiKeyInput.value = profile.video_api_key || "";
+    elements.videoBaseUrlInput.value = profile.video_base_url || "";
     elements.videoModelInput.value = profile.video_model_name || "";
+    elements.ttsApiKeyInput.value = profile.tts_api_key || "";
+    elements.ttsBaseUrlInput.value = profile.tts_base_url || "";
     elements.ttsModelInput.value = profile.tts_model_name || "";
+    elements.stallTimeoutInput.value = String(config.agent_stall_timeout_seconds || 150);
+    state.enablePhase2Research = config.enable_phase2_research !== false;
+    state.directPhase3Execution = config.direct_phase3_execution === true;
+    state.preferLocalMaterials = config.prefer_local_materials === true;
     state.hasSavedConfig = Boolean(profile.api_key);
     updateConfigButton();
+    updatePhase2ToggleButton();
+    updateDirectPhase3ToggleButton();
+    updateLocalPriorityToggleButton();
+  };
+
+  const buildConfigPayload = () => {
+    const parsedTimeout = Number(elements.stallTimeoutInput.value || 150);
+    const stallTimeout =
+      Number.isFinite(parsedTimeout) && parsedTimeout > 0 ? Math.round(parsedTimeout) : 150;
+
+    return {
+      profiles: {
+        default: {
+          api_key: elements.apiKeyInput.value.trim(),
+          base_url: elements.baseUrlInput.value.trim(),
+          model_name: elements.modelInput.value.trim(),
+          video_api_key: elements.videoApiKeyInput.value.trim(),
+          video_base_url: elements.videoBaseUrlInput.value.trim(),
+          video_model_name: elements.videoModelInput.value.trim(),
+          tts_api_key: elements.ttsApiKeyInput.value.trim(),
+          tts_base_url: elements.ttsBaseUrlInput.value.trim(),
+          tts_model_name: elements.ttsModelInput.value.trim(),
+        },
+      },
+      enable_phase2_research: state.enablePhase2Research,
+      direct_phase3_execution: state.directPhase3Execution,
+      prefer_local_materials: state.preferLocalMaterials,
+      agent_stall_timeout_seconds: stallTimeout,
+    };
+  };
+
+  const loadConfig = async () => {
+    const config = await request("/config");
+    applyConfigPayload(config);
     if (!state.hasSavedConfig) {
       openSettings();
     }
@@ -884,34 +1011,26 @@
   const submitConfig = async (event) => {
     event.preventDefault();
 
-    const payload = {
-      profiles: {
-        default: {
-          api_key: elements.apiKeyInput.value.trim(),
-          base_url: elements.baseUrlInput.value.trim(),
-          model_name: elements.modelInput.value.trim(),
-          video_model_name: elements.videoModelInput.value.trim(),
-          tts_model_name: elements.ttsModelInput.value.trim(),
-        },
-      },
-    };
-
-    await request("/config", {
+    const payload = buildConfigPayload();
+    const saved = await request("/config", {
       method: "PUT",
       body: JSON.stringify(payload),
     });
 
-    state.hasSavedConfig = Boolean(payload.profiles.default.api_key);
-    updateConfigButton();
-    elements.configMessage.textContent = state.hasSavedConfig ? "设置已保存，后续会自动记住。" : "设置已清空。";
-
-    window.setTimeout(() => {
-      elements.configMessage.textContent = "";
-    }, 2200);
+    applyConfigPayload(saved);
+    flashConfigMessage(state.hasSavedConfig ? "设置已保存并同步到 .env。" : "设置已清空并同步到 .env。");
 
     if (state.hasSavedConfig) {
       forceCloseSettings();
     }
+  };
+
+  const syncWorkflowConfig = async (payload) => {
+    const saved = await request("/config", {
+      method: "PUT",
+      body: JSON.stringify(payload),
+    });
+    applyConfigPayload(saved);
   };
 
   const submitJob = async () => {
@@ -923,8 +1042,9 @@
 
     const mode = elements.modeSelect.value;
     const enablePhase2Research = state.enablePhase2Research;
+    const directPhase3Execution = state.directPhase3Execution;
+    const preferLocalMaterials = state.preferLocalMaterials;
     localStorage.setItem(STORAGE_KEYS.lastMode, mode);
-    localStorage.setItem(STORAGE_KEYS.lastPhase2, enablePhase2Research ? "1" : "0");
 
     if (mode === "agent" && !state.hasSavedConfig) {
       openSettings();
@@ -934,7 +1054,13 @@
 
     const created = await request("/jobs", {
       method: "POST",
-      body: JSON.stringify({ task, mode, enable_phase2_research: enablePhase2Research }),
+      body: JSON.stringify({
+        task,
+        mode,
+        enable_phase2_research: enablePhase2Research,
+        direct_phase3_execution: directPhase3Execution,
+        prefer_local_materials: preferLocalMaterials,
+      }),
     });
 
     elements.taskInput.value = "";
@@ -975,6 +1101,10 @@
   const bootstrap = async () => {
     updateSidebarState(true);
     updateUploadsPanelState(false);
+    updatePhase2ToggleButton();
+    updateDirectPhase3ToggleButton();
+    updateLocalPriorityToggleButton();
+    updateUploadButton();
 
     const lastMode = localStorage.getItem(STORAGE_KEYS.lastMode);
     if (lastMode && ["demo", "agent"].includes(lastMode)) {
@@ -984,12 +1114,6 @@
     if (uploadsCollapsed !== null) {
       updateUploadsPanelState(uploadsCollapsed === "1");
     }
-    const lastPhase2 = localStorage.getItem(STORAGE_KEYS.lastPhase2);
-    if (lastPhase2 !== null) {
-      state.enablePhase2Research = lastPhase2 !== "0";
-    }
-    updatePhase2ToggleButton();
-    updateUploadButton();
 
     try {
       await request("/health");
@@ -1051,9 +1175,36 @@
   });
 
   elements.phase2ToggleBtn.addEventListener("click", () => {
+    const previous = state.enablePhase2Research;
     state.enablePhase2Research = !state.enablePhase2Research;
-    localStorage.setItem(STORAGE_KEYS.lastPhase2, state.enablePhase2Research ? "1" : "0");
     updatePhase2ToggleButton();
+    syncWorkflowConfig({ enable_phase2_research: state.enablePhase2Research }).catch((error) => {
+      state.enablePhase2Research = previous;
+      updatePhase2ToggleButton();
+      window.alert(error.message);
+    });
+  });
+
+  elements.directPhase3ToggleBtn.addEventListener("click", () => {
+    const previous = state.directPhase3Execution;
+    state.directPhase3Execution = !state.directPhase3Execution;
+    updateDirectPhase3ToggleButton();
+    syncWorkflowConfig({ direct_phase3_execution: state.directPhase3Execution }).catch((error) => {
+      state.directPhase3Execution = previous;
+      updateDirectPhase3ToggleButton();
+      window.alert(error.message);
+    });
+  });
+
+  elements.localPriorityToggleBtn.addEventListener("click", () => {
+    const previous = state.preferLocalMaterials;
+    state.preferLocalMaterials = !state.preferLocalMaterials;
+    updateLocalPriorityToggleButton();
+    syncWorkflowConfig({ prefer_local_materials: state.preferLocalMaterials }).catch((error) => {
+      state.preferLocalMaterials = previous;
+      updateLocalPriorityToggleButton();
+      window.alert(error.message);
+    });
   });
 
   elements.apiSettingsBtn.addEventListener("click", openSettings);

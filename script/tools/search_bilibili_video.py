@@ -93,7 +93,7 @@ def search_bilibili_video(
                                 continue
 
                             raw_duration = v.get("duration", "")
-                            all_videos.append({
+                            candidate = {
                                 "title": _clean_text(v.get("title", "")),
                                 "bvid": bvid,
                                 "url": str(v.get("arcurl") or f"https://www.bilibili.com/video/{bvid}"),
@@ -112,7 +112,11 @@ def search_bilibili_video(
                                 "source": "bilibili",
                                 "query": q,
                                 "page": page,
-                            })
+                            }
+                            orientation_hint, orientation_source = _detect_candidate_orientation(candidate)
+                            candidate["orientation_hint"] = orientation_hint
+                            candidate["orientation_source"] = orientation_source
+                            all_videos.append(candidate)
                         except Exception as e:
                             logger.warning(f"解析B站视频数据出错: {e}")
                             continue

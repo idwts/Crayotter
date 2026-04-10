@@ -34,6 +34,8 @@ from langgraph.graph import START, StateGraph
 from langgraph.prebuilt import create_react_agent
 from pydantic import BaseModel, Field
 
+from app.media_index import build_analysis_index, iter_analysis_files, iter_video_files, match_analysis_files
+from memory_reference import INJECTION_MEMORY_CHAR_LIMIT, load_memory_reference
 from tools import ALL_TOOLS, MEMORY_EXPERIENCE_DIR, USER_WORKSPACE, WORKSPACE
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -43,6 +45,8 @@ API_KEY: str = os.environ.get("OPENAI_API_KEY", "")
 BASE_URL: str = "https://api.openai.com/v1"
 MODEL_NAME: str = "gpt-4o"
 ENABLE_PHASE2_RESEARCH: bool = True
+DIRECT_PHASE3_EXECUTION: bool = False
+PREFER_LOCAL_MATERIALS: bool = False
 
 graph_logger = logging.getLogger("graph")
 
@@ -137,6 +141,11 @@ PREP_TOOL_NAMES = {
     "rank_video_candidates",
     "analyze_video",
     "inspect_video_duration",
+}
+REMOTE_PREP_TOOL_NAMES = {
+    "search_bilibili_video",
+    "download_bilibili_video",
+    "rank_video_candidates",
 }
 
 # Phase 3: 剪辑创作工具
@@ -290,7 +299,6 @@ def _build_workspace_snapshot(max_files: int = 40) -> str:
 
 def _iter_source_videos() -> list[Path]:
     """遍历可作为源素材的视频（temp + user_temp），排除中间产物。"""
-    roots = [WORKSPACE, USER_WORKSPACE]
     blocked_prefixes = (
         "merged_",
         "final_",
@@ -301,33 +309,198 @@ def _iter_source_videos() -> list[Path]:
     )
     seen: set[str] = set()
     videos: list[Path] = []
-    for root in roots:
-        for fp in root.glob("*.mp4"):
-            name = fp.name
-            if name.startswith(blocked_prefixes) or "_clip_" in name or "_analysis" in name:
-                continue
-            key = str(fp.resolve(strict=False))
-            if key in seen:
-                continue
-            seen.add(key)
-            videos.append(fp)
+    for fp in iter_video_files([WORKSPACE, USER_WORKSPACE]):
+        name = fp.name
+        if name.startswith(blocked_prefixes) or "_clip_" in name or "_analysis" in name:
+            continue
+        key = str(fp.resolve(strict=False))
+        if key in seen:
+            continue
+        seen.add(key)
+        videos.append(fp)
     return videos
 
 
 def _iter_analysis_json_files() -> list[Path]:
     """遍历分析文件（temp + user_temp）。"""
-    roots = [WORKSPACE, USER_WORKSPACE]
-    seen: set[str] = set()
-    files: list[Path] = []
-    for root in roots:
-        for fp in root.glob("*_analysis.json"):
-            key = str(fp.resolve(strict=False))
-            if key in seen:
-                continue
-            seen.add(key)
-            files.append(fp)
-    files.sort(key=lambda p: p.stat().st_mtime, reverse=True)
-    return files
+    return iter_analysis_files([WORKSPACE, USER_WORKSPACE])
+
+
+def _collect_analysis_overview() -> dict[str, Any]:
+    """汇总现有分析素材的数量与可用时长，供本地素材充分性判断使用。"""
+    items: list[dict[str, Any]] = []
+    total_available_duration = 0.0
+
+    for fp in _iter_analysis_json_files():
+        try:
+            data = json.loads(fp.read_text(encoding="utf-8"))
+        except Exception:
+            continue
+
+        source_video = str(data.get("source_video", ""))
+        segments = data.get("segments", [])
+        available_duration = 0.0
+        segment_count = 0
+
+        if isinstance(segments, list):
+            for segment in segments:
+                if not isinstance(segment, dict):
+                    continue
+                try:
+                    start = float(segment.get("start", 0))
+                    end = float(segment.get("end", 0))
+                except (TypeError, ValueError):
+                    continue
+                duration = max(0.0, end - start)
+                if duration <= 0:
+                    continue
+                available_duration += duration
+                segment_count += 1
+
+        total_available_duration += available_duration
+        items.append(
+            {
+                "analysis_file": fp.name,
+                "source_video": source_video,
+                "segment_count": segment_count,
+                "available_duration_seconds": round(available_duration, 1),
+            }
+        )
+
+    return {
+        "analysis_count": len(items),
+        "total_available_duration_seconds": round(total_available_duration, 1),
+        "items": items[:20],
+    }
+
+
+def _build_direct_phase3_plan(user_request: str) -> Plan:
+    """构建跳过素材搜集的执行计划，仅补齐现有素材分析。"""
+    source_videos = _iter_source_videos()
+    analysis_files = _iter_analysis_json_files()
+    if not source_videos and not analysis_files:
+        raise RuntimeError(
+            "已启用直达 Phase 3，但当前未找到可复用的本地素材或既有分析数据。"
+            "请先上传/准备素材，或关闭“直达 Phase 3”。"
+        )
+
+    steps: list[Step] = []
+    if source_videos:
+        steps.append(
+            Step(
+                id=1,
+                description="跳过素材搜集，仅分析现有本地素材和已有源视频，为 Phase 3 准备多模态上下文",
+                tool_hint="analyze_video",
+            )
+        )
+
+    return Plan(
+        goal=user_request,
+        analysis="直达 Phase 3 已启用：跳过搜索、筛选与下载，仅复用现有本地素材/历史源视频。",
+        steps=steps,
+    )
+
+
+def _build_local_first_plan(user_request: str) -> Plan:
+    """构建本地素材优先计划：先分析本地，再按需联网补充。"""
+    return Plan(
+        goal=user_request,
+        analysis=(
+            "本地素材优先已启用：先分析当前工程中的本地素材与已有源视频。"
+            "若现有素材已足够，则直接进入后续剪辑；不足时再联网搜索补充。"
+        ),
+        steps=[
+            Step(id=1, description="优先分析现有本地素材和已有源视频", tool_hint="analyze_video"),
+            Step(id=2, description="如本地素材不足，再搜索补充素材", tool_hint="search_bilibili_video"),
+            Step(id=3, description="筛选最适合作为补充的候选素材", tool_hint="rank_video_candidates"),
+            Step(id=4, description="下载补充素材", tool_hint="download_bilibili_video"),
+            Step(id=5, description="分析所有新增补充素材", tool_hint="analyze_video"),
+        ],
+    )
+
+
+LOCAL_SUFFICIENCY_PROMPT = """\
+你是视频素材充分性评估器。
+
+请根据用户目标时长、任务要求和当前已分析素材概况，判断现有本地素材是否已经足够直接进入剪辑阶段。
+
+判断原则：
+- 必须先判断“内容是否匹配当前任务”，再判断“覆盖度是否足够”，最后才判断“时长是否够”。
+- 如果本地素材的主体、场景、主题或视觉类型与用户需求不匹配，必须返回 false，不能因为时长够长就判定为足够。
+- 例如：用户要“校园视频”，但本地素材是讲座、风景或访谈，即使有 5 分钟，也必须返回 false。
+- “足够”表示这些素材已经足以完成一个可交付的版本，不要求绝对完美，但不能明显缺少关键内容。
+- 如果用户需求明显需要多场景、多段落、多人物或较长成片，而现有素材覆盖和可用时长明显不足，应返回 false。
+- 不要假设后续还能联网补素材；只根据当前已有素材判断。
+
+仅返回 JSON：
+{
+  "content_match": false,
+  "coverage_match": false,
+  "duration_match": false,
+  "sufficient": true,
+  "reason": "一句简短中文原因",
+  "confidence": "high"
+}
+"""
+
+
+def _assess_local_material_sufficiency(state: AgentState) -> tuple[bool, str]:
+    """判断现有本地分析素材是否已足够跳过联网搜集。"""
+    overview = _collect_analysis_overview()
+    analysis_count = int(overview.get("analysis_count", 0) or 0)
+    total_available_duration = float(overview.get("total_available_duration_seconds", 0.0) or 0.0)
+
+    if analysis_count <= 0:
+        return False, "暂无已分析素材。"
+
+    target_duration = state.target_duration_seconds if state.target_duration_seconds > 0 else 300.0
+    fallback_threshold = max(target_duration * 1.4, target_duration + 20.0)
+    fallback_sufficient = total_available_duration >= fallback_threshold
+    fallback_reason = (
+        f"现有分析素材约 {total_available_duration:.1f}s，可用时长"
+        f"{'达到' if fallback_sufficient else '尚未达到'}保守阈值 {fallback_threshold:.1f}s。"
+    )
+
+    try:
+        llm = _get_llm(temperature=0.0).bind(max_tokens=320)
+        response = llm.invoke(
+            [
+                SystemMessage(content=LOCAL_SUFFICIENCY_PROMPT),
+                HumanMessage(
+                    content=(
+                        f"用户需求: {state.user_request}\n"
+                        f"目标时长: {target_duration:.1f} 秒\n"
+                        f"本地素材目录快照:\n{_build_user_workspace_snapshot()}\n\n"
+                        f"现有分析概况(JSON):\n{json.dumps(overview, ensure_ascii=False, indent=2)}\n\n"
+                        f"分析上下文摘要:\n{_build_full_analysis_context()[:10000]}"
+                    )
+                ),
+            ]
+        )
+        content = str(response.content).strip()
+        if "```json" in content:
+            content = content.split("```json", 1)[1].split("```", 1)[0]
+        elif "```" in content:
+            content = content.split("```", 1)[1].split("```", 1)[0]
+        parsed = json.loads(content)
+        content_match = bool(parsed.get("content_match", False))
+        coverage_match = bool(parsed.get("coverage_match", False))
+        duration_match = bool(parsed.get("duration_match", fallback_sufficient))
+        sufficient = bool(parsed.get("sufficient", False))
+        reason = str(parsed.get("reason", "")).strip() or fallback_reason
+        confidence = str(parsed.get("confidence", "")).strip().lower()
+        if not content_match:
+            return False, f"{reason}（内容与当前任务不匹配，不能仅因时长充足而跳过联网补充）"
+        if not coverage_match:
+            return False, reason
+        if sufficient and confidence == "low":
+            return False, f"{reason}（低置信度，按保守策略继续联网补充）"
+        if sufficient and (duration_match or fallback_sufficient):
+            return True, reason
+        return False, reason
+    except Exception as exc:
+        graph_logger.warning("⚠️ 本地素材充分性评估失败，按保守策略继续联网补充: %s", exc)
+        return False, f"本地素材评估失败，按保守策略继续联网补充。{fallback_reason}"
 
 
 def _build_user_workspace_snapshot(max_files: int = 40) -> str:
@@ -352,28 +525,8 @@ def _build_user_workspace_snapshot(max_files: int = 40) -> str:
 
 def _load_latest_memory_experience(max_chars: int = 16000) -> str:
     """读取最新 skills 经验，用于注入下一轮剪辑上下文。"""
-    candidates = [
-        MEMORY_EXPERIENCE_DIR / "latest_skills.md",
-        MEMORY_EXPERIENCE_DIR / "latest_skills.txt",
-    ]
-    for c in candidates:
-        if c.exists():
-            try:
-                return c.read_text(encoding="utf-8")[:max_chars].strip() or "(经验文件为空)"
-            except Exception:
-                continue
-
-    try:
-        files = sorted(
-            MEMORY_EXPERIENCE_DIR.glob("experience_*.md"),
-            key=lambda p: p.stat().st_mtime,
-            reverse=True,
-        )
-        if files:
-            return files[0].read_text(encoding="utf-8")[:max_chars].strip() or "(经验文件为空)"
-    except Exception:
-        pass
-    return "(暂无经验文件)"
+    safe_limit = min(max_chars, INJECTION_MEMORY_CHAR_LIMIT)
+    return load_memory_reference(MEMORY_EXPERIENCE_DIR, max_chars=safe_limit)
 
 
 def _build_full_analysis_context() -> str:
@@ -494,7 +647,7 @@ def _infer_download_top_k(step_description: str, counts: dict[str, int]) -> int:
     return max(1, (low + high) // 2)
 
 
-def _run_deterministic_download_step(step: Step, counts: dict[str, int]) -> str:
+def _run_deterministic_download_step(step: Step, counts: dict[str, int], user_request: str) -> str:
     """下载步骤的确定性执行：先获取 selected_videos，再逐个下载。"""
     rank_tool = _TOOL_NAME_MAP.get("rank_video_candidates")
     download_tool = _TOOL_NAME_MAP.get("download_bilibili_video")
@@ -515,6 +668,7 @@ def _run_deterministic_download_step(step: Step, counts: dict[str, int]) -> str:
                 "candidates_json": "[]",
                 "top_k": top_k,
                 "max_review": max_review,
+                "selection_goal": user_request,
             }
         )
     except Exception as e:
@@ -594,6 +748,7 @@ PLANNER_PROMPT = """\
 {tool_catalog}
 
 ## 关键原则
+- 当前用户需求与当前素材分析是唯一的任务目标来源；历史案例 memory 只能提供方法参考，绝不能改写题材、素材类型、关键词、风格或目标时长
 - 尽量搜集丰富的资源：使用多关键词扩展与分页搜索，扩大搜索广度
 - 先广度再精选：先广度搜索 → MLLM 筛选 → 下载最优一批
 - 调用参数显式化：搜索和筛选工具必须显式传参（max_results / pages / max_total_results / top_k / max_review）
@@ -631,65 +786,70 @@ PLANNER_PROMPT = """\
 def planner_node(state: AgentState) -> dict[str, Any]:
     """Phase 1 Planner: 分析需求，生成素材准备步骤。"""
     graph_logger.info("🎯 Phase 1 — Planner 开始规划素材准备")
-    llm = _get_llm().bind(max_tokens=4096)
-
     target_duration = _extract_target_duration_seconds(state.user_request)
-    counts = _recommend_material_counts(target_duration)
-    sizing_hint = (
-        f"- 每平台搜索数量 max_results: {counts['search_per_source']}\n"
-        f"- 分页 pages: {counts['search_pages']}\n"
-        f"- 候选池上限 max_total_results: {counts['max_candidates']}\n"
-        f"- MLLM 评估数 max_review: {counts['mllm_review']}\n"
-        f"- 下载数量 top_k 建议区间: {counts['top_k_min']}~{counts['top_k_max']}（最终由你自主决定）\n"
-    )
-
-    prompt = PLANNER_PROMPT.format(
-        workspace=WORKSPACE,
-        user_workspace=USER_WORKSPACE,
-        memory_experience=MEMORY_EXPERIENCE_DIR,
-        tool_catalog=_build_tool_catalog(PREP_TOOLS),
-        sizing_hint=sizing_hint,
-    )
-
-    context_parts: list[str] = [f"用户需求: {state.user_request}"]
-    context_parts.append(
-        "\n## 用户本地素材目录 user_temp\n"
-        + _build_user_workspace_snapshot()
-    )
-    context_parts.append(
-        "\n## 历史经验（skills）\n"
-        + _load_latest_memory_experience(max_chars=12000)
-    )
-    if state.step_results:
-        context_parts.append("\n## 已完成的步骤结果")
-        for i, r in enumerate(state.step_results, start=1):
-            context_parts.append(f"步骤 {i}: {r[:300]}")
-
-    response = llm.invoke([
-        SystemMessage(content=prompt),
-        HumanMessage(content="\n".join(context_parts)),
-    ])
-
-    # 解析 JSON 计划
-    try:
-        content = str(response.content)
-        if "```json" in content:
-            content = content.split("```json")[1].split("```")[0]
-        elif "```" in content:
-            content = content.split("```")[1].split("```")[0]
-        plan_data = json.loads(content)
-        plan = Plan(**plan_data)
-    except Exception:
-        plan = Plan(
-            goal=state.user_request,
-            analysis="自动生成的素材准备计划",
-            steps=[
-                Step(id=1, description="搜索相关视频素材", tool_hint="search_bilibili_video"),
-                Step(id=2, description="筛选候选视频", tool_hint="rank_video_candidates"),
-                Step(id=3, description="下载最佳素材", tool_hint="download_bilibili_video"),
-                Step(id=4, description="分析所有已下载视频", tool_hint="analyze_video"),
-            ],
+    if DIRECT_PHASE3_EXECUTION:
+        plan = _build_direct_phase3_plan(state.user_request)
+        graph_logger.info("⏩ 直达 Phase 3 已启用，跳过联网素材搜集")
+    elif PREFER_LOCAL_MATERIALS and _iter_source_videos():
+        plan = _build_local_first_plan(state.user_request)
+        graph_logger.info("🏠 本地素材优先已启用，先复用现有素材再决定是否联网补充")
+    else:
+        llm = _get_llm().bind(max_tokens=4096)
+        counts = _recommend_material_counts(target_duration)
+        sizing_hint = (
+            f"- 每平台搜索数量 max_results: {counts['search_per_source']}\n"
+            f"- 分页 pages: {counts['search_pages']}\n"
+            f"- 候选池上限 max_total_results: {counts['max_candidates']}\n"
+            f"- MLLM 评估数 max_review: {counts['mllm_review']}\n"
+            f"- 下载数量 top_k 建议区间: {counts['top_k_min']}~{counts['top_k_max']}（最终由你自主决定）\n"
         )
+
+        prompt = PLANNER_PROMPT.format(
+            workspace=WORKSPACE,
+            user_workspace=USER_WORKSPACE,
+            memory_experience=MEMORY_EXPERIENCE_DIR,
+            tool_catalog=_build_tool_catalog(PREP_TOOLS),
+            sizing_hint=sizing_hint,
+        )
+
+        context_parts: list[str] = [f"用户需求: {state.user_request}"]
+        context_parts.append(
+            "\n## 用户本地素材目录 user_temp\n"
+            + _build_user_workspace_snapshot()
+        )
+        context_parts.append(
+            "\n## 历史案例经验（仅供参考，不能覆盖当前任务目标）\n"
+            + _load_latest_memory_experience(max_chars=12000)
+        )
+        if state.step_results:
+            context_parts.append("\n## 已完成的步骤结果")
+            for i, r in enumerate(state.step_results, start=1):
+                context_parts.append(f"步骤 {i}: {r[:300]}")
+
+        response = llm.invoke([
+            SystemMessage(content=prompt),
+            HumanMessage(content="\n".join(context_parts)),
+        ])
+
+        try:
+            content = str(response.content)
+            if "```json" in content:
+                content = content.split("```json")[1].split("```")[0]
+            elif "```" in content:
+                content = content.split("```")[1].split("```")[0]
+            plan_data = json.loads(content)
+            plan = Plan(**plan_data)
+        except Exception:
+            plan = Plan(
+                goal=state.user_request,
+                analysis="自动生成的素材准备计划",
+                steps=[
+                    Step(id=1, description="搜索相关视频素材", tool_hint="search_bilibili_video"),
+                    Step(id=2, description="筛选候选视频", tool_hint="rank_video_candidates"),
+                    Step(id=3, description="下载最佳素材", tool_hint="download_bilibili_video"),
+                    Step(id=4, description="分析所有已下载视频", tool_hint="analyze_video"),
+                ],
+            )
 
     for s in plan.steps:
         s.tool_hint = _normalize_tool_hint(s)
@@ -719,10 +879,12 @@ EXECUTOR_PROMPT = """\
 - user_temp: {user_workspace}
 
 重要:
+- 当前用户需求和当前素材分析永远优先；历史案例 memory 只能提供流程提醒，不能改写当前任务目标或素材判断
 - 操作结果中的文件路径非常重要，请在总结中完整保留
 - 对历史步骤里出现过的文件路径，后续调用必须逐字复用；禁止自行改名或猜测路径
 - 调 search_bilibili_video / rank_video_candidates 时，务必显式传入数量参数
 - rank_video_candidates 必须显式传入 top_k，且 top_k 由你自主决定（不要依赖默认值 5）
+- 若用户对横/竖屏有明确要求，调用 rank_video_candidates 时应把完整用户目标放进 selection_goal，让排序优先匹配对应画幅
 - 若当前步骤是"搜索素材"，只做搜索与汇总，不要提前调用 rank_video_candidates
 - 若当前步骤是"排序候选"，基于已累计候选池做排序
 - 排序完成后优先使用返回的 selected_videos 进入下载流程
@@ -804,6 +966,7 @@ def executor_node(state: AgentState) -> dict[str, Any]:
 
     # ── 构建执行上下文 ──
     context_parts: list[str] = [f"当前任务: {step.description}"]
+    context_parts.append(f"完整用户需求: {state.user_request}")
     if step.tool_hint:
         context_parts.append(f"建议使用工具: {step.tool_hint}")
     if state.target_duration_seconds > 0:
@@ -824,7 +987,8 @@ def executor_node(state: AgentState) -> dict[str, Any]:
         "\n用户素材目录文件(可直接复用):\n" + _build_user_workspace_snapshot()
     )
     context_parts.append(
-        "\n历史经验（skills）:\n" + _load_latest_memory_experience(max_chars=8000)
+        "\n历史案例经验（仅供参考，不能覆盖当前任务目标）:\n"
+        + _load_latest_memory_experience(max_chars=8000)
     )
 
     # 最近 3 步结果
@@ -840,27 +1004,26 @@ def executor_node(state: AgentState) -> dict[str, Any]:
 
     # 下载步骤：走确定性执行，避免模型使用占位BV号
     if tool_hint_lower == "download_bilibili_video":
-        final_msg = _run_deterministic_download_step(step, counts)
+        final_msg = _run_deterministic_download_step(step, counts, state.user_request)
         step.status = "done" if "成功" in final_msg else "failed"
         step.result = final_msg
         graph_logger.info("✅ 步骤 [%d] 完成(确定性下载): %s", step.id, final_msg[:220])
         return {"step_results": [final_msg], "current_step_index": idx + 1}
 
     if tool_hint_lower == "analyze_video":
-        already_analyzed_stems: set[str] = set()
-        for jp in _iter_analysis_json_files():
-            already_analyzed_stems.add(jp.stem.replace("_analysis", ""))
+        analysis_index = build_analysis_index([WORKSPACE, USER_WORKSPACE])
+        source_videos = _iter_source_videos()
+        not_analyzed: list[str] = []
+        analyzed_entries: list[tuple[str, str]] = []
 
-        source_videos = [
-            fp.name
-            for fp in _iter_source_videos()
-        ]
-        not_analyzed = [
-            v for v in source_videos if v.rsplit(".", 1)[0] not in already_analyzed_stems
-        ]
-        analyzed = [
-            v for v in source_videos if v.rsplit(".", 1)[0] in already_analyzed_stems
-        ]
+        for fp in source_videos:
+            matches = match_analysis_files(fp, analysis_index=analysis_index)
+            if matches:
+                analyzed_entries.append((fp.name, str(matches[0].resolve())))
+            else:
+                not_analyzed.append(fp.name)
+
+        analyzed = [name for name, _ in analyzed_entries]
 
         context_parts.append(
             "\n⚠️ 分析规则:\n"
@@ -872,8 +1035,26 @@ def executor_node(state: AgentState) -> dict[str, Any]:
             context_parts.append(f"待分析: {', '.join(not_analyzed)}")
         if analyzed:
             context_parts.append(f"已分析(跳过): {', '.join(analyzed)}")
+            context_parts.append(
+                "已检测到可复用分析文件:\n"
+                + "\n".join(
+                    f"- {name} -> {path}"
+                    for name, path in analyzed_entries[:12]
+                )
+            )
         if not not_analyzed and analyzed:
             context_parts.append("所有源视频均已分析完毕，可直接进入下一步。")
+            final_msg = (
+                "已检测到现有分析文件，跳过多模态分析：\n"
+                + "\n".join(
+                    f"- {name}: 复用 {path}"
+                    for name, path in analyzed_entries[:20]
+                )
+            )
+            step.status = "done"
+            step.result = final_msg
+            graph_logger.info("✅ 步骤 [%d] 复用现有分析: %s", step.id, final_msg[:220])
+            return {"step_results": [final_msg], "current_step_index": idx + 1}
         graph_logger.info(
             "🧠 源视频过滤: 待分析=%d, 已分析=%d", len(not_analyzed), len(analyzed)
         )
@@ -915,6 +1096,27 @@ def prep_router_node(state: AgentState) -> dict[str, Any]:
     plan = state.plan
     idx = state.current_step_index
 
+    if (
+        PREFER_LOCAL_MATERIALS
+        and plan is not None
+        and 0 < idx < len(plan.steps)
+        and _normalize_tool_hint(plan.steps[idx - 1]) == "analyze_video"
+    ):
+        remaining_remote_steps = [
+            step for step in plan.steps[idx:] if _normalize_tool_hint(step) in REMOTE_PREP_TOOL_NAMES
+        ]
+        if remaining_remote_steps:
+            sufficient, reason = _assess_local_material_sufficiency(state)
+            if sufficient:
+                next_phase = "researching" if ENABLE_PHASE2_RESEARCH else "react"
+                graph_logger.info("🏠 本地素材已满足需求，跳过联网补充步骤: %s", reason)
+                return {
+                    "phase": next_phase,
+                    "current_step_index": len(plan.steps),
+                    "step_results": [f"本地素材优先评估：现有素材已满足需求，跳过联网搜索与下载。{reason}"],
+                }
+            graph_logger.info("🌐 本地素材暂不足，继续联网补充: %s", reason)
+
     # ── 还有准备步骤未执行 → 让 executor 继续 ──
     if plan and idx < len(plan.steps):
         graph_logger.info(
@@ -930,6 +1132,13 @@ def prep_router_node(state: AgentState) -> dict[str, Any]:
     ]
 
     if analysis_files:
+        if DIRECT_PHASE3_EXECUTION:
+            graph_logger.info(
+                "✅ 直达 Phase 3: %d 个分析文件, %d 个源视频 → 直接进入 Phase 3",
+                len(analysis_files),
+                len(source_videos),
+            )
+            return {"phase": "react"}
         if not ENABLE_PHASE2_RESEARCH:
             graph_logger.info(
                 "✅ Phase 1 完成: %d 个分析文件, %d 个源视频 → Phase 2 已禁用，直接进入 Phase 3",
@@ -945,6 +1154,11 @@ def prep_router_node(state: AgentState) -> dict[str, Any]:
         return {"phase": "researching"}
 
     # ── 无分析 JSON → 需要重新规划 ──
+    if DIRECT_PHASE3_EXECUTION:
+        raise RuntimeError(
+            "直达 Phase 3 已启用，但当前未产出可用的分析数据，无法继续执行。"
+            "请检查本地素材是否可分析，或关闭“直达 Phase 3”。"
+        )
     graph_logger.warning("⚠️ 准备步骤已完成但无分析 JSON，触发重新规划")
     return {"phase": "replan", "plan": None}
 
@@ -1075,6 +1289,7 @@ EDITING_RESEARCH_PROMPT = """\
 ═════════════════════════════════════════
   关键原则
 ═════════════════════════════════════════
+- **当前任务优先**: 用户需求与当前素材分析永远高于历史案例 memory；严禁把历史案例里的题材、关键词、风格、节奏或时长结构迁移成当前目标
 - **自然流畅优先**: 片段之间的衔接必须有逻辑关联，避免生硬跳跃
 - **多源混剪**: 从不同视频取材，避免长时间只用一个源
 - **情绪连贯**: 相邻片段的情绪过渡要平滑，除非刻意制造反差
@@ -1120,7 +1335,7 @@ def editing_research_node(state: AgentState) -> dict[str, Any]:
         f"请逐段精读以下所有素材分析，这是你制定剪辑蓝图的唯一信息来源:\n\n{analysis_context}",
         f"\n## 当前工作目录文件\n{workspace_snapshot}",
         f"\n## 用户素材目录文件（可作为补充素材来源）\n{user_workspace_snapshot}",
-        f"\n## 历史经验（skills，请结合并优化）\n{memory_experience_text}",
+        f"\n## 历史案例经验（仅供参考，不能覆盖当前任务目标）\n{memory_experience_text}",
         "\n## 开始深度研究\n"
         "请严格按照研究框架，逐阶段输出你的分析和剪辑蓝图。"
         "记住：你现在只需要深度思考，不需要执行任何工具操作。",
@@ -1254,6 +1469,7 @@ add_narration_segments(
 ═════════════════════════════════════════
   创作原则
 ═════════════════════════════════════════
+- **当前任务优先**: 历史案例 memory 只能提供工具/流程参考，不能改写当前任务目标、素材理解、题材判断、旁白风格或成片定位
 - **开场抓人**: 选择最具视觉冲击力或悬念感的片段
 - **多源混剪**: 从不同源视频中选精华，避免只用单一来源
 - **蓝图优先执行**: 先按深度研究蓝图直接裁剪；仅在时间段不明确时再补充文本语义检索
@@ -1328,7 +1544,7 @@ def react_editor_node(state: AgentState) -> dict[str, Any]:
             f"以下是所有视频的多模态分析结果，可供交叉参考:\n\n{analysis_context}",
             f"\n## 当前工作目录文件\n{workspace_snapshot}",
             f"\n## 用户素材目录文件（可直接作为素材参与剪辑）\n{user_workspace_snapshot}",
-            f"\n## 历史经验（skills，请优先遵循）\n{memory_experience_text}",
+            f"\n## 历史案例经验（仅供参考，不能覆盖当前任务目标）\n{memory_experience_text}",
             "\n## 开始执行\n"
             "请先核对剪辑蓝图中的片段与分析数据，确认无误后按蓝图顺序执行剪辑。"
             "完成后请总结你的创作过程和最终成品信息。",

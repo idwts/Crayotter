@@ -33,11 +33,7 @@ def _pick_analysis_for_video(video_path: Path, raw_analysis_path: str) -> tuple[
             except Exception:
                 return None, None
 
-    candidates = sorted(
-        WORKSPACE.glob("*_analysis.json"),
-        key=lambda p: p.stat().st_mtime,
-        reverse=True,
-    )
+    candidates = _match_analysis_json_files(video_path) or _iter_analysis_json_files()
     for fp in candidates:
         try:
             with fp.open("r", encoding="utf-8") as f:

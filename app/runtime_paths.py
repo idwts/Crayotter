@@ -3,10 +3,13 @@ from __future__ import annotations
 import os
 import shutil
 import sys
+from collections.abc import Mapping
 from pathlib import Path
 
 
 APP_NAME = "Crayotter"
+RUNTIME_ENV_FILENAME = ".env"
+EXECUTABLE_DIR_ENV_VAR = "CRAYOTTER_EXECUTABLE_DIR"
 
 
 def is_frozen() -> bool:
@@ -23,6 +26,9 @@ def get_bundle_root() -> Path:
 
 
 def get_executable_dir() -> Path:
+    override_dir = os.environ.get(EXECUTABLE_DIR_ENV_VAR, "").strip()
+    if override_dir:
+        return Path(override_dir).expanduser().resolve()
     if is_frozen():
         return Path(sys.executable).resolve().parent
     return get_bundle_root()
@@ -67,6 +73,75 @@ def resource_path(*parts: str) -> Path:
 
 def runtime_path(*parts: str) -> Path:
     return get_runtime_root().joinpath(*parts)
+
+
+def runtime_env_path() -> Path:
+    return runtime_path(RUNTIME_ENV_FILENAME)
+
+
+def load_runtime_env_file(*, override: bool = False) -> Path:
+    env_path = runtime_env_path()
+    for key, value in read_runtime_env_file().items():
+        if override or key not in os.environ:
+            os.environ[key] = value
+    return env_path
+
+
+def read_runtime_env_file() -> dict[str, str]:
+    env_path = runtime_env_path()
+    if not env_path.exists():
+        return {}
+    payload: dict[str, str] = {}
+    for raw_line in env_path.read_text(encoding="utf-8").splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, value = line.split("=", 1)
+        key = key.strip()
+        if not key:
+            continue
+        payload[key] = _unquote_env_value(value.strip())
+    return payload
+
+
+def _quote_env_value(value: str) -> str:
+    escaped = value.replace("\\", "\\\\").replace('"', '\\"').replace("\n", "\\n")
+    return f'"{escaped}"'
+
+
+def _unquote_env_value(value: str) -> str:
+    if len(value) >= 2 and value[0] == value[-1] and value[0] in {'"', "'"}:
+        text = value[1:-1]
+        text = text.replace("\\n", "\n")
+        text = text.replace('\\"', '"')
+        text = text.replace("\\\\", "\\")
+        return text
+    comment_index = value.find(" #")
+    if comment_index >= 0:
+        return value[:comment_index].rstrip()
+    return value
+
+
+def write_runtime_env_file(values: Mapping[str, str | None]) -> Path:
+    env_path = runtime_env_path()
+    current = read_runtime_env_file()
+    merged = dict(current)
+    order = list(current.keys())
+
+    for key in values:
+        if key not in order:
+            order.append(key)
+
+    for key, raw_value in values.items():
+        value = str(raw_value or "").strip()
+        if value:
+            merged[key] = value
+        else:
+            merged.pop(key, None)
+
+    lines = [f"{key}={_quote_env_value(merged[key])}" for key in order if key in merged]
+    env_path.write_text("\n".join(lines) + ("\n" if lines else ""), encoding="utf-8")
+    return env_path
 
 
 def ensure_runtime_dirs() -> dict[str, Path]:
@@ -172,6 +247,7 @@ def configure_runtime_environment() -> None:
 
     os.environ.setdefault("CRAYOTTER_BUNDLE_ROOT", str(bundle_root))
     os.environ.setdefault("CRAYOTTER_RUNTIME_ROOT", str(runtime_root))
+    load_runtime_env_file(override=False)
 
     _prepend_path(_binary_search_roots())
 
