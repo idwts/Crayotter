@@ -30,6 +30,8 @@ It combines **planning**, **deep editing research**, and **tool-based execution*
 
 ## Overview
 
+<img src="crayottor_framework.jpg">
+
 This repository centers around four core components:
 
 - **`script\agent.py`**: Main entrypoint. Initializes runtime, runs tasks (interactive or single request), performs workspace cleanup, and writes logs/experience memory.
