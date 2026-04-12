@@ -38,6 +38,36 @@
     }
   };
 
+  const formatCompactCount = (value) => {
+    const count = Number(value);
+    if (!Number.isFinite(count)) return null;
+    return new Intl.NumberFormat("en", {
+      notation: count >= 1000 ? "compact" : "standard",
+      maximumFractionDigits: count >= 1000 ? 1 : 0,
+    }).format(count);
+  };
+
+  const loadRepoStars = async () => {
+    const starNode = document.querySelector("[data-star-count='true']");
+    if (!starNode) return;
+
+    try {
+      const resp = await fetchWithTimeout("https://api.github.com/repos/idwts/Crayotter", {
+        headers: {
+          Accept: "application/vnd.github+json",
+        },
+      }, 6000);
+      if (!resp.ok) throw new Error(`GitHub API error: ${resp.status}`);
+
+      const repo = await resp.json();
+      const stars = formatCompactCount(repo?.stargazers_count);
+      if (!stars) throw new Error("Missing stargazers_count");
+      starNode.textContent = `${stars} GitHub Stars`;
+    } catch (error) {
+      starNode.textContent = "Open on GitHub to Star";
+    }
+  };
+
   const renderToolCallList = (calls) => {
     if (!calls.length) {
       return `
@@ -268,5 +298,6 @@
     yearElement.textContent = String(new Date().getFullYear());
   }
 
+  loadRepoStars();
   loadDemoShowcase();
 })();

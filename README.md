@@ -12,6 +12,13 @@
   <a href="https://idwts.github.io/Crayotter" target="_blank" rel="noopener noreferrer">
     <img src="https://img.shields.io/badge/🚀-Interactive%20Demo-4CAF50?style=for-the-badge&logo=googlechrome&logoColor=white" alt="Interactive Demo">
   </a>
+  <a href="https://github.com/idwts/Crayotter/stargazers" target="_blank" rel="noopener noreferrer">
+    <img src="https://img.shields.io/github/stars/idwts/Crayotter?style=for-the-badge&logo=github&label=Star%20Crayotter&color=ffb347" alt="Star Crayotter on GitHub">
+  </a>
+</p>
+
+<p align="center">
+  If Crayotter helps your research or demos, please consider giving the repo a Star on GitHub.
 </p>
 
 Crayotter is a multimodal, agent-driven video editing system that turns a single text request into a complete edited video.

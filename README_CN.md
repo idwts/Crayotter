@@ -12,6 +12,13 @@
   <a href="https://idwts.github.io/Crayotter" target="_blank" rel="noopener noreferrer">
     <img src="https://img.shields.io/badge/🚀-在线演示-4CAF50?style=for-the-badge&logo=googlechrome&logoColor=white" alt="在线演示">
   </a>
+  <a href="https://github.com/idwts/Crayotter/stargazers" target="_blank" rel="noopener noreferrer">
+    <img src="https://img.shields.io/github/stars/idwts/Crayotter?style=for-the-badge&logo=github&label=Star%20Crayotter&color=ffb347" alt="在 GitHub Star Crayotter">
+  </a>
+</p>
+
+<p align="center">
+  如果这个项目对你有帮助，欢迎在 GitHub 上给 Crayotter 点一个 Star。
 </p>
 
 Crayotter 是一个多模态、Agent 驱动的视频自动编辑系统，可以把一条文本需求转化为完整成片。
