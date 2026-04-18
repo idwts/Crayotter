@@ -1,0 +1,90 @@
+{
+  "fixture_id": "local_smoke",
+  "description": "Self-contained Phase 3 smoke test with a generated demo video and scripted tool trajectory.",
+  "user_request": "请把现有素材裁成一个 3 秒左右的简短演示视频，保持横屏，最后导出成片。",
+  "target_duration_seconds": 3.0,
+  "editing_blueprint": "从已有主素材中截取 0.5s 到 3.5s 的稳定片段，先检查原始时长，再裁剪，再检查裁剪结果，最后导出为 720p 成片。",
+  "allowed_tools": [
+    "inspect_video_duration",
+    "cut_video",
+    "export_video"
+  ],
+  "runtime_seed": [
+    {
+      "generator": "synthetic_video",
+      "target": "temp/demo_source.mp4",
+      "options": {
+        "duration_seconds": 6.0,
+        "width": 640,
+        "height": 360,
+        "fps": 24,
+        "color": [42, 128, 198]
+      }
+    },
+    {
+      "source": "phase3_rl/fixtures/local_smoke/demo_source_analysis.json",
+      "target": "temp/demo_source_analysis.json"
+    }
+  ],
+  "scripted_turns": [
+    {
+      "assistant_content": "先确认源素材的时长，再按目标截出 3 秒内容，最后导出成片。",
+      "tool_calls": [
+        {
+          "tool_name": "inspect_video_duration",
+          "arguments": {
+            "video_path": "demo_source.mp4"
+          }
+        }
+      ]
+    },
+    {
+      "assistant_content": "源素材可用，开始裁出核心片段。",
+      "tool_calls": [
+        {
+          "tool_name": "cut_video",
+          "arguments": {
+            "input_path": "demo_source.mp4",
+            "start_time": 0.5,
+            "end_time": 3.5,
+            "output_name": "smoke_clip"
+          }
+        }
+      ]
+    },
+    {
+      "assistant_content": "先复核裁剪结果，再执行最终导出。",
+      "tool_calls": [
+        {
+          "tool_name": "inspect_video_duration",
+          "arguments": {
+            "video_path": "smoke_clip.mp4"
+          }
+        },
+        {
+          "tool_name": "export_video",
+          "arguments": {
+            "input_path": "smoke_clip.mp4",
+            "output_name": "smoke_final",
+            "resolution": "720p"
+          }
+        }
+      ]
+    },
+    {
+      "assistant_content": "成片已经导出并完成基础时长校验，本轮 Phase 3 演示结束。",
+      "tool_calls": [
+        {
+          "tool_name": "inspect_video_duration",
+          "arguments": {
+            "video_path": "smoke_final.mp4"
+          }
+        }
+      ]
+    },
+    {
+      "assistant_content": "已完成裁剪、导出与校验，最终视频位于工作目录中。",
+      "tool_calls": []
+    }
+  ]
+}

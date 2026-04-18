@@ -1,0 +1,52 @@
+{
+  "source_video": "demo_source.mp4",
+  "analysis_video": "demo_source.mp4",
+  "analysis_goal": "本地 smoke test 分析样例",
+  "video_url_used": "",
+  "audio_url_used": "",
+  "segments": [
+    {
+      "start": 0.0,
+      "end": 2.0,
+      "semantic_text": "稳定横屏演示画面，可作为开场和主体片段。"
+    },
+    {
+      "start": 2.0,
+      "end": 4.0,
+      "semantic_text": "素材内容连续，适合保留为中段主体。"
+    },
+    {
+      "start": 4.0,
+      "end": 6.0,
+      "semantic_text": "尾段节奏平稳，适合作为收束镜头。"
+    }
+  ],
+  "semantic_segments": [
+    {
+      "start": 0.0,
+      "end": 2.0,
+      "duration": 2.0,
+      "semantic_text": "稳定横屏演示画面，可作为开场和主体片段。"
+    },
+    {
+      "start": 2.0,
+      "end": 4.0,
+      "duration": 2.0,
+      "semantic_text": "素材内容连续，适合保留为中段主体。"
+    },
+    {
+      "start": 4.0,
+      "end": 6.0,
+      "duration": 2.0,
+      "semantic_text": "尾段节奏平稳，适合作为收束镜头。"
+    }
+  ],
+  "semantic_index": {
+    "index_version": 2,
+    "segment_count": 3,
+    "retrieval_mode": "text",
+    "updated_at": "2026-04-12T00:00:00"
+  },
+  "analysis_text": "t=0.0s-2.0s: 稳定横屏演示画面，可作为开场和主体片段。\n\nt=2.0s-4.0s: 素材内容连续，适合保留为中段主体。\n\nt=4.0s-6.0s: 尾段节奏平稳，适合作为收束镜头。",
+  "saved_at": "2026-04-12T00:00:00"
+}
