@@ -10,3 +10,6 @@ build/
 app/bin/
 packaging/
 requirements-desktop.txt
+
+phase3_rl/generated/
+phase3_rl/runs/
