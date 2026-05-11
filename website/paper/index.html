@@ -1,0 +1,335 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="site-version" content="20260511-01">
+  <title>Crayotter Paper | Artifact-Grounded Multimodal Agents for Long-Form Video Editing</title>
+  <meta name="description" content="Paper subpage for Crayotter: artifact-grounded multimodal agents for long-form video editing.">
+  <link rel="stylesheet" href="../styles.css">
+  <link rel="stylesheet" href="./assets/paper.css">
+</head>
+<body>
+  <header class="site-header">
+    <div class="container nav-wrap">
+      <a class="brand" href="../index.html" aria-label="Back to Crayotter homepage">
+        <span class="brand-logo-co" aria-hidden="true">CO</span>
+        <span class="brand-text">Crayotter</span>
+      </a>
+      <a class="github-link github-link-compact" href="https://github.com/idwts/Crayotter" target="_blank" rel="noopener noreferrer" aria-label="Open Crayotter repository">
+        <svg viewBox="0 0 24 24" aria-hidden="true">
+          <path fill="currentColor" d="M12 2C6.48 2 2 6.58 2 12.23c0 4.52 2.87 8.35 6.84 9.7.5.1.68-.22.68-.5 0-.25-.01-1.07-.01-1.94-2.78.62-3.37-1.22-3.37-1.22-.45-1.2-1.11-1.52-1.11-1.52-.91-.64.07-.63.07-.63 1 .07 1.54 1.06 1.54 1.06.9 1.58 2.35 1.12 2.92.85.09-.67.35-1.13.64-1.39-2.22-.26-4.56-1.14-4.56-5.08 0-1.12.39-2.03 1.04-2.74-.1-.26-.45-1.31.1-2.73 0 0 .84-.28 2.75 1.04A9.34 9.34 0 0 1 12 6.87c.85 0 1.72.12 2.52.35 1.9-1.32 2.74-1.04 2.74-1.04.55 1.42.2 2.47.1 2.73.65.71 1.04 1.62 1.04 2.74 0 3.95-2.34 4.82-4.57 5.07.36.32.68.95.68 1.92 0 1.38-.01 2.5-.01 2.84 0 .28.18.61.69.5A10.27 10.27 0 0 0 22 12.23C22 6.58 17.52 2 12 2z"/>
+        </svg>
+        <span>Repository</span>
+      </a>
+      <div class="nav-controls">
+        <button id="themeToggle" class="theme-toggle-site" type="button" aria-label="Toggle theme">☀️ 浅色</button>
+        <button class="nav-toggle" type="button" aria-label="Toggle navigation">☰</button>
+      </div>
+      <nav class="nav-links" aria-label="Paper navigation">
+        <a href="#overview">Overview</a>
+        <a href="#pipeline">Pipeline</a>
+        <a href="#evaluation">Evaluation</a>
+        <a href="#citation">Citation</a>
+        <a href="../index.html">Home</a>
+      </nav>
+    </div>
+  </header>
+
+  <main id="top">
+    <section class="hero paper-hero" id="overview">
+      <div class="hero-glow hero-glow-a"></div>
+      <div class="hero-glow hero-glow-b"></div>
+      <div class="container">
+        <div class="paper-hero-grid">
+          <div class="paper-hero-copy">
+            <div class="hero-pill">Research paper / project report</div>
+            <h1><span>Crayotter</span>: Artifact-Grounded Multimodal Agents for Long-Form Video Editing</h1>
+            <p class="paper-lead">
+              We frame long-form video editing as an artifact-grounded agent trajectory problem, where retrieval,
+              research, execution, and revision are all anchored in visible external states instead of opaque reasoning alone.
+            </p>
+            <p class="paper-authors">
+              Lecheng Yan, Yichong Zhang, Ben Pan, Xiaoyu Zheng, Jiawei Qian, Anqi Wu, Wenxi Li, Chenyang Lyu
+            </p>
+            <div class="hero-actions paper-actions">
+              <a class="btn btn-primary" href="./assets/crayotter-paper.pdf" target="_blank" rel="noopener noreferrer">Read PDF</a>
+              <a class="btn btn-ghost" href="./assets/crayotter-paper-source.tex" target="_blank" rel="noopener noreferrer">Source TeX</a>
+              <a class="btn btn-ghost" href="https://github.com/idwts/Crayotter" target="_blank" rel="noopener noreferrer">GitHub</a>
+              <a class="btn btn-ghost" href="../index.html">Back to Home</a>
+            </div>
+          </div>
+
+          <aside class="paper-side-card">
+            <div class="paper-metric-grid">
+              <article class="paper-metric-card">
+                <h3>3</h3>
+                <p>production phases</p>
+              </article>
+              <article class="paper-metric-card">
+                <h3>21</h3>
+                <p>registered tools</p>
+              </article>
+              <article class="paper-metric-card">
+                <h3>23</h3>
+                <p>evaluation themes</p>
+              </article>
+              <article class="paper-metric-card">
+                <h3>3.40</h3>
+                <p>human overall score</p>
+              </article>
+            </div>
+            <p class="paper-side-note">
+              The core claim is simple: better long-horizon editing comes from making source coverage, plans,
+              timelines, renders, and tool traces inspectable, replayable, and repairable.
+            </p>
+          </aside>
+        </div>
+
+        <figure class="paper-figure paper-hero-figure">
+          <img src="./assets/crayottor-visual.png" alt="Crayotter editing trajectory visual">
+          <figcaption>
+            A long-form editing request becomes a visible production trajectory with inspectable clips, transitions,
+            narration, subtitles, and revision loops.
+          </figcaption>
+        </figure>
+      </div>
+    </section>
+
+    <section class="section">
+      <div class="container">
+        <div class="section-head paper-head">
+          <h2>Why this paper matters</h2>
+          <p>From black-box prompting to stateful multimodal editing.</p>
+        </div>
+        <div class="paper-overview-grid">
+          <article class="paper-card paper-copy-card">
+            <h3>Abstract</h3>
+            <p>
+              Long-form multimodal editing remains hard because decisions are weakly grounded, intermediate states are hard to audit,
+              and failures are expensive to localize. Crayotter addresses this by mapping a user intent to a finished edited video
+              through three phases: material preparation, deep editing research, and tool-grounded execution.
+            </p>
+            <p>
+              Its key mechanism is environment-grounded reflection: after each tool action, the agent revises from observable artifacts
+              such as retrieval coverage reports, analysis JSON, timeline plans, previews, and tool logs, rather than from latent traces only.
+            </p>
+          </article>
+          <article class="paper-card paper-copy-card">
+            <h3>Core contributions</h3>
+            <ul class="paper-list">
+              <li>Formulates long-form video editing as an artifact-grounded trajectory problem.</li>
+              <li>Introduces a coverage-aware multimodal footage retrieval loop.</li>
+              <li>Builds a three-phase editing system with explicit runtime observability.</li>
+              <li>Defines an RLVR setup with verifiable rewards over editing artifacts.</li>
+            </ul>
+          </article>
+        </div>
+      </div>
+    </section>
+
+    <section class="section section-soft" id="pipeline">
+      <div class="container">
+        <div class="section-head paper-head">
+          <h2>Three-phase pipeline</h2>
+          <p>The system decomposes long-form editing into retrieval, research, and execution with explicit artifact contracts.</p>
+        </div>
+
+        <figure class="paper-figure">
+          <img src="./assets/crayottor-framework.png" alt="Crayotter framework architecture">
+          <figcaption>
+            Crayotter externalizes state across retrieval evidence, multimodal analyses, editable blueprints, timeline files, renders, and logs.
+          </figcaption>
+        </figure>
+
+        <div class="workflow-grid paper-phase-grid">
+          <article class="workflow-card">
+            <span class="phase-tag">Phase 1</span>
+            <h3>Coverage-aware retrieval</h3>
+            <p>Expand the request into scene, action, style, story, and shot tags, then retrieve and rerank videos until semantic coverage is sufficient.</p>
+          </article>
+          <article class="workflow-card">
+            <span class="phase-tag">Phase 2</span>
+            <h3>Deep editing research</h3>
+            <p>Translate the material pool into a time-grounded editing blueprint with beats, in/out points, transitions, rhythm, and narration intent.</p>
+          </article>
+          <article class="workflow-card">
+            <span class="phase-tag">Phase 3</span>
+            <h3>Tool-grounded execution</h3>
+            <p>Realize the blueprint through cutting, timeline construction, transitions, subtitles, loudness control, export, and artifact-based diagnosis.</p>
+          </article>
+        </div>
+
+        <div class="paper-dual-grid">
+          <figure class="paper-figure">
+            <img src="./assets/crayottor-search.png" alt="Coverage-aware retrieval figure">
+            <figcaption>The retrieval loop searches until missing tags are closed or the retrieval budget is exhausted.</figcaption>
+          </figure>
+          <figure class="paper-figure">
+            <img src="./assets/crayottor-ui.png" alt="Crayotter workbench interface">
+            <figcaption>The workbench keeps assets, execution state, and intermediate artifacts in one shared workspace.</figcaption>
+          </figure>
+        </div>
+      </div>
+    </section>
+
+    <section class="section">
+      <div class="container">
+        <div class="section-head paper-head">
+          <h2>What makes Crayotter different</h2>
+          <p>Editing is treated as a controllable production system rather than a single generation step.</p>
+        </div>
+        <div class="feature-grid paper-feature-grid">
+          <article class="feature-card">
+            <h3>Observable state</h3>
+            <p>Artifacts such as coverage reports, analysis outputs, plans, renders, and tool logs are first-class state variables.</p>
+          </article>
+          <article class="feature-card">
+            <h3>Selective repair</h3>
+            <p>Failures can be traced to a clip, timestamp span, or transition decision and fixed locally instead of restarting the whole run.</p>
+          </article>
+          <article class="feature-card">
+            <h3>RLVR-ready traces</h3>
+            <p>The same execution environment exposes verifiable diagnostics and reward signals for trajectory-level policy learning.</p>
+          </article>
+        </div>
+        <blockquote class="paper-quote">
+          The agent does not revise from hidden chain-of-thought alone; it revises from rendered timeline states,
+          multimodal analysis outputs, and tool-produced intermediate artifacts.
+        </blockquote>
+      </div>
+    </section>
+
+    <section class="section section-soft" id="evaluation">
+      <div class="container">
+        <div class="section-head paper-head">
+          <h2>Competitive evaluation</h2>
+          <p>Crayotter leads the reported baselines across all five judged dimensions.</p>
+        </div>
+
+        <div class="stat-grid paper-stat-grid">
+          <article class="stat-card">
+            <h3>3.40</h3>
+            <p>Human overall score</p>
+          </article>
+          <article class="stat-card">
+            <h3>2.39</h3>
+            <p>AI overall score</p>
+          </article>
+          <article class="stat-card">
+            <h3>23 themes</h3>
+            <p>Fixed benchmark pack</p>
+          </article>
+          <article class="stat-card">
+            <h3>5 axes</h3>
+            <p>Theme, richness, narrative, smoothness, visual quality</p>
+          </article>
+        </div>
+
+        <div class="paper-table-wrap">
+          <table class="paper-table">
+            <thead>
+              <tr>
+                <th>Method</th>
+                <th>Theme</th>
+                <th>Richness</th>
+                <th>Narrative</th>
+                <th>Smoothness</th>
+                <th>Visual</th>
+                <th>Overall</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr class="paper-table-highlight">
+                <td>Crayotter (ours)</td>
+                <td>3.59</td>
+                <td>3.35</td>
+                <td>3.22</td>
+                <td>3.29</td>
+                <td>3.54</td>
+                <td>3.40</td>
+              </tr>
+              <tr>
+                <td>CapCut-Mate</td>
+                <td>2.59</td>
+                <td>2.71</td>
+                <td>2.01</td>
+                <td>2.13</td>
+                <td>2.74</td>
+                <td>2.44</td>
+              </tr>
+              <tr>
+                <td>CutClaw</td>
+                <td>1.59</td>
+                <td>1.64</td>
+                <td>1.72</td>
+                <td>1.86</td>
+                <td>1.67</td>
+                <td>1.70</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+
+        <div class="paper-dual-grid paper-eval-grid">
+          <article class="paper-card paper-copy-card">
+            <h3>Reading the result</h3>
+            <p>
+              The gains are consistent with the paper's core argument: long-form editing benefits when retrieval,
+              planning, and execution all expose visible state that can be audited and revised.
+            </p>
+            <p>
+              Human raters score Crayotter highest on theme alignment, content richness, narrative coherence,
+              editing smoothness, and visual quality.
+            </p>
+          </article>
+          <figure class="paper-figure">
+            <img src="./assets/offline-replay-curves.png" alt="Offline replay reward curves">
+            <figcaption>Offline replay diagnostics used during RLVR implementation and reward plumbing checks.</figcaption>
+          </figure>
+        </div>
+      </div>
+    </section>
+
+    <section class="section" id="citation">
+      <div class="container">
+        <div class="section-head paper-head">
+          <h2>Citation and resources</h2>
+          <p>Use the paper page, the PDF, or the repository directly.</p>
+        </div>
+        <div class="paper-overview-grid">
+          <article class="paper-card paper-copy-card">
+            <h3>BibTeX</h3>
+            <pre class="paper-code"><code>@misc{yan2026crayotter,
+  title  = {Crayotter: Artifact-Grounded Multimodal Agents for Long-Form Video Editing},
+  author = {Lecheng Yan and Yichong Zhang and Ben Pan and Xiaoyu Zheng and
+            Jiawei Qian and Anqi Wu and Wenxi Li and Chenyang Lyu},
+  year   = {2026},
+  note   = {Project report},
+  url    = {https://github.com/idwts/Crayotter}
+}</code></pre>
+          </article>
+          <article class="paper-card paper-copy-card">
+            <h3>Resources</h3>
+            <ul class="paper-list">
+              <li><a href="./assets/crayotter-paper.pdf" target="_blank" rel="noopener noreferrer">Full paper PDF</a></li>
+              <li><a href="./assets/crayotter-paper-source.tex" target="_blank" rel="noopener noreferrer">LaTeX source</a></li>
+              <li><a href="https://github.com/idwts/Crayotter" target="_blank" rel="noopener noreferrer">Project repository</a></li>
+              <li><a href="../index.html">Back to homepage</a></li>
+            </ul>
+          </article>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <footer class="site-footer">
+    <div class="container footer-wrap">
+      <p>© <span id="current-year"></span> Crayotter · Paper subpage for the public project site</p>
+      <p>Built to live under <code>website/paper/</code> on GitHub Pages.</p>
+    </div>
+  </footer>
+
+  <script src="../script.js?v=20260322-01"></script>
+</body>
+</html>

@@ -15,6 +15,9 @@
   <a href="https://github.com/idwts/Crayotter/stargazers" target="_blank" rel="noopener noreferrer">
     <img src="https://img.shields.io/github/stars/idwts/Crayotter?style=for-the-badge&logo=github&label=Star%20Crayotter&color=ffb347" alt="在 GitHub Star Crayotter">
   </a>
+  <a href="https://idwts.github.io/Crayotter/paper/" target="_blank" rel="noopener noreferrer">
+    <img src="https://img.shields.io/badge/Blog-Paper%20Page-6f7cff?style=for-the-badge" alt="论文博客">
+  </a>
 </p>
 
 <p align="center">

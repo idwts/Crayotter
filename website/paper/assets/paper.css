@@ -1,0 +1,233 @@
+.paper-hero {
+  padding-bottom: 54px;
+}
+
+.paper-hero-grid,
+.paper-overview-grid,
+.paper-dual-grid {
+  display: grid;
+  gap: 20px;
+}
+
+.paper-hero-grid {
+  grid-template-columns: minmax(0, 1.45fr) minmax(300px, 0.78fr);
+  align-items: start;
+}
+
+.paper-hero-copy {
+  text-align: left;
+}
+
+.paper-lead {
+  max-width: 780px;
+}
+
+.paper-authors {
+  color: color-mix(in srgb, var(--text) 84%, #d4e5ff 16%);
+  font-size: 0.96rem;
+}
+
+.paper-actions {
+  justify-content: flex-start;
+}
+
+.paper-side-card,
+.paper-card,
+.paper-figure,
+.paper-table-wrap {
+  border: 1px solid var(--line);
+  border-radius: 18px;
+  background: color-mix(in srgb, var(--panel) 92%, transparent);
+  box-shadow: var(--shadow);
+}
+
+.paper-figure {
+  margin: 0;
+}
+
+.paper-side-card,
+.paper-copy-card {
+  padding: 20px;
+}
+
+.paper-metric-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.paper-metric-card {
+  padding: 14px;
+  border-radius: 14px;
+  border: 1px solid color-mix(in srgb, var(--line) 70%, var(--primary) 30%);
+  background: linear-gradient(165deg, rgba(25, 34, 52, 0.92), rgba(16, 21, 33, 0.92));
+}
+
+body.theme-light .paper-metric-card {
+  background: linear-gradient(165deg, rgba(255, 255, 255, 0.96), rgba(238, 243, 252, 0.96));
+}
+
+.paper-metric-card h3 {
+  margin: 0;
+  color: #cae2ff;
+  font-size: 1.3rem;
+}
+
+body.theme-light .paper-metric-card h3 {
+  color: var(--primary);
+}
+
+.paper-metric-card p,
+.paper-side-note,
+.paper-copy-card p,
+.paper-copy-card li,
+.paper-figure figcaption,
+.paper-table th,
+.paper-table td {
+  color: var(--text-muted);
+}
+
+.paper-metric-card p {
+  margin: 6px 0 0;
+  font-size: 0.86rem;
+}
+
+.paper-side-note {
+  margin: 14px 0 0;
+  font-size: 0.94rem;
+}
+
+.paper-hero-figure {
+  margin-top: 22px;
+}
+
+.paper-figure {
+  overflow: hidden;
+}
+
+.paper-figure img {
+  display: block;
+  width: 100%;
+  height: auto;
+  background: color-mix(in srgb, var(--bg) 85%, #04070d 15%);
+}
+
+.paper-figure figcaption {
+  padding: 14px 18px 18px;
+  font-size: 0.9rem;
+}
+
+.paper-head {
+  margin-bottom: 24px;
+}
+
+.paper-overview-grid {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.paper-copy-card h3 {
+  margin: 0 0 12px;
+  font-size: 1.05rem;
+}
+
+.paper-list {
+  margin: 0;
+  padding-left: 18px;
+}
+
+.paper-list li + li {
+  margin-top: 8px;
+}
+
+.paper-phase-grid,
+.paper-feature-grid {
+  margin-top: 20px;
+}
+
+.paper-dual-grid {
+  margin-top: 20px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.paper-quote {
+  margin: 22px 0 0;
+  padding: 18px 20px;
+  border-left: 4px solid var(--primary);
+  border-radius: 0 16px 16px 0;
+  background: color-mix(in srgb, var(--panel-hover) 86%, transparent);
+  color: color-mix(in srgb, var(--text) 90%, #cfe0ff 10%);
+}
+
+.paper-stat-grid {
+  margin-top: 0;
+  margin-bottom: 18px;
+}
+
+.paper-table-wrap {
+  overflow-x: auto;
+  padding: 10px;
+}
+
+.paper-table {
+  width: 100%;
+  min-width: 740px;
+  border-collapse: collapse;
+}
+
+.paper-table th,
+.paper-table td {
+  padding: 13px 14px;
+  text-align: left;
+  border-bottom: 1px solid color-mix(in srgb, var(--line) 84%, transparent);
+}
+
+.paper-table th {
+  font-size: 0.82rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.paper-table-highlight td {
+  color: var(--text);
+  font-weight: 700;
+  background: color-mix(in srgb, var(--primary) 12%, transparent);
+}
+
+.paper-eval-grid {
+  align-items: start;
+}
+
+.paper-code {
+  margin: 0;
+  padding: 16px;
+  overflow-x: auto;
+  border-radius: 14px;
+  background: color-mix(in srgb, var(--bg) 90%, #0b1020 10%);
+  border: 1px solid color-mix(in srgb, var(--line) 82%, transparent);
+  color: color-mix(in srgb, var(--text) 90%, #d7e7ff 10%);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.88rem;
+  line-height: 1.6;
+}
+
+@media (max-width: 980px) {
+  .paper-hero-grid,
+  .paper-overview-grid,
+  .paper-dual-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 760px) {
+  .paper-actions {
+    justify-content: stretch;
+  }
+
+  .paper-actions .btn {
+    width: 100%;
+  }
+
+  .paper-metric-grid {
+    grid-template-columns: 1fr 1fr;
+  }
+}
