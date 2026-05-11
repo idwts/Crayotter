@@ -197,6 +197,10 @@ body.theme-light .paper-metric-card h3 {
   align-items: start;
 }
 
+.paper-eval-note {
+  margin-top: 20px;
+}
+
 .paper-code {
   margin: 0;
   padding: 16px;
