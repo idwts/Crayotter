@@ -33,6 +33,7 @@ It combines **planning**, **deep editing research**, and **tool-based execution*
 
 ## NEWS
 
+- 2026.5.23: 100 Stars achieved!
 - 2026.5.11: The paper page is now live at [Crayotter Paper Page](https://idwts.github.io/Crayotter/paper/).
 - 2026.4.10：The release has been updated.
 - 2026.3.30: The first release version is now available. See [v0.1.0-demo](https://github.com/idwts/Crayotter/releases/tag/v0.1.0-demo).
