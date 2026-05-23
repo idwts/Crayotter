@@ -32,6 +32,7 @@ Crayotter 工作流由 **规划（planning）**、**深度剪辑研究（deep ed
 
 ## 近期动态
 
+- 2026.5.23: 100星达成！
 - 2026.5.11：论文页面已上线，见 [Crayotter Paper Page](https://idwts.github.io/Crayotter/paper/)。
 - 2026.4.10：优化后的 release 版本已更新。
 - 2026.3.30：第一款 release 版本已发布，见[v0.1.0-demo](https://github.com/idwts/Crayotter/releases/tag/v0.1.0-demo)。
