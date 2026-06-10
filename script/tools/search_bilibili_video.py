@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import asyncio
+
 from ._shared import *
 
 
@@ -65,10 +67,14 @@ def search_bilibili_video(
 
         # 使用同步方式运行异步代码
         async def do_search():
-            all_videos: list[dict[str, Any]] = []
+            max_concurrency = max(
+                1,
+                int(os.environ.get("CRAYOTTER_PREP_MAX_CONCURRENCY", "4") or 4),
+            )
+            semaphore = asyncio.Semaphore(max_concurrency)
 
-            for q in queries:
-                for page in range(1, max(1, pages) + 1):
+            async def fetch_page(q: str, page: int) -> list[dict[str, Any]]:
+                async with semaphore:
                     result = await bili_search.search_by_type(
                         keyword=q,
                         search_type=bili_search.SearchObjectType.VIDEO,
@@ -86,6 +92,7 @@ def search_bilibili_video(
                         rows = []
                     logger.debug("获取到 %s 条搜索结果", len(rows))
 
+                    page_videos: list[dict[str, Any]] = []
                     for v in rows:
                         try:
                             bvid = str(v.get("bvid") or "").strip()
@@ -116,11 +123,24 @@ def search_bilibili_video(
                             orientation_hint, orientation_source = _detect_candidate_orientation(candidate)
                             candidate["orientation_hint"] = orientation_hint
                             candidate["orientation_source"] = orientation_source
-                            all_videos.append(candidate)
+                            page_videos.append(candidate)
                         except Exception as e:
                             logger.warning(f"解析B站视频数据出错: {e}")
                             continue
+                    return page_videos
 
+            tasks = [
+                fetch_page(q, page)
+                for q in queries
+                for page in range(1, max(1, pages) + 1)
+            ]
+            batches = await asyncio.gather(*tasks, return_exceptions=True)
+            all_videos: list[dict[str, Any]] = []
+            for batch in batches:
+                if isinstance(batch, Exception):
+                    logger.warning("B站搜索分页失败: %s", batch)
+                    continue
+                all_videos.extend(batch)
             return all_videos
 
         all_videos = sync(do_search())
@@ -153,6 +173,8 @@ def search_bilibili_video(
         _append_candidates_to_pool(candidates)
         return json.dumps(candidates, ensure_ascii=False, indent=2)
     
+    except ModelCallError:
+        raise
     except Exception as e:
         error_msg = f"搜索B站视频出错: {e}"
         logger.error(f"❌ Bilibili搜索异常: {e}", exc_info=True)

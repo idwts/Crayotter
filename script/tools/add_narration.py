@@ -46,23 +46,9 @@ def add_narration(
         # )
         # response.stream_to_file(str(audio_path))
 
-        dashscope.api_key = TTS_API_KEY
-        response = dashscope.MultiModalConversation.call(
-            model=TTS_MODEL_NAME,
-            text=narration_text,
-            voice=voice
-        )
-
-        # 获取音频 URL
-        if response.status_code == 200:
-            audio_url = response.output.audio.url
-            logger.info(f'TTS 音频URL: {audio_url}')
-            # 下载音频
-            import urllib.request
-            urllib.request.urlretrieve(audio_url, audio_path)
-            logger.info(f'TTS 音频已保存到 {audio_path}')
-        else:
-            return f"旁白添加出错: TTS 生成失败 (status={response.status_code}): {response.message}"
+        tts_error = _tts_generate(narration_text, voice, audio_path)
+        if tts_error:
+            return f"旁白添加出错: {tts_error}"
 
         output_path = _safe_output_video_path(output_name, default_stem="narrated")
         video = VideoFileClip(str(resolved_video))
@@ -91,5 +77,7 @@ def add_narration(
             "path": str(output_path),
             "narration_length": len(narration_text),
         }, ensure_ascii=False)
+    except ModelCallError:
+        raise
     except Exception as e:
         return f"旁白添加出错: {e}"

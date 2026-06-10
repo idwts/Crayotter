@@ -4,7 +4,7 @@ from . import _shared
 from ._shared import LOGS_DIR, MEMORY_EXPERIENCE_DIR, USER_WORKSPACE, WORKSPACE, logger
 from .search_youtobe_video import search_youtobe_video
 from .download_youtobe_video import download_youtobe_video
-from .analyze_video import analyze_video
+from .analyze_video import analyze_video, reset_analysis_failure_circuit
 from .cut_video import cut_video
 from .batch_cut_video import batch_cut_video
 from .recall_semantic_segments import recall_semantic_segments
@@ -91,6 +91,7 @@ __all__ = [
     'search_youtobe_video',
     'download_youtobe_video',
     'analyze_video',
+    'reset_analysis_failure_circuit',
     'cut_video',
     'batch_cut_video',
     'recall_semantic_segments',

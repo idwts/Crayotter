@@ -69,6 +69,7 @@ Crayotter 工作流由 **规划（planning）**、**深度剪辑研究（deep ed
 Crayotter 工作流分三阶段：
 
 1. **Phase 1 — 素材准备（Planner + Executor）**
+   - Planner 输出显式依赖 DAG，调度器通过有界 `Send` fan-out 并发执行当前 ready steps
    - 搜索候选素材
    - 对候选素材进行排序并筛选高质量素材
    - 下载入选视频
@@ -89,6 +90,30 @@ Crayotter 工作流分三阶段：
 ---
 
 ## 快速开始
+
+### Windows 免安装版本
+
+Windows 10/11 x64 用户可以使用发布页中的 `Crayotter-Windows-x64.zip`：
+
+1. 完整解压压缩包。
+2. 双击 `Crayotter.exe`。
+3. 在工作台“设置”中填写 API Key 和模型配置。
+
+发布包自带 Python 运行环境、FFmpeg 和 yt-dlp，不需要用户安装 Python。工作台默认使用独立桌面窗口；如果系统缺少 Microsoft Edge WebView2，则会自动在默认浏览器中打开。
+
+运行数据默认写入解压目录；如果目录不可写，则写入 `%LOCALAPPDATA%\Crayotter`。发布包不包含 `.env`、API Key、用户素材、日志或生成视频。
+
+开发者可以在 Windows x64、Python 3.12 环境中执行以下命令生成发行目录和 ZIP：
+
+```powershell
+powershell -ExecutionPolicy Bypass -File packaging\build_windows.ps1
+```
+
+构建结果：
+
+- `dist\Crayotter\`
+- `Crayotter-Windows-x64.zip`
+
 ### 0）剪辑工具
 确保系统的 `PATH` 环境变量中已包含 `ffmpeg` 二进制可执行文件，使其能够在终端中被直接调用。  
 可前往 `https://ffmpeg.org/download.html` 下载对应平台的安装包。安装完成后，可在终端执行 `ffmpeg -version`，若能正常输出版本信息，则说明配置成功。
@@ -142,14 +167,21 @@ CRAYOTTER_DIRECT_PHASE3_EXECUTION=false
 # 是否优先使用本地素材（true=优先本地，false=优先在线获取）
 CRAYOTTER_PREFER_LOCAL_MATERIALS=false
 
+# Phase 1 DAG、下载和视频分析的并发上限
+CRAYOTTER_PREP_MAX_CONCURRENCY=4
+CRAYOTTER_DOWNLOAD_MAX_CONCURRENCY=2
+CRAYOTTER_VIDEO_ANALYSIS_MAX_CONCURRENCY=2
+
 # 智能代理超时等待时间（单位：秒，默认150秒，超时会自动结束当前任务）
 CRAYOTTER_AGENT_STALL_TIMEOUT_SECONDS=150
+
 ```
 
 说明：
 
 - `CRAYOTTER_DIRECT_PHASE3_EXECUTION=true`：跳过 Phase 2 素材搜索/下载，直接走“现有素材分析 + Phase 3 执行”链路。
 - `CRAYOTTER_PREFER_LOCAL_MATERIALS=true`：先分析本地素材，若当前素材已足够则直接进入后续剪辑，不足时才联网补充。
+- 三个并发参数分别控制 Phase 1 ready steps、并行下载和并行视频分析的上限。
 - `CRAYOTTER_AGENT_STALL_TIMEOUT_SECONDS`：控制任务“长时间无新进展”判定阈值。
 - 环境隐式逻辑：图形化工作台中的 API 设置、Phase 2、直达 Phase 3、本地素材优先和超时设置，都会同步写回同一份 `.env`。
 - 成品画幅控制：候选素材排序现在会把目标横竖屏当成评分因子：默认优先横屏；如果用户明确要求竖屏，则优先竖屏。Phase 3 合并/导出也改成“放缩后居中裁切”，不再简单拉伸。
@@ -177,21 +209,27 @@ python script\agent.py "制作一个1分钟校园主题宣传片"
 
 图形化工作台提供了一个直观的 Web 界面，用于管理任务、配置环境以及监控 Agent 的实时状态。
 
-1. 启动本地后端服务：
+桌面模式会自动启动后端并打开独立窗口：
+
+```bash
+python script\run_desktop.py
+```
+
+也可以只启动本地后端服务：
 
 ```bash
 # 在本地8765端口打开WEB工作台
 python script\run_backend.py --host 127.0.0.1 --port 8765
 ```
 
-2. 在浏览器打开：
+然后在浏览器打开：
 
 如果在第一步使用 8765 端口：
 ```text
 http://127.0.0.1:8765/ui/
 ```
 
-3. 工作台当前功能：
+工作台当前功能：
 
 - 任务创建：支持创建 `demo` 和 `agent` 任务
 - 环境配置：与 `.env` 双向同步的本地配置管理

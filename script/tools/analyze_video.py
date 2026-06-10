@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+import threading
 from typing import Any
 from urllib.parse import urlparse
 
@@ -12,12 +13,23 @@ from ._shared import (
     _is_local_base_url,
     _prepare_timestamped_video_for_analysis,
     _resolve_video_path,
+    _restore_cached_analysis,
     _save_analysis_json,
+    _store_cached_analysis,
     _to_file_url,
+    ModelCallError,
     dashscope,
+    emit_benchmark_event,
+    ensure_model_calls_allowed,
+    fail_fast_model_errors,
     logger,
+    raise_model_failure,
+    time,
     tool,
 )
+
+_FATAL_ANALYSIS_ERROR = ""
+_FATAL_ANALYSIS_ERROR_LOCK = threading.Lock()
 
 
 def _format_api_error(exc: Exception) -> str:
@@ -42,6 +54,39 @@ def _format_api_error(exc: Exception) -> str:
     if not details:
         return message
     return f"{message}; {'; '.join(details)}"
+
+
+def _is_fatal_access_error(status_code: Any, message: str) -> bool:
+    normalized = str(message or "").lower()
+    return status_code in {401, 403} or "access denied" in normalized or "permission denied" in normalized
+
+
+def _is_fatal_media_input_error(status_code: Any, message: str) -> bool:
+    normalized = str(message or "").lower()
+    return status_code == 400 and (
+        "url error" in normalized
+        or "invalid url" in normalized
+        or "unsupported model" in normalized
+        or "model not found" in normalized
+    )
+
+
+def _get_fatal_analysis_error() -> str:
+    with _FATAL_ANALYSIS_ERROR_LOCK:
+        return _FATAL_ANALYSIS_ERROR
+
+
+def _set_fatal_analysis_error(message: str) -> None:
+    global _FATAL_ANALYSIS_ERROR
+    with _FATAL_ANALYSIS_ERROR_LOCK:
+        if not _FATAL_ANALYSIS_ERROR:
+            _FATAL_ANALYSIS_ERROR = message
+
+
+def reset_analysis_failure_circuit() -> None:
+    global _FATAL_ANALYSIS_ERROR
+    with _FATAL_ANALYSIS_ERROR_LOCK:
+        _FATAL_ANALYSIS_ERROR = ""
 
 
 def _to_dashscope_file_url(path: Path) -> str:
@@ -175,9 +220,25 @@ def analyze_video(
         max_frames: 保留参数（当前版本未使用），勿修改，默认 20
     """
     try:
+        fatal_error = _get_fatal_analysis_error()
+        if fatal_error:
+            return f"视频分析出错: 多模态服务访问被拒绝，已停止重复调用: {fatal_error}"
+
         resolved_video = _resolve_video_path(video_path)
         if resolved_video is None or not resolved_video.exists():
             return f"视频分析出错: 输入视频不存在或不在WORKSPACE目录: {video_path}"
+
+        cached_analysis = _restore_cached_analysis(
+            resolved_video,
+            analysis_goal,
+            _shared.VIDEO_MODEL_NAME,
+        )
+        if cached_analysis is not None:
+            return (
+                "视频分析完成（缓存复用）:\n\n"
+                f"- analysis_json: {cached_analysis}\n"
+                f"- source_video: {resolved_video}"
+            )
 
         # 根据模型名判断是否为 Omni（支持音频输入）
         is_omni = "omni" in _shared.VIDEO_MODEL_NAME.lower()
@@ -203,7 +264,7 @@ def analyze_video(
         use_local_media_url = _is_local_base_url(_shared.VIDEO_BASE_URL)
 
         video_candidates = [analysis_video]
-        if analysis_video != resolved_video:
+        if analysis_video != resolved_video and not fail_fast_model_errors():
             video_candidates.append(resolved_video)
 
         video_inputs: list[dict[str, str]] = []
@@ -244,12 +305,26 @@ def analyze_video(
 
         last_error = ""
         if not use_local_media_url:
+            fatal_error = _get_fatal_analysis_error()
+            if fatal_error:
+                return f"视频分析出错: 多模态服务访问被拒绝，已停止重复调用: {fatal_error}"
+
             dashscope.api_key = _shared.VIDEO_API_KEY
             dashscope.base_http_api_url = _normalize_dashscope_api_url(_shared.VIDEO_BASE_URL)
 
             for vitem in video_inputs:
                 vdisplay = vitem["display"]
+                started_at = time.perf_counter()
                 try:
+                    ensure_model_calls_allowed()
+                    emit_benchmark_event(
+                        "model_call_started",
+                        {
+                            "stage": "video_analysis",
+                            "model": _shared.VIDEO_MODEL_NAME,
+                            "source": resolved_video.name,
+                        },
+                    )
                     response = dashscope.MultiModalConversation.call(
                         model=_shared.VIDEO_MODEL_NAME,
                         messages=[
@@ -276,6 +351,21 @@ def analyze_video(
                                 video_url_used=vdisplay,
                                 audio_url_used="",
                             )
+                            _store_cached_analysis(
+                                resolved_video,
+                                analysis_goal,
+                                _shared.VIDEO_MODEL_NAME,
+                                analysis_json_path,
+                            )
+                            emit_benchmark_event(
+                                "model_call_completed",
+                                {
+                                    "stage": "video_analysis",
+                                    "model": _shared.VIDEO_MODEL_NAME,
+                                    "source": resolved_video.name,
+                                    "duration_seconds": round(time.perf_counter() - started_at, 3),
+                                },
+                            )
                             return (
                                 f"视频分析完成（{mode_tag}）:\n\n"
                                 f"- media_mode: dashscope_file_url\n"
@@ -293,6 +383,29 @@ def analyze_video(
                         vdisplay,
                         last_error,
                     )
+                    if fail_fast_model_errors():
+                        raise_model_failure(
+                            stage="video_analysis",
+                            model=_shared.VIDEO_MODEL_NAME,
+                            message=message or "DashScope returned a non-success status.",
+                            status_code=status_code,
+                            request_id=req_id,
+                            duration_seconds=time.perf_counter() - started_at,
+                        )
+                    if _is_fatal_access_error(status_code, message):
+                        _set_fatal_analysis_error(last_error)
+                        return (
+                            "视频分析出错: DashScope 拒绝访问多模态模型。"
+                            f"请检查视频模型权限或 API Key: {last_error}"
+                        )
+                    if _is_fatal_media_input_error(status_code, message):
+                        _set_fatal_analysis_error(last_error)
+                        return (
+                            "视频分析出错: 当前视频模型或媒体输入格式不受支持，"
+                            "已停止后续重复调用。请检查 CRAYOTTER_VIDEO_MODEL_NAME。"
+                        )
+                except ModelCallError:
+                    raise
                 except Exception as e:
                     last_error = _format_api_error(e)
                     logger.warning(
@@ -300,6 +413,21 @@ def analyze_video(
                         vdisplay,
                         last_error,
                     )
+                    if fail_fast_model_errors():
+                        response_obj = getattr(e, "response", None)
+                        raise_model_failure(
+                            stage="video_analysis",
+                            model=_shared.VIDEO_MODEL_NAME,
+                            message=last_error,
+                            status_code=getattr(response_obj, "status_code", None),
+                            duration_seconds=time.perf_counter() - started_at,
+                        )
+                    if _is_fatal_access_error(getattr(getattr(e, "response", None), "status_code", None), last_error):
+                        _set_fatal_analysis_error(last_error)
+                        return (
+                            "视频分析出错: DashScope 拒绝访问多模态模型。"
+                            f"请检查视频模型权限或 API Key: {last_error}"
+                        )
                     continue
 
             return f"视频分析出错: DashScope 调用失败: {last_error or 'unknown error'}"
@@ -314,6 +442,16 @@ def analyze_video(
                 acontent = aitem["value"]
                 adisplay = aitem["display"]
                 try:
+                    started_at = time.perf_counter()
+                    ensure_model_calls_allowed()
+                    emit_benchmark_event(
+                        "model_call_started",
+                        {
+                            "stage": "video_analysis",
+                            "model": _shared.VIDEO_MODEL_NAME,
+                            "source": resolved_video.name,
+                        },
+                    )
                     content: list[dict[str, Any]] = [
                         {"type": "video_url", "video_url": {"url": vcontent}},
                     ]
@@ -339,6 +477,21 @@ def analyze_video(
                             video_url_used=vdisplay,
                             audio_url_used="" if adisplay == "N/A" else adisplay,
                         )
+                        _store_cached_analysis(
+                            resolved_video,
+                            analysis_goal,
+                            _shared.VIDEO_MODEL_NAME,
+                            analysis_json_path,
+                        )
+                        emit_benchmark_event(
+                            "model_call_completed",
+                            {
+                                "stage": "video_analysis",
+                                "model": _shared.VIDEO_MODEL_NAME,
+                                "source": resolved_video.name,
+                                "duration_seconds": round(time.perf_counter() - started_at, 3),
+                            },
+                        )
                         return (
                             f"视频分析完成（{mode_tag}）:\n\n"
                             f"- media_mode: {'file_url' if use_local_media_url else 'data_url'}\n"
@@ -347,6 +500,15 @@ def analyze_video(
                             f"- analysis_json: {str(analysis_json_path) if analysis_json_path else 'N/A'}\n\n"
                             f"{analysis}"
                         )
+                    if fail_fast_model_errors():
+                        raise_model_failure(
+                            stage="video_analysis",
+                            model=_shared.VIDEO_MODEL_NAME,
+                            message="Model returned empty video analysis content.",
+                            duration_seconds=time.perf_counter() - started_at,
+                        )
+                except ModelCallError:
+                    raise
                 except Exception as e:
                     last_error = _format_api_error(e)
                     logger.warning(
@@ -356,9 +518,20 @@ def analyze_video(
                         "file_url" if use_local_media_url else "data_url",
                         last_error,
                     )
+                    if fail_fast_model_errors():
+                        response_obj = getattr(e, "response", None)
+                        raise_model_failure(
+                            stage="video_analysis",
+                            model=_shared.VIDEO_MODEL_NAME,
+                            message=last_error,
+                            status_code=getattr(response_obj, "status_code", None),
+                            duration_seconds=time.perf_counter() - started_at,
+                        )
                     continue
 
         return f"视频分析出错: 调用失败: {last_error or 'unknown error'}"
 
+    except ModelCallError:
+        raise
     except Exception as e:
         return f"视频分析出错: {e}"

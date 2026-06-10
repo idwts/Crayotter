@@ -70,6 +70,7 @@ Supporting folders:
 Crayotter uses a three-phase architecture:
 
 1. **Phase 1 — Material Preparation (Planner + Executor)**
+   - Planner emits an explicit dependency DAG; ready steps are dispatched concurrently with bounded `Send` fan-out
    - Search candidate videos
    - Rank/select high-quality candidates
    - Download selected videos
@@ -90,6 +91,29 @@ Crayotter uses a three-phase architecture:
 ---
 
 ## Quick Start
+
+### Windows Standalone Release
+
+Windows 10/11 x64 users can download `Crayotter-Windows-x64.zip` from the release page:
+
+1. Extract the complete archive.
+2. Double-click `Crayotter.exe`.
+3. Enter the API key and model settings in the workbench.
+
+The release includes Python, FFmpeg, and yt-dlp, so users do not need to install Python. It opens in a native desktop window when Microsoft Edge WebView2 is available and falls back to the default browser otherwise.
+
+Runtime data is stored next to the executable when that directory is writable, or under `%LOCALAPPDATA%\Crayotter` otherwise. The release never includes `.env`, API keys, uploaded media, logs, or generated videos.
+
+To build the Windows x64 release with Python 3.12:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File packaging\build_windows.ps1
+```
+
+The build produces:
+
+- `dist\Crayotter\`
+- `Crayotter-Windows-x64.zip`
 
 ### 1) Environment
 
@@ -126,6 +150,9 @@ CRAYOTTER_TTS_MODEL_NAME=qwen-tts-latest
 CRAYOTTER_ENABLE_PHASE2_RESEARCH=true
 CRAYOTTER_DIRECT_PHASE3_EXECUTION=false
 CRAYOTTER_PREFER_LOCAL_MATERIALS=false
+CRAYOTTER_PREP_MAX_CONCURRENCY=4
+CRAYOTTER_DOWNLOAD_MAX_CONCURRENCY=2
+CRAYOTTER_VIDEO_ANALYSIS_MAX_CONCURRENCY=2
 CRAYOTTER_AGENT_STALL_TIMEOUT_SECONDS=150
 ```
 
@@ -133,6 +160,7 @@ Notes:
 
 - `CRAYOTTER_DIRECT_PHASE3_EXECUTION=true` skips material search/download and goes straight into the existing-material analysis + Phase 3 execution path.
 - `CRAYOTTER_PREFER_LOCAL_MATERIALS=true` analyzes local materials first and only searches online when the current materials are not enough.
+- The three concurrency variables bound Phase 1 ready-step fan-out, parallel downloads, and parallel video analysis respectively.
 - `CRAYOTTER_AGENT_STALL_TIMEOUT_SECONDS` controls the “no new progress” watchdog threshold for running jobs.
 - The workbench UI writes API settings, Phase 2, direct Phase 3, local-first mode, and timeout changes back to the same `.env`.
 - Candidate ranking now treats target orientation as a scoring factor: landscape by default, portrait when the user explicitly asks for it. Merge/export also use scale-to-cover plus centered crop instead of direct stretching.
@@ -157,7 +185,13 @@ python script\agent.py "Create a 1-minute campus-themed promo video"
 
 ### 5) Run the Workbench GUI
 
-Start the local backend service:
+Desktop mode starts the backend and opens the standalone window:
+
+```bash
+python script\run_desktop.py
+```
+
+Alternatively, start only the local backend service:
 
 ```bash
 python script\run_backend.py --host 127.0.0.1 --port 8765

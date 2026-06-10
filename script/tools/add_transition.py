@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from app.media_metadata import video_has_audio
+
 from ._shared import *
 
 
@@ -48,13 +50,6 @@ def _ffmpeg_binary() -> str:
     return shutil.which("ffmpeg") or "ffmpeg"
 
 
-def _ffprobe_binary() -> str:
-    custom = os.environ.get("FFPROBE_BIN", "").strip()
-    if custom:
-        return custom
-    return shutil.which("ffprobe") or "ffprobe"
-
-
 def _ffmpeg_run(cmd: list[str], timeout: int = 900) -> tuple[bool, str]:
     try:
         proc = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
@@ -68,22 +63,11 @@ def _ffmpeg_run(cmd: list[str], timeout: int = 900) -> tuple[bool, str]:
 
 
 def _has_audio_stream(video_path: Path) -> bool:
-    cmd = [
-        _ffprobe_binary(),
-        "-v",
-        "error",
-        "-select_streams",
-        "a",
-        "-show_entries",
-        "stream=index",
-        "-of",
-        "csv=p=0",
-        str(video_path),
-    ]
-    ok, out = _ffmpeg_run(cmd, timeout=60)
-    if not ok:
+    try:
+        return video_has_audio(video_path)
+    except Exception as exc:
+        logger.warning("无法检测视频音轨，将按无音轨处理: %s", exc)
         return False
-    return bool((out or "").strip())
 
 
 def _normalize_clip_for_transition(

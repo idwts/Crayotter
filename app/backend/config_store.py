@@ -33,6 +33,13 @@ APP_ENV_VARS = {
     "enable_phase2_research": "CRAYOTTER_ENABLE_PHASE2_RESEARCH",
     "direct_phase3_execution": "CRAYOTTER_DIRECT_PHASE3_EXECUTION",
     "prefer_local_materials": "CRAYOTTER_PREFER_LOCAL_MATERIALS",
+    "prep_max_concurrency": "CRAYOTTER_PREP_MAX_CONCURRENCY",
+    "download_max_concurrency": "CRAYOTTER_DOWNLOAD_MAX_CONCURRENCY",
+    "video_analysis_max_concurrency": "CRAYOTTER_VIDEO_ANALYSIS_MAX_CONCURRENCY",
+    "short_form_optimizations": "CRAYOTTER_SHORT_FORM_OPTIMIZATIONS",
+    "short_form_max_sources": "CRAYOTTER_SHORT_FORM_MAX_SOURCES",
+    "video_analysis_proxy_max_seconds": "CRAYOTTER_VIDEO_ANALYSIS_PROXY_MAX_SECONDS",
+    "download_max_height": "CRAYOTTER_DOWNLOAD_MAX_HEIGHT",
     "agent_stall_timeout_seconds": "CRAYOTTER_AGENT_STALL_TIMEOUT_SECONDS",
 }
 
@@ -40,6 +47,7 @@ BOOL_FIELDS = {
     "enable_phase2_research",
     "direct_phase3_execution",
     "prefer_local_materials",
+    "short_form_optimizations",
 }
 
 

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from . import _shared
 from ._shared import *
 
 
@@ -203,7 +204,7 @@ def plan_narration_segments(
 
         client = _get_openai_client()
         response = client.chat.completions.create(
-            model=MODEL_NAME,
+            model=_shared.MODEL_NAME,
             messages=[
                 {"role": "system", "content": prompt},
                 {"role": "user", "content": json.dumps(user_payload, ensure_ascii=False)},

@@ -18,6 +18,7 @@ from memory_reference import (
     load_memory_reference,
     sanitize_memory_reference,
 )
+from model_runtime import ModelCallError, emit_benchmark_event, reset_model_abort
 
 # ═══════════════════════════════════════════════════════════════════════════
 # API 配置 - 请在此处设置你的密钥和中转站地址
@@ -37,6 +38,41 @@ DIRECT_PHASE3_EXECUTION = str(
 PREFER_LOCAL_MATERIALS = str(
     os.environ.get("CRAYOTTER_PREFER_LOCAL_MATERIALS", "false")
 ).strip().lower() not in {"0", "false", "no", "off"}
+SHORT_FORM_OPTIMIZATIONS = str(
+    os.environ.get("CRAYOTTER_SHORT_FORM_OPTIMIZATIONS", "true")
+).strip().lower() not in {"0", "false", "no", "off"}
+try:
+    PREP_MAX_CONCURRENCY = max(
+        1,
+        int(os.environ.get("CRAYOTTER_PREP_MAX_CONCURRENCY", "4") or 4),
+    )
+    DOWNLOAD_MAX_CONCURRENCY = max(
+        1,
+        int(os.environ.get("CRAYOTTER_DOWNLOAD_MAX_CONCURRENCY", "2") or 2),
+    )
+    VIDEO_ANALYSIS_MAX_CONCURRENCY = max(
+        1,
+        int(os.environ.get("CRAYOTTER_VIDEO_ANALYSIS_MAX_CONCURRENCY", "2") or 2),
+    )
+    SHORT_FORM_MAX_SOURCES = min(
+        4,
+        max(3, int(os.environ.get("CRAYOTTER_SHORT_FORM_MAX_SOURCES", "4") or 4)),
+    )
+    VIDEO_ANALYSIS_PROXY_MAX_SECONDS = max(
+        15,
+        int(os.environ.get("CRAYOTTER_VIDEO_ANALYSIS_PROXY_MAX_SECONDS", "45") or 45),
+    )
+    DOWNLOAD_MAX_HEIGHT = max(
+        360,
+        int(os.environ.get("CRAYOTTER_DOWNLOAD_MAX_HEIGHT", "720") or 720),
+    )
+except (TypeError, ValueError):
+    PREP_MAX_CONCURRENCY = 4
+    DOWNLOAD_MAX_CONCURRENCY = 2
+    VIDEO_ANALYSIS_MAX_CONCURRENCY = 2
+    SHORT_FORM_MAX_SOURCES = 4
+    VIDEO_ANALYSIS_PROXY_MAX_SECONDS = 45
+    DOWNLOAD_MAX_HEIGHT = 720
 
 VIDEO_API_KEY = os.environ.get("CRAYOTTER_VIDEO_API_KEY") or API_KEY
 VIDEO_BASE_URL = os.environ.get("CRAYOTTER_VIDEO_BASE_URL", BASE_URL)
@@ -93,13 +129,35 @@ if not agent_logger.handlers:
 RuntimeEventCallback = Callable[[dict[str, Any]], None]
 
 _PLAN_SUMMARY_RE = re.compile(r"素材准备计划 \((\d+) 步\): (.+)")
+_STEP_SCHEDULED_RE = re.compile(
+    r"DAG 调度步骤 \[(\d+)\]: tool=([^,]+), depends_on=(.+)"
+)
+_DEPENDENCY_WAITING_RE = re.compile(
+    r"DAG 等待步骤 \[(\d+)\]: depends_on=(.+)"
+)
 _STEP_START_RE = re.compile(r"Executor 步骤 \[(\d+)\]: (.+)")
-_STEP_COMPLETE_RE = re.compile(r"步骤 \[(\d+)\] 完成(?:\(确定性下载\))?: (.+)")
+_STEP_COMPLETE_RE = re.compile(r"步骤 \[(\d+)\] 完成(?:\(确定性(?:下载|分析)\))?: (.+)")
+_STEP_FAILED_RE = re.compile(r"步骤 \[(\d+)\] 失败: (.+)")
 _TOOL_CALL_RE = re.compile(r"Phase3 工具调用: ([a-zA-Z_][\w]*) args=(.+)")
 _TOOL_RESULT_RE = re.compile(r"Phase3 工具结果: ([a-zA-Z_][\w]*) -> (.+)")
+_TOOL_START_REALTIME_RE = re.compile(
+    r"Phase3 工具开始: ([a-zA-Z_][\w]*) run_id=(\S+)"
+)
+_TOOL_DONE_REALTIME_RE = re.compile(
+    r"Phase3 工具完成: ([a-zA-Z_][\w]*) run_id=(\S+) duration=([\d.]+)s"
+)
+_TOOL_FAILED_REALTIME_RE = re.compile(
+    r"Phase3 工具失败: ([a-zA-Z_][\w]*) run_id=(\S+) duration=([\d.]+)s error=(.+)"
+)
 
 from graph import AgentState, build_graph
-from tools import MEMORY_EXPERIENCE_DIR, USER_WORKSPACE, WORKSPACE, analyze_video
+from tools import (
+    MEMORY_EXPERIENCE_DIR,
+    USER_WORKSPACE,
+    WORKSPACE,
+    analyze_video,
+    reset_analysis_failure_circuit,
+)
 
 MEMORY_EXPERIENCE_DIR.mkdir(parents=True, exist_ok=True)
 USER_WORKSPACE.mkdir(parents=True, exist_ok=True)
@@ -127,6 +185,17 @@ def _emit_runtime_event(
     )
 
 
+def _public_phase_name(value: Any) -> str:
+    phase = str(value or "").strip().lower()
+    if phase in {"phase1", "planning", "preparing"}:
+        return "phase1"
+    if phase in {"phase2", "researching", "editing_research"}:
+        return "phase2"
+    if phase in {"phase3", "react", "react_editing", "done"}:
+        return "phase3"
+    return ""
+
+
 def _build_runtime_settings() -> dict[str, Any]:
     return {
         "api_key": API_KEY,
@@ -135,6 +204,13 @@ def _build_runtime_settings() -> dict[str, Any]:
         "enable_phase2_research": ENABLE_PHASE2_RESEARCH,
         "direct_phase3_execution": DIRECT_PHASE3_EXECUTION,
         "prefer_local_materials": PREFER_LOCAL_MATERIALS,
+        "prep_max_concurrency": PREP_MAX_CONCURRENCY,
+        "download_max_concurrency": DOWNLOAD_MAX_CONCURRENCY,
+        "video_analysis_max_concurrency": VIDEO_ANALYSIS_MAX_CONCURRENCY,
+        "short_form_optimizations": SHORT_FORM_OPTIMIZATIONS,
+        "short_form_max_sources": SHORT_FORM_MAX_SOURCES,
+        "video_analysis_proxy_max_seconds": VIDEO_ANALYSIS_PROXY_MAX_SECONDS,
+        "download_max_height": DOWNLOAD_MAX_HEIGHT,
         "agent_stall_timeout_seconds": AGENT_STALL_TIMEOUT_SECONDS,
         "video_api_key": VIDEO_API_KEY,
         "video_base_url": VIDEO_BASE_URL,
@@ -180,6 +256,9 @@ def _coerce_positive_int(value: Any, default: int) -> int:
 def apply_runtime_config(config: Mapping[str, Any] | None = None) -> dict[str, Any]:
     global API_KEY, BASE_URL, MODEL_NAME, ENABLE_PHASE2_RESEARCH
     global DIRECT_PHASE3_EXECUTION, PREFER_LOCAL_MATERIALS, AGENT_STALL_TIMEOUT_SECONDS
+    global PREP_MAX_CONCURRENCY, DOWNLOAD_MAX_CONCURRENCY, VIDEO_ANALYSIS_MAX_CONCURRENCY
+    global SHORT_FORM_OPTIMIZATIONS, SHORT_FORM_MAX_SOURCES
+    global VIDEO_ANALYSIS_PROXY_MAX_SECONDS, DOWNLOAD_MAX_HEIGHT
     global VIDEO_API_KEY, VIDEO_BASE_URL, VIDEO_MODEL_NAME
     global TTS_API_KEY, TTS_BASE_URL, TTS_MODEL_NAME
 
@@ -200,6 +279,53 @@ def apply_runtime_config(config: Mapping[str, Any] | None = None) -> dict[str, A
         config.get("prefer_local_materials"),
         PREFER_LOCAL_MATERIALS,
     )
+    PREP_MAX_CONCURRENCY = _coerce_positive_int(
+        config.get("prep_max_concurrency"),
+        PREP_MAX_CONCURRENCY,
+    )
+    DOWNLOAD_MAX_CONCURRENCY = _coerce_positive_int(
+        config.get("download_max_concurrency"),
+        DOWNLOAD_MAX_CONCURRENCY,
+    )
+    VIDEO_ANALYSIS_MAX_CONCURRENCY = _coerce_positive_int(
+        config.get("video_analysis_max_concurrency"),
+        VIDEO_ANALYSIS_MAX_CONCURRENCY,
+    )
+    SHORT_FORM_OPTIMIZATIONS = _coerce_bool(
+        config.get("short_form_optimizations"),
+        SHORT_FORM_OPTIMIZATIONS,
+    )
+    SHORT_FORM_MAX_SOURCES = min(
+        4,
+        max(
+            3,
+            _coerce_positive_int(
+                config.get("short_form_max_sources"),
+                SHORT_FORM_MAX_SOURCES,
+            ),
+        ),
+    )
+    VIDEO_ANALYSIS_PROXY_MAX_SECONDS = _coerce_positive_int(
+        config.get("video_analysis_proxy_max_seconds"),
+        VIDEO_ANALYSIS_PROXY_MAX_SECONDS,
+    )
+    DOWNLOAD_MAX_HEIGHT = _coerce_positive_int(
+        config.get("download_max_height"),
+        DOWNLOAD_MAX_HEIGHT,
+    )
+    os.environ["CRAYOTTER_PREP_MAX_CONCURRENCY"] = str(PREP_MAX_CONCURRENCY)
+    os.environ["CRAYOTTER_DOWNLOAD_MAX_CONCURRENCY"] = str(DOWNLOAD_MAX_CONCURRENCY)
+    os.environ["CRAYOTTER_VIDEO_ANALYSIS_MAX_CONCURRENCY"] = str(
+        VIDEO_ANALYSIS_MAX_CONCURRENCY
+    )
+    os.environ["CRAYOTTER_SHORT_FORM_OPTIMIZATIONS"] = (
+        "true" if SHORT_FORM_OPTIMIZATIONS else "false"
+    )
+    os.environ["CRAYOTTER_SHORT_FORM_MAX_SOURCES"] = str(SHORT_FORM_MAX_SOURCES)
+    os.environ["CRAYOTTER_VIDEO_ANALYSIS_PROXY_MAX_SECONDS"] = str(
+        VIDEO_ANALYSIS_PROXY_MAX_SECONDS
+    )
+    os.environ["CRAYOTTER_DOWNLOAD_MAX_HEIGHT"] = str(DOWNLOAD_MAX_HEIGHT)
     AGENT_STALL_TIMEOUT_SECONDS = _coerce_positive_int(
         config.get("agent_stall_timeout_seconds"),
         AGENT_STALL_TIMEOUT_SECONDS,
@@ -228,6 +354,11 @@ def apply_runtime_config(config: Mapping[str, Any] | None = None) -> dict[str, A
     graph_module.ENABLE_PHASE2_RESEARCH = ENABLE_PHASE2_RESEARCH
     graph_module.DIRECT_PHASE3_EXECUTION = DIRECT_PHASE3_EXECUTION
     graph_module.PREFER_LOCAL_MATERIALS = PREFER_LOCAL_MATERIALS
+    graph_module.PREP_MAX_CONCURRENCY = PREP_MAX_CONCURRENCY
+    graph_module.DOWNLOAD_MAX_CONCURRENCY = DOWNLOAD_MAX_CONCURRENCY
+    graph_module.VIDEO_ANALYSIS_MAX_CONCURRENCY = VIDEO_ANALYSIS_MAX_CONCURRENCY
+    graph_module.SHORT_FORM_OPTIMIZATIONS = SHORT_FORM_OPTIMIZATIONS
+    graph_module.SHORT_FORM_MAX_SOURCES = SHORT_FORM_MAX_SOURCES
     tools_module.configure(
         api_key=API_KEY,
         base_url=BASE_URL,
@@ -275,11 +406,13 @@ def _emit_state_update(
     )
 
     if "phase" in update:
-        _emit_runtime_event(
-            callback,
-            "phase_state",
-            {"node": node_name, "phase": update.get("phase")},
-        )
+        public_phase = _public_phase_name(update.get("phase"))
+        if public_phase:
+            _emit_runtime_event(
+                callback,
+                "phase_state",
+                {"node": node_name, "phase": public_phase},
+            )
 
     if "plan" in update and update["plan"] is not None:
         _emit_runtime_event(
@@ -293,13 +426,20 @@ def _emit_state_update(
         )
 
     if "step_results" in update and update["step_results"]:
+        raw_result = update["step_results"][-1]
+        if hasattr(raw_result, "model_dump"):
+            serialized_result = raw_result.model_dump()
+        elif isinstance(raw_result, dict):
+            serialized_result = raw_result
+        else:
+            serialized_result = {"result": str(raw_result)}
         _emit_runtime_event(
             callback,
             "step_result",
             {
                 "node": node_name,
                 "current_step_index": update.get("current_step_index"),
-                "result": str(update["step_results"][-1]),
+                **serialized_result,
             },
         )
 
@@ -366,6 +506,29 @@ class _RuntimeEventLogHandler(logging.Handler):
                 },
             )
 
+        scheduled_match = _STEP_SCHEDULED_RE.search(message)
+        if scheduled_match:
+            _emit_runtime_event(
+                self.callback,
+                "step_scheduled",
+                {
+                    "step_id": int(scheduled_match.group(1)),
+                    "tool_name": scheduled_match.group(2).strip(),
+                    "depends_on": scheduled_match.group(3).strip(),
+                },
+            )
+
+        waiting_match = _DEPENDENCY_WAITING_RE.search(message)
+        if waiting_match:
+            _emit_runtime_event(
+                self.callback,
+                "dependency_waiting",
+                {
+                    "step_id": int(waiting_match.group(1)),
+                    "depends_on": waiting_match.group(2).strip(),
+                },
+            )
+
         step_match = _STEP_START_RE.search(message)
         if step_match:
             _emit_runtime_event(
@@ -384,7 +547,18 @@ class _RuntimeEventLogHandler(logging.Handler):
                 "step_completed",
                 {
                     "step_id": int(step_done_match.group(1)),
-                    "summary": step_done_match.group(2),
+                    "result": step_done_match.group(2),
+                },
+            )
+
+        step_failed_match = _STEP_FAILED_RE.search(message)
+        if step_failed_match:
+            _emit_runtime_event(
+                self.callback,
+                "step_failed",
+                {
+                    "step_id": int(step_failed_match.group(1)),
+                    "error": step_failed_match.group(2),
                 },
             )
 
@@ -409,6 +583,45 @@ class _RuntimeEventLogHandler(logging.Handler):
                     "phase": "phase3",
                     "tool_name": tool_result_match.group(1),
                     "summary": tool_result_match.group(2),
+                },
+            )
+
+        realtime_start = _TOOL_START_REALTIME_RE.search(message)
+        if realtime_start:
+            _emit_runtime_event(
+                self.callback,
+                "tool_started",
+                {
+                    "phase": "phase3",
+                    "tool_name": realtime_start.group(1),
+                    "run_id": realtime_start.group(2),
+                },
+            )
+
+        realtime_done = _TOOL_DONE_REALTIME_RE.search(message)
+        if realtime_done:
+            _emit_runtime_event(
+                self.callback,
+                "tool_completed",
+                {
+                    "phase": "phase3",
+                    "tool_name": realtime_done.group(1),
+                    "run_id": realtime_done.group(2),
+                    "duration_seconds": float(realtime_done.group(3)),
+                },
+            )
+
+        realtime_failed = _TOOL_FAILED_REALTIME_RE.search(message)
+        if realtime_failed:
+            _emit_runtime_event(
+                self.callback,
+                "tool_failed",
+                {
+                    "phase": "phase3",
+                    "tool_name": realtime_failed.group(1),
+                    "run_id": realtime_failed.group(2),
+                    "duration_seconds": float(realtime_failed.group(3)),
+                    "error": realtime_failed.group(4)[:500],
                 },
             )
 
@@ -704,6 +917,8 @@ def run_task(
         _emit_runtime_event(event_callback, "task_started", {"task": task})
 
     try:
+        reset_analysis_failure_circuit()
+        reset_model_abort()
         agent_logger.info(f"{'='*60}")
         agent_logger.info(f"📋 新任务开始: {task}")
         agent_logger.info(f"{'='*60}")
@@ -798,6 +1013,19 @@ def run_task(
             },
         )
         return output
+    except ModelCallError as exc:
+        emit_benchmark_event("benchmark_aborted", {"status": "aborted_model_failure", **exc.to_payload()})
+        _emit_runtime_event(
+            event_callback,
+            "model_call_failed",
+            {"status": "aborted_model_failure", **exc.to_payload()},
+        )
+        _emit_runtime_event(
+            event_callback,
+            "task_failed",
+            {"task": task, "error": str(exc), "status": "aborted_model_failure"},
+        )
+        raise
     except Exception as exc:
         _emit_runtime_event(
             event_callback,

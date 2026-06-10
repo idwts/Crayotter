@@ -1,8 +1,8 @@
 from __future__ import annotations
+from . import _shared
 from ._shared import *
 from ._shared import (
     Any,
-    MODEL_NAME,
     Path,
     WORKSPACE,
     _extract_chat_content,
@@ -16,7 +16,6 @@ from ._shared import (
 
 def _resolve_subtitle_font_path(custom_font: str | None = None) -> str | None:
     """解析可用字幕字体路径，优先使用用户传入字体。"""
-    project_root = Path(__file__).resolve().parent.parent
     candidates: list[Path] = []
 
     if custom_font:
@@ -24,12 +23,12 @@ def _resolve_subtitle_font_path(custom_font: str | None = None) -> str | None:
         if cf.is_absolute():
             candidates.append(cf)
         else:
-            candidates.append(project_root / cf)
+            candidates.append(BUNDLE_DIR / cf)
             candidates.append(WORKSPACE / cf)
 
     candidates.extend(
         [
-            project_root / "AlibabaPuHuiTi-3-55-Regular" / "AlibabaPuHuiTi-3-55-Regular.ttf",
+            BUNDLE_DIR / "AlibabaPuHuiTi-3-55-Regular" / "AlibabaPuHuiTi-3-55-Regular.ttf",
             Path("/usr/share/fonts/truetype/wqy/wqy-zenhei.ttc"),
             Path("/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc"),
             Path("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"),
@@ -136,10 +135,12 @@ def _rewrite_text_to_fit_duration(
         "4) 只输出改写后的最终文案，不要解释。"
     )
 
+    started_at = time.perf_counter()
     try:
+        ensure_model_calls_allowed()
         client = _get_openai_client()
         resp = client.chat.completions.create(
-            model=MODEL_NAME,
+            model=_shared.MODEL_NAME,
             messages=[
                 {"role": "system", "content": prompt},
                 {"role": "user", "content": text},
@@ -150,8 +151,23 @@ def _rewrite_text_to_fit_duration(
         rewritten = _normalize_rewritten_text(_extract_chat_content(resp))
         if rewritten:
             return rewritten
-    except Exception:
-        pass
+        if fail_fast_model_errors():
+            raise_model_failure(
+                stage="narration_rewrite",
+                model=_shared.MODEL_NAME,
+                message="Model returned empty narration rewrite.",
+                duration_seconds=time.perf_counter() - started_at,
+            )
+    except ModelCallError:
+        raise
+    except Exception as exc:
+        if fail_fast_model_errors():
+            raise_model_failure(
+                stage="narration_rewrite",
+                model=_shared.MODEL_NAME,
+                message=exc,
+                duration_seconds=time.perf_counter() - started_at,
+            )
 
     return _heuristic_shorten_text(text, target_chars)
 
@@ -160,7 +176,7 @@ def _rewrite_text_to_fit_duration(
 def add_narration_segments(
     video_path: str,
     segments: list[dict],
-    voice: str = "Cherry",
+    voice: str = "Ethan",
     add_subtitle: bool = True,
     subtitle_font: str = "./AlibabaPuHuiTi-3-55-Regular/AlibabaPuHuiTi-3-55-Regular.ttf",
     min_narration_coverage_ratio: float = 0.35,
@@ -319,6 +335,8 @@ def add_narration_segments(
                 seg_audio = seg_audio.with_start(start)
                 audio_clips.append(seg_audio)
                 success_count += 1
+            except ModelCallError:
+                raise
             except Exception as ae:
                 if seg_audio is not None:
                     try:
@@ -462,5 +480,7 @@ def add_narration_segments(
             result["warnings"] = fail_messages
         return json.dumps(result, ensure_ascii=False)
 
+    except ModelCallError:
+        raise
     except Exception as e:
         return f"分段配音出错: {e}"

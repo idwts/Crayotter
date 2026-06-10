@@ -14,6 +14,8 @@ from typing import Any
 from .config_store import JOBS_DIR, ConfigStore
 from .event_bus import EventBus
 from .models import AppConfig, JobRecord, JobRequest, RuntimeEvent, TERMINAL_JOB_STATUSES, utc_now_iso
+from .task_titles import summarize_task_title
+from app.media_metadata import video_duration_seconds
 from app.runtime_paths import configure_runtime_environment, get_bundle_root, get_runtime_root, is_frozen
 
 
@@ -34,6 +36,10 @@ class ManagedJob:
 
 class RuntimeManager:
     AGENT_STALL_TIMEOUT_SECONDS = 600
+    VIDEO_SUFFIXES = {".mp4", ".webm", ".mov", ".mkv", ".avi", ".m4v", ".mpeg", ".mpg"}
+    TEXT_SUFFIXES = {".txt", ".md", ".json", ".jsonl", ".log"}
+    _media_metadata_cache: dict[tuple[str, int, int], float | None] = {}
+    _media_metadata_lock = threading.RLock()
 
     def __init__(self, config_store: ConfigStore) -> None:
         self.config_store = config_store
@@ -111,6 +117,7 @@ class RuntimeManager:
             record = JobRecord(
                 job_id=job_id,
                 task=request.task,
+                title=summarize_task_title(request.task),
                 mode=request.mode,
                 enable_phase2_research=enable_phase2_research,
                 direct_phase3_execution=direct_phase3_execution,
@@ -126,7 +133,11 @@ class RuntimeManager:
             self._jobs[job_id] = job
 
         self._write_summary(job)
-        self._publish(job, "job_created", {"task": request.task, "mode": request.mode})
+        self._publish(
+            job,
+            "job_created",
+            {"task": request.task, "title": record.title, "mode": request.mode},
+        )
 
         worker = threading.Thread(
             target=self._run_job,
@@ -287,6 +298,13 @@ class RuntimeManager:
         runtime_config["enable_phase2_research"] = job.record.enable_phase2_research
         runtime_config["direct_phase3_execution"] = job.record.direct_phase3_execution
         runtime_config["prefer_local_materials"] = job.record.prefer_local_materials
+        runtime_config["prep_max_concurrency"] = config.prep_max_concurrency
+        runtime_config["download_max_concurrency"] = config.download_max_concurrency
+        runtime_config["video_analysis_max_concurrency"] = config.video_analysis_max_concurrency
+        runtime_config["short_form_optimizations"] = config.short_form_optimizations
+        runtime_config["short_form_max_sources"] = config.short_form_max_sources
+        runtime_config["video_analysis_proxy_max_seconds"] = config.video_analysis_proxy_max_seconds
+        runtime_config["download_max_height"] = config.download_max_height
         runtime_config["agent_stall_timeout_seconds"] = job.stall_timeout_seconds
         config_path.write_text(
             json.dumps(runtime_config, ensure_ascii=False, indent=2),
@@ -534,7 +552,35 @@ class RuntimeManager:
         return f"job_{time.strftime('%Y%m%d_%H%M%S')}_{uuid.uuid4().hex[:6]}"
 
     @staticmethod
-    def _collect_artifacts(job: ManagedJob) -> list[dict[str, Any]]:
+    def _artifact_kind(suffix: str) -> str:
+        if suffix in RuntimeManager.VIDEO_SUFFIXES:
+            return "video"
+        if suffix in RuntimeManager.TEXT_SUFFIXES:
+            return "text"
+        return "file"
+
+    @classmethod
+    def _video_duration_seconds(cls, path: Path, stat: os.stat_result) -> float | None:
+        key = (str(path), stat.st_mtime_ns, stat.st_size)
+        with cls._media_metadata_lock:
+            if key in cls._media_metadata_cache:
+                return cls._media_metadata_cache[key]
+
+        try:
+            parsed = video_duration_seconds(path)
+            duration = round(parsed, 2) if parsed is not None else None
+        except (OSError, TypeError, ValueError):
+            duration = None
+
+        with cls._media_metadata_lock:
+            stale_keys = [cached for cached in cls._media_metadata_cache if cached[0] == str(path)]
+            for stale_key in stale_keys:
+                cls._media_metadata_cache.pop(stale_key, None)
+            cls._media_metadata_cache[key] = duration
+        return duration
+
+    @classmethod
+    def _collect_artifacts(cls, job: ManagedJob) -> list[dict[str, Any]]:
         runtime_root = get_runtime_root()
         results: list[dict[str, Any]] = []
         seen: set[str] = set()
@@ -563,13 +609,18 @@ class RuntimeManager:
                 display_path = str(relative)
             except Exception:
                 display_path = str(resolved)
+            suffix = resolved.suffix.lower()
+            stat = resolved.stat()
+            kind = cls._artifact_kind(suffix)
             results.append(
                 {
                     "path": str(resolved),
                     "display_path": display_path,
                     "name": resolved.name,
-                    "suffix": resolved.suffix.lower(),
-                    "size_bytes": resolved.stat().st_size,
+                    "suffix": suffix,
+                    "kind": kind,
+                    "size_bytes": stat.st_size,
+                    "duration_seconds": cls._video_duration_seconds(resolved, stat) if kind == "video" else None,
                 }
             )
         return sorted(results, key=lambda item: item["display_path"])
