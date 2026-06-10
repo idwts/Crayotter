@@ -12,7 +12,7 @@ from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
-from urllib.parse import parse_qs, urlparse
+from urllib.parse import parse_qs, quote, urlparse
 
 from .config_store import ConfigStore
 from .models import JobRequest
@@ -24,6 +24,7 @@ from app.runtime_paths import configure_runtime_environment, get_bundle_root, ge
 class BackendService:
     def __init__(self) -> None:
         self.config_store = ConfigStore()
+        self.config_store.load()
         self.runtime_manager = RuntimeManager(self.config_store)
 
 
@@ -105,7 +106,10 @@ class BackendHandler(BaseHTTPRequestHandler):
                 if not raw_path:
                     self._write_json(HTTPStatus.BAD_REQUEST, {"error": "Missing path query parameter."})
                     return
-                self._serve_project_file(raw_path)
+                self._serve_project_file(
+                    raw_path,
+                    download=query.get("download", ["0"])[0].lower() in {"1", "true", "yes"},
+                )
                 return
 
             if path == "/uploads":
@@ -257,7 +261,7 @@ class BackendHandler(BaseHTTPRequestHandler):
             return
         self._send_file(resolved)
 
-    def _serve_project_file(self, raw_path: str) -> None:
+    def _serve_project_file(self, raw_path: str, *, download: bool = False) -> None:
         candidate = Path(raw_path)
         if not candidate.is_absolute():
             candidate = (RUNTIME_ROOT / candidate).resolve(strict=False)
@@ -270,22 +274,74 @@ class BackendHandler(BaseHTTPRequestHandler):
         if not self._is_allowed_file_path(resolved):
             self._write_json(HTTPStatus.FORBIDDEN, {"error": "Requested file is outside the project workspace."})
             return
-        self._send_file(resolved)
+        self._send_file(resolved, allow_range=True, download=download)
 
-    def _send_file(self, path: Path) -> None:
-        data = path.read_bytes()
+    def _send_file(self, path: Path, *, allow_range: bool = False, download: bool = False) -> None:
+        file_size = path.stat().st_size
+        start = 0
+        end = max(0, file_size - 1)
+        status = HTTPStatus.OK
+        range_header = self.headers.get("Range", "") if allow_range else ""
+
+        if range_header:
+            match = re.fullmatch(r"bytes=(\d*)-(\d*)", range_header.strip())
+            if not match or file_size <= 0:
+                self._write_range_not_satisfiable(file_size)
+                return
+            start_text, end_text = match.groups()
+            if not start_text:
+                suffix_length = int(end_text or 0)
+                if suffix_length <= 0:
+                    self._write_range_not_satisfiable(file_size)
+                    return
+                start = max(0, file_size - suffix_length)
+            else:
+                start = int(start_text)
+            if end_text and start_text:
+                end = min(int(end_text), file_size - 1)
+            if start >= file_size or start > end:
+                self._write_range_not_satisfiable(file_size)
+                return
+            status = HTTPStatus.PARTIAL_CONTENT
+
+        content_length = end - start + 1 if file_size else 0
         content_type, _ = mimetypes.guess_type(str(path))
         if content_type and (
             content_type.startswith("text/")
             or content_type in {"application/json", "application/javascript"}
         ):
             content_type = f"{content_type}; charset=utf-8"
-        self.send_response(HTTPStatus.OK)
+        self.send_response(status)
         self.send_header("Content-Type", content_type or "application/octet-stream")
-        self.send_header("Content-Length", str(len(data)))
+        self.send_header("Content-Length", str(content_length))
+        self.send_header("Cache-Control", "no-store")
+        if allow_range:
+            self.send_header("Accept-Ranges", "bytes")
+        if status == HTTPStatus.PARTIAL_CONTENT:
+            self.send_header("Content-Range", f"bytes {start}-{end}/{file_size}")
+        if download:
+            encoded_name = quote(path.name)
+            self.send_header("Content-Disposition", f"attachment; filename*=UTF-8''{encoded_name}")
+        self.end_headers()
+        if content_length <= 0:
+            return
+        with path.open("rb") as handle:
+            handle.seek(start)
+            remaining = content_length
+            while remaining > 0:
+                chunk = handle.read(min(1024 * 1024, remaining))
+                if not chunk:
+                    break
+                self.wfile.write(chunk)
+                remaining -= len(chunk)
+
+    def _write_range_not_satisfiable(self, file_size: int) -> None:
+        self.send_response(HTTPStatus.REQUESTED_RANGE_NOT_SATISFIABLE)
+        self.send_header("Content-Range", f"bytes */{file_size}")
+        self.send_header("Content-Length", "0")
+        self.send_header("Accept-Ranges", "bytes")
         self.send_header("Cache-Control", "no-store")
         self.end_headers()
-        self.wfile.write(data)
 
     @staticmethod
     def _is_within_root(path: Path, root: Path) -> bool:

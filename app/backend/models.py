@@ -49,6 +49,13 @@ class AppConfig(BaseModel):
     enable_phase2_research: bool = True
     direct_phase3_execution: bool = False
     prefer_local_materials: bool = False
+    prep_max_concurrency: int = Field(default=4, ge=1)
+    download_max_concurrency: int = Field(default=2, ge=1)
+    video_analysis_max_concurrency: int = Field(default=2, ge=1)
+    short_form_optimizations: bool = True
+    short_form_max_sources: int = Field(default=4, ge=3, le=4)
+    video_analysis_proxy_max_seconds: int = Field(default=45, ge=15, le=180)
+    download_max_height: int = Field(default=720, ge=360, le=2160)
     agent_stall_timeout_seconds: int = Field(default=150, ge=10)
 
     def get_profile(self, profile_name: str | None = None) -> ServiceProfile:
@@ -79,6 +86,7 @@ class RuntimeEvent(BaseModel):
 class JobRecord(BaseModel):
     job_id: str
     task: str
+    title: str = ""
     mode: Literal["agent", "demo"]
     enable_phase2_research: bool = True
     direct_phase3_execution: bool = False

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from . import _shared
 from ._shared import *
 
 
@@ -126,9 +127,15 @@ def rank_video_candidates(
             batch = reviewed[offset: offset + batch_size]
             content = ""
             parsed_scored: list[dict[str, Any]] = []
+            started_at = time.perf_counter()
             try:
+                ensure_model_calls_allowed()
+                emit_benchmark_event(
+                    "model_call_started",
+                    {"stage": "candidate_ranking", "model": _shared.MODEL_NAME, "batch_size": len(batch)},
+                )
                 response = client.chat.completions.create(
-                    model=MODEL_NAME,
+                    model=_shared.MODEL_NAME,
                     messages=[
                         {"role": "system", "content": prompt},
                         {"role": "user", "content": json.dumps(batch, ensure_ascii=False)},
@@ -140,7 +147,33 @@ def rank_video_candidates(
                 parsed = json.loads(content)
                 if isinstance(parsed, dict) and isinstance(parsed.get("scored"), list):
                     parsed_scored = [x for x in parsed.get("scored", []) if isinstance(x, dict)]
-            except Exception:
+                if not parsed_scored and fail_fast_model_errors():
+                    raise_model_failure(
+                        stage="candidate_ranking",
+                        model=_shared.MODEL_NAME,
+                        message="Model response did not contain a non-empty scored list.",
+                        duration_seconds=time.perf_counter() - started_at,
+                    )
+                emit_benchmark_event(
+                    "model_call_completed",
+                    {
+                        "stage": "candidate_ranking",
+                        "model": _shared.MODEL_NAME,
+                        "duration_seconds": round(time.perf_counter() - started_at, 3),
+                    },
+                )
+            except ModelCallError:
+                raise
+            except Exception as exc:
+                if fail_fast_model_errors():
+                    response_obj = getattr(exc, "response", None)
+                    raise_model_failure(
+                        stage="candidate_ranking",
+                        model=_shared.MODEL_NAME,
+                        message=exc,
+                        status_code=getattr(response_obj, "status_code", None),
+                        duration_seconds=time.perf_counter() - started_at,
+                    )
                 parsed_scored = []
 
             used_indices: set[int] = set()
@@ -223,6 +256,8 @@ def rank_video_candidates(
         }, ensure_ascii=False)
         _RANK_CACHE[cache_key] = result_json
         return result_json
+    except ModelCallError:
+        raise
     except Exception as e:
         error_msg = f"筛选出错: {e}"
         logger.error(f"❌ MLLM筛选异常: {e}", exc_info=True)

@@ -252,17 +252,13 @@ def configure_runtime_environment() -> None:
     _prepend_path(_binary_search_roots())
 
     ffmpeg_names = ("ffmpeg.exe", "ffmpeg") if os.name == "nt" else ("ffmpeg",)
-    ffprobe_names = ("ffprobe.cmd", "ffprobe.exe", "ffprobe") if os.name == "nt" else ("ffprobe",)
     yt_dlp_names = ("yt-dlp.exe", "yt-dlp.cmd", "yt-dlp") if os.name == "nt" else ("yt-dlp",)
 
     ffmpeg_path = resolve_binary(*ffmpeg_names)
-    ffprobe_path = resolve_binary(*ffprobe_names)
     yt_dlp_path = resolve_binary(*yt_dlp_names)
 
     if ffmpeg_path is not None:
         os.environ.setdefault("FFMPEG_BIN", str(ffmpeg_path))
-    if ffprobe_path is not None:
-        os.environ.setdefault("FFPROBE_BIN", str(ffprobe_path))
     if yt_dlp_path is not None:
         os.environ.setdefault("CRAYOTTER_YTDLP_BIN", str(yt_dlp_path))
 

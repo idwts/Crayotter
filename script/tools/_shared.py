@@ -27,6 +27,8 @@ import mimetypes
 import shutil
 
 import time
+import threading
+import hashlib
 
 try:
     import certifi
@@ -64,6 +66,14 @@ from langchain_core.tools import tool
 from openai import OpenAI
 from app.media_index import build_analysis_index, iter_analysis_files, match_analysis_files
 from app.runtime_paths import configure_runtime_environment, get_bundle_root, get_runtime_root
+from model_runtime import (
+    ModelCallError,
+    benchmark_mode,
+    emit_benchmark_event,
+    ensure_model_calls_allowed,
+    fail_fast_model_errors,
+    raise_model_failure,
+)
 
 configure_runtime_environment()
 
@@ -159,10 +169,107 @@ _video_client: OpenAI | None = None
 _CANDIDATE_POOL_PATH = WORKSPACE / "candidate_pool.jsonl"
 
 _CANDIDATE_SNAPSHOT_PATH = WORKSPACE / "candidate_pool_snapshot.json"
+_CANDIDATE_POOL_LOCK = threading.RLock()
 
 _RANK_CACHE: dict[str, str] = {}
 
 MAX_DOWNLOAD_DURATION_SECONDS = 10 * 60
+
+
+def _positive_int_env(name: str, default: int) -> int:
+    try:
+        return max(1, int(os.environ.get(name, str(default)) or default))
+    except (TypeError, ValueError):
+        return default
+
+
+def _media_cache_dir() -> Path:
+    raw = os.environ.get("CRAYOTTER_MEDIA_CACHE_DIR", "").strip()
+    cache_dir = Path(raw).resolve() if raw else (CURRENT_DIR / "cache").resolve()
+    try:
+        cache_dir.relative_to(CURRENT_DIR.resolve())
+    except ValueError as exc:
+        raise RuntimeError("CRAYOTTER_MEDIA_CACHE_DIR must stay inside the runtime root.") from exc
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    return cache_dir
+
+
+def _file_digest(path: Path) -> str:
+    digest = hashlib.sha256()
+    stat = path.stat()
+    digest.update(str(stat.st_size).encode("ascii"))
+    with path.open("rb") as handle:
+        digest.update(handle.read(1024 * 1024))
+    return digest.hexdigest()
+
+
+def _analysis_cache_key(source_video: Path, analysis_goal: str, model_name: str) -> str:
+    payload = {
+        "file": _file_digest(source_video),
+        "goal": str(analysis_goal),
+        "model": str(model_name),
+        "prompt_version": "video-analysis-v3-proxy",
+    }
+    return hashlib.sha256(
+        json.dumps(payload, ensure_ascii=False, sort_keys=True).encode("utf-8")
+    ).hexdigest()
+
+
+def _analysis_output_path(source_video: Path) -> Path:
+    try:
+        source_video.resolve(strict=False).relative_to(USER_WORKSPACE.resolve(strict=False))
+        output_root = USER_WORKSPACE
+    except Exception:
+        output_root = WORKSPACE
+    return output_root / f"{source_video.stem}_analysis.json"
+
+
+def _restore_cached_analysis(
+    source_video: Path,
+    analysis_goal: str,
+    model_name: str,
+) -> Path | None:
+    if not benchmark_mode():
+        return None
+    key = _analysis_cache_key(source_video, analysis_goal, model_name)
+    cache_path = _media_cache_dir() / "analysis" / f"{key}.json"
+    if not cache_path.exists():
+        emit_benchmark_event(
+            "cache_miss",
+            {"kind": "video_analysis", "source": source_video.name, "key": key},
+        )
+        return None
+    try:
+        payload = json.loads(cache_path.read_text(encoding="utf-8"))
+        payload["source_video"] = str(source_video)
+        output_path = _analysis_output_path(source_video)
+        _persist_analysis_payload(output_path, payload)
+        emit_benchmark_event(
+            "cache_hit",
+            {"kind": "video_analysis", "source": source_video.name, "key": key},
+        )
+        return output_path
+    except Exception as exc:
+        logger.warning("视频分析缓存恢复失败: %s", exc)
+        return None
+
+
+def _store_cached_analysis(
+    source_video: Path,
+    analysis_goal: str,
+    model_name: str,
+    analysis_path: Path | None,
+) -> None:
+    if not benchmark_mode() or analysis_path is None or not analysis_path.exists():
+        return
+    key = _analysis_cache_key(source_video, analysis_goal, model_name)
+    cache_path = _media_cache_dir() / "analysis" / f"{key}.json"
+    cache_path.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(analysis_path, cache_path)
+    emit_benchmark_event(
+        "cache_stored",
+        {"kind": "video_analysis", "source": source_video.name, "key": key},
+    )
 
 def _get_openai_client() -> OpenAI:
     global _openai_client
@@ -170,6 +277,7 @@ def _get_openai_client() -> OpenAI:
         _openai_client = OpenAI(
             api_key=API_KEY,
             base_url=BASE_URL,
+            max_retries=0 if fail_fast_model_errors() else 2,
         )
     return _openai_client
 
@@ -179,6 +287,7 @@ def _get_video_client() -> OpenAI:
         _video_client = OpenAI(
             api_key=VIDEO_API_KEY,
             base_url=VIDEO_BASE_URL,
+            max_retries=0 if fail_fast_model_errors() else 2,
         )
     return _video_client
 
@@ -220,7 +329,9 @@ def _generate_query_variants(query: str, max_variants: int) -> list[str]:
         f"- 最多输出 {max_variants} 条\n"
     )
 
+    started = time.perf_counter()
     try:
+        ensure_model_calls_allowed()
         client = _get_openai_client()
         response = client.chat.completions.create(
             model=MODEL_NAME,
@@ -232,6 +343,13 @@ def _generate_query_variants(query: str, max_variants: int) -> list[str]:
             max_tokens=400,
         )
         content = _extract_chat_content(response)
+        if not content and fail_fast_model_errors():
+            raise_model_failure(
+                stage="query_expansion",
+                model=MODEL_NAME,
+                message="Model returned empty query expansion content.",
+                duration_seconds=time.perf_counter() - started,
+            )
 
         def _parse_variants(text: str) -> list[str]:
             if not text:
@@ -257,7 +375,19 @@ def _generate_query_variants(query: str, max_variants: int) -> list[str]:
 
         cleaned = _parse_variants(content)
         return cleaned[:max_variants]
+    except ModelCallError:
+        raise
     except Exception as e:
+        if fail_fast_model_errors():
+            response = getattr(e, "response", None)
+            raise_model_failure(
+                stage="query_expansion",
+                model=MODEL_NAME,
+                message=e,
+                status_code=getattr(response, "status_code", None),
+                request_id=str(getattr(response, "headers", {}).get("x-request-id", "")) if response else "",
+                duration_seconds=time.perf_counter() - started,
+            )
         logger.warning(f"⚠️ 动态扩展查询失败，回退为原始查询: {e}")
         return []
 
@@ -326,60 +456,63 @@ def _merge_candidates(candidates: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return merged
 
 def _refresh_candidate_snapshot(limit: int = 1000) -> None:
-    try:
-        merged = _load_candidates_from_pool(limit=limit)
-        with _CANDIDATE_SNAPSHOT_PATH.open("w", encoding="utf-8") as f:
-            json.dump(
-                {
-                    "updated_at": datetime.now().isoformat(),
-                    "count": len(merged),
-                    "candidates": merged,
-                },
-                f,
-                ensure_ascii=False,
-                indent=2,
-            )
-    except Exception as e:
-        logger.warning("⚠️ 写入候选快照失败: %s", e)
+    with _CANDIDATE_POOL_LOCK:
+        try:
+            merged = _load_candidates_from_pool(limit=limit)
+            with _CANDIDATE_SNAPSHOT_PATH.open("w", encoding="utf-8") as f:
+                json.dump(
+                    {
+                        "updated_at": datetime.now().isoformat(),
+                        "count": len(merged),
+                        "candidates": merged,
+                    },
+                    f,
+                    ensure_ascii=False,
+                    indent=2,
+                )
+        except Exception as e:
+            logger.warning("⚠️ 写入候选快照失败: %s", e)
 
 def _append_candidates_to_pool(candidates: list[dict[str, Any]]) -> None:
     if not candidates:
         return
-    try:
-        with _CANDIDATE_POOL_PATH.open("a", encoding="utf-8") as f:
-            for item in candidates:
-                if not isinstance(item, dict):
-                    continue
-                f.write(json.dumps(item, ensure_ascii=False) + "\n")
-    except Exception as e:
-        logger.warning("⚠️ 写入候选池失败: %s", e)
-        return
+    with _CANDIDATE_POOL_LOCK:
+        try:
+            with _CANDIDATE_POOL_PATH.open("a", encoding="utf-8") as f:
+                for item in candidates:
+                    if not isinstance(item, dict):
+                        continue
+                    f.write(json.dumps(item, ensure_ascii=False) + "\n")
+        except Exception as e:
+            logger.warning("⚠️ 写入候选池失败: %s", e)
+            return
 
-    _refresh_candidate_snapshot()
+        _refresh_candidate_snapshot()
 
 def _load_candidates_from_pool(limit: int | None = None) -> list[dict[str, Any]]:
-    if not _CANDIDATE_POOL_PATH.exists():
-        return []
-    rows: list[dict[str, Any]] = []
-    try:
-        with _CANDIDATE_POOL_PATH.open("r", encoding="utf-8") as f:
-            for line in f:
-                line = line.strip()
-                if not line:
-                    continue
-                try:
-                    item = json.loads(line)
-                except Exception:
-                    continue
-                if isinstance(item, dict):
-                    rows.append(item)
-        rows = _merge_candidates(rows)
-        if limit is not None and limit > 0:
-            return rows[:limit]
-        return rows
-    except Exception as e:
-        logger.warning("⚠️ 读取候选池失败: %s", e)
-        return []
+    with _CANDIDATE_POOL_LOCK:
+        if not _CANDIDATE_POOL_PATH.exists():
+            return []
+        rows: list[dict[str, Any]] = []
+        try:
+            with _CANDIDATE_POOL_PATH.open("r", encoding="utf-8") as f:
+                for line in f:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        item = json.loads(line)
+                    except Exception:
+                        continue
+                    if isinstance(item, dict):
+                        rows.append(item)
+            rows = _merge_candidates(rows)
+            if limit is not None and limit > 0:
+                return rows[:limit]
+            return rows
+        except Exception as e:
+            logger.warning("⚠️ 读取候选池失败: %s", e)
+            return []
 
 def _parse_candidate_payload(payload: str) -> list[dict[str, Any]]:
     text = (payload or "").strip()
@@ -785,12 +918,7 @@ def _save_analysis_json(
     audio_url_used: str,
 ) -> Path | None:
     try:
-        try:
-            source_video.resolve(strict=False).relative_to(USER_WORKSPACE.resolve(strict=False))
-            output_root = USER_WORKSPACE
-        except Exception:
-            output_root = WORKSPACE
-        output_path = output_root / f"{source_video.stem}_analysis.json"
+        output_path = _analysis_output_path(source_video)
         semantic_segments = _extract_semantic_segments_from_analysis(analysis_text)
         semantic_segments = _prepare_semantic_segments(semantic_segments)
         payload = {
@@ -1001,23 +1129,47 @@ def _extract_audio_for_analysis(video_path: Path) -> Path | None:
     return None
 
 def _prepare_timestamped_video_for_analysis(video_path: Path) -> Path | None:
-    stamped_path = WORKSPACE / f"{video_path.stem}_analysis_ts.mp4"
+    proxy_enabled = str(
+        os.environ.get("CRAYOTTER_SHORT_FORM_OPTIMIZATIONS", "true")
+    ).strip().lower() not in {"0", "false", "no", "off"}
+    max_seconds = _positive_int_env(
+        "CRAYOTTER_VIDEO_ANALYSIS_PROXY_MAX_SECONDS",
+        45,
+    )
+    meta = _get_video_meta(str(video_path))
+    source_duration = float(meta.get("duration_seconds", 0.0) or 0.0)
+    use_proxy = proxy_enabled and source_duration > max_seconds
+    suffix = "analysis_proxy" if use_proxy else "analysis_ts"
+    stamped_path = WORKSPACE / f"{video_path.stem}_{suffix}.mp4"
     try:
         if stamped_path.exists() and stamped_path.stat().st_mtime >= video_path.stat().st_mtime:
             return stamped_path
     except Exception:
         pass
 
+    speed_factor = max(1.0, source_duration / max_seconds) if use_proxy else 1.0
+    timestamp_expr = f"t*{speed_factor:.8f}" if use_proxy else "t"
     drawtext_filter = (
         "drawtext="
-        "text='t=%{eif\\:t\\:d}s':"
+        f"text='t=%{{eif\\:{timestamp_expr}\\:d}}s':"
         "x=16:y=16:"
-        "fontsize=30:"
+        "fontsize=26:"
         "fontcolor=white:"
         "box=1:"
         "boxcolor=black@0.65:"
         "boxborderw=10"
     )
+    video_filters = [
+        "scale='min(960,iw)':-2",
+        drawtext_filter,
+    ]
+    if use_proxy:
+        video_filters.extend(
+            [
+                f"setpts=PTS/{speed_factor:.8f}",
+                "fps=6",
+            ]
+        )
 
     cmd = [
         "ffmpeg",
@@ -1025,17 +1177,16 @@ def _prepare_timestamped_video_for_analysis(video_path: Path) -> Path | None:
         "-i",
         str(video_path),
         "-vf",
-        drawtext_filter,
+        ",".join(video_filters),
         "-c:v",
         "libx264",
-        "-preset",
-        "veryfast",
-        "-crf",
-        "23",
-        "-c:a",
-        "copy",
+        "-preset", "veryfast",
+        "-crf", "30" if use_proxy else "25",
+        "-an" if use_proxy else "-c:a",
+        "aac" if not use_proxy else "",
         str(stamped_path),
     ]
+    cmd = [item for item in cmd if item != ""]
     try:
         process = subprocess.Popen(
             cmd,
@@ -1048,6 +1199,15 @@ def _prepare_timestamped_video_for_analysis(video_path: Path) -> Path | None:
         heartbeat_interval = 15
         timeout_seconds = 300
         started = time.monotonic()
+        emit_benchmark_event(
+            "video_preprocess_started",
+            {
+                "source": video_path.name,
+                "source_duration_seconds": round(source_duration, 3),
+                "proxy": use_proxy,
+                "proxy_limit_seconds": max_seconds,
+            },
+        )
         stderr_text = ""
         while True:
             try:
@@ -1068,6 +1228,16 @@ def _prepare_timestamped_video_for_analysis(video_path: Path) -> Path | None:
 
         if process.returncode == 0 and stamped_path.exists() and stamped_path.stat().st_size > 0:
             logger.info("🕒 已生成时间戳分析视频: %s", stamped_path)
+            emit_benchmark_event(
+                "video_preprocess_completed",
+                {
+                    "source": video_path.name,
+                    "output": stamped_path.name,
+                    "duration_seconds": round(time.monotonic() - started, 3),
+                    "proxy": use_proxy,
+                    "speed_factor": round(speed_factor, 4),
+                },
+            )
             return stamped_path
         logger.warning("⚠️ 生成时间戳分析视频失败: %s", (stderr_text or "")[:300])
     except Exception as e:
@@ -1076,7 +1246,17 @@ def _prepare_timestamped_video_for_analysis(video_path: Path) -> Path | None:
 
 def _tts_generate(text: str, voice: str, out_path: Path) -> str | None:
     """调用 DashScope TTS 生成音频并保存到 out_path。成功返回 None，失败返回错误信息。"""
+    supported_voices = {"Cherry", "Serena", "Ethan", "Chelsie", "Dylan", "Jada", "Sunny"}
+    if voice not in supported_voices:
+        logger.warning("TTS 音色 %s 不受当前模型支持，自动使用 Ethan", voice)
+        voice = "Ethan"
+    started_at = time.perf_counter()
     try:
+        ensure_model_calls_allowed()
+        emit_benchmark_event(
+            "model_call_started",
+            {"stage": "tts", "model": TTS_MODEL_NAME, "voice": voice},
+        )
         dashscope.api_key = TTS_API_KEY
         response = dashscope.MultiModalConversation.call(
             model=TTS_MODEL_NAME,
@@ -1088,10 +1268,39 @@ def _tts_generate(text: str, voice: str, out_path: Path) -> str | None:
             import urllib.request
             urllib.request.urlretrieve(audio_url, str(out_path))
             logger.info("TTS 生成成功: %s (%.0f chars) -> %s", text[:30], len(text), out_path.name)
+            emit_benchmark_event(
+                "model_call_completed",
+                {
+                    "stage": "tts",
+                    "model": TTS_MODEL_NAME,
+                    "voice": voice,
+                    "duration_seconds": round(time.perf_counter() - started_at, 3),
+                },
+            )
             return None
         else:
+            if fail_fast_model_errors():
+                raise_model_failure(
+                    stage="tts",
+                    model=TTS_MODEL_NAME,
+                    message=getattr(response, "message", "TTS returned non-success status."),
+                    status_code=getattr(response, "status_code", None),
+                    request_id=str(getattr(response, "request_id", "") or ""),
+                    duration_seconds=time.perf_counter() - started_at,
+                )
             return f"TTS 失败 (status={response.status_code}): {response.message}"
+    except ModelCallError:
+        raise
     except Exception as e:
+        if fail_fast_model_errors():
+            response = getattr(e, "response", None)
+            raise_model_failure(
+                stage="tts",
+                model=TTS_MODEL_NAME,
+                message=e,
+                status_code=getattr(response, "status_code", None),
+                duration_seconds=time.perf_counter() - started_at,
+            )
         return f"TTS 异常: {e}"
 
 

@@ -27,6 +27,25 @@ def download_bilibili_video(
     # 如果只提供了BV号，构建完整URL
     if url.startswith("BV"):
         url = f"https://www.bilibili.com/video/{url}"
+
+    bvid = ""
+    bvid_match = re.search(r"(BV[0-9A-Za-z]{10})", url)
+    if bvid_match:
+        bvid = bvid_match.group(1)
+
+    cache_path = None
+    if benchmark_mode() and bvid:
+        cache_path = _media_cache_dir() / "downloads" / f"{bvid}.mp4"
+        if cache_path.exists() and cache_path.stat().st_size > 0:
+            output_path.parent.mkdir(parents=True, exist_ok=True)
+            try:
+                os.link(cache_path, output_path)
+            except Exception:
+                shutil.copy2(cache_path, output_path)
+            emit_benchmark_event(
+                "cache_hit",
+                {"kind": "download", "bvid": bvid, "path": cache_path.name},
+            )
     
     logger.info(
         "📥 开始下载Bilibili视频: url='%s', filename='%s', prefer_h264=%s",
@@ -35,12 +54,22 @@ def download_bilibili_video(
         prefer_h264,
     )
     try:
+        started_at = time.perf_counter()
+        max_height = _positive_int_env("CRAYOTTER_DOWNLOAD_MAX_HEIGHT", 720)
+        result: Any = True
+        if cache_path is not None and output_path.exists() and output_path.stat().st_size > 0:
+            result = None
+        else:
+            emit_benchmark_event(
+                "download_started",
+                {"bvid": bvid, "url": url, "max_height": max_height},
+            )
         if prefer_h264:
             format_selector = (
-                "bv*[vcodec^=avc1][ext=mp4]+ba[ext=m4a]/"
-                "b[vcodec^=avc1][ext=mp4]/"
-                "bv*[ext=mp4]+ba[ext=m4a]/"
-                "best[ext=mp4]/best"
+                f"bv*[height<={max_height}][vcodec^=avc1][ext=mp4]+ba[ext=m4a]/"
+                f"b[height<={max_height}][vcodec^=avc1][ext=mp4]/"
+                f"bv*[height<={max_height}][ext=mp4]+ba[ext=m4a]/"
+                f"best[height<={max_height}][ext=mp4]/best"
             )
         else:
             format_selector = "bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best"
@@ -50,12 +79,18 @@ def download_bilibili_video(
             "-f", format_selector,
             "--merge-output-format", "mp4",
             "--prefer-free-formats",
+            "--no-playlist",
+            "--concurrent-fragments", "4",
+            "--retries", "2",
+            "--fragment-retries", "2",
+            "--socket-timeout", "20",
             "-o", str(output_path),
             url,
         ]
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
-        if result.returncode != 0:
-            return f"下载失败: {result.stderr[:500]}"
+        if result is not None:
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
+            if result.returncode != 0:
+                return f"下载失败: {result.stderr[:500]}"
 
         # 获取视频基本信息
         cap = cv2.VideoCapture(str(output_path))
@@ -77,19 +112,38 @@ def download_bilibili_video(
                 f"{MAX_DOWNLOAD_DURATION_SECONDS} 秒（10分钟），文件已删除"
             )
 
-        bvid = ""
-        m = re.search(r"(BV[0-9A-Za-z]{10})", url)
-        if m:
-            bvid = m.group(1)
+        if cache_path is not None and not cache_path.exists():
+            cache_path.parent.mkdir(parents=True, exist_ok=True)
+            try:
+                os.link(output_path, cache_path)
+            except Exception:
+                shutil.copy2(output_path, cache_path)
+            emit_benchmark_event(
+                "cache_stored",
+                {"kind": "download", "bvid": bvid, "path": cache_path.name},
+            )
 
         alias_path = None
         if bvid:
             alias_path = WORKSPACE / f"{bvid}.mp4"
             if not alias_path.exists() and output_path.exists():
                 try:
-                    shutil.copy2(output_path, alias_path)
+                    os.link(output_path, alias_path)
                 except Exception as e:
-                    logger.warning("⚠️ 生成BV别名文件失败: %s", e)
+                    logger.warning("⚠️ 生成BV别名硬链接失败，使用索引路径: %s", e)
+                    alias_path = output_path
+
+        elapsed = time.perf_counter() - started_at
+        emit_benchmark_event(
+            "download_completed",
+            {
+                "bvid": bvid,
+                "duration_seconds": round(elapsed, 3),
+                "bytes": output_path.stat().st_size,
+                "video_duration_seconds": round(duration, 3),
+                "cache_hit": result is None,
+            },
+        )
 
         return json.dumps({
             "status": "success",
@@ -102,6 +156,8 @@ def download_bilibili_video(
             "source": "bilibili",
             "prefer_h264": prefer_h264,
             "format_selector": format_selector,
+            "download_elapsed_seconds": round(elapsed, 3),
+            "cache_hit": result is None,
         }, ensure_ascii=False)
     except Exception as e:
         error_msg = f"下载B站视频出错: {e}"

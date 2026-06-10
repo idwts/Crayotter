@@ -41,6 +41,7 @@ def add_subtitles(
         video = VideoFileClip(str(resolved_video))
         video_dur = video.duration
         sub_clips: list[Any] = []
+        font_path = BUNDLE_DIR / "AlibabaPuHuiTi-3-55-Regular" / "AlibabaPuHuiTi-3-55-Regular.ttf"
 
         for idx, sub in enumerate(subtitles):
             text = sub.get("text", "").strip()
@@ -67,7 +68,7 @@ def add_subtitles(
                     color="white",
                     stroke_color="black",
                     stroke_width=2,
-                    font="./AlibabaPuHuiTi-3-55-Regular/AlibabaPuHuiTi-3-55-Regular.ttf",
+                    font=str(font_path),
                     text_align="center",
                     size=(video.size[0] - 120, None),
                     duration=end - start,
