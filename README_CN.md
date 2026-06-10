@@ -18,6 +18,9 @@
   <a href="https://idwts.github.io/Crayotter/paper/" target="_blank" rel="noopener noreferrer">
     <img src="https://img.shields.io/badge/Blog-Paper%20Page-6f7cff?style=for-the-badge" alt="论文博客">
   </a>
+  <a href="https://arxiv.org/abs/2606.07636" target="_blank" rel="noopener noreferrer">
+    <img src="https://img.shields.io/badge/arXiv-2606.07636-b31b1b?style=for-the-badge&logo=arxiv&logoColor=white" alt="arXiv 论文">
+  </a>
 </p>
 
 <p align="center">
@@ -32,6 +35,7 @@ Crayotter 工作流由 **规划（planning）**、**深度剪辑研究（deep ed
 
 ## 近期动态
 
+- 2026.5.31：我们的论文已上线：[Crayotter: Traceable Multi-Agent Workflows for Long-Form Video Editing](https://arxiv.org/abs/2606.07636)。
 - 2026.5.23：100星达成！
 - 2026.5.11：论文页面已上线，见 [Crayotter Paper Page](https://idwts.github.io/Crayotter/paper/)。
 - 2026.4.10：优化后的 release 版本已更新。
@@ -233,6 +237,24 @@ python script/visualize.py --port 9000
 ```
 
 4. 隐式导出静态HTML：`script\visualize.py` 还会在日志同目录导出静态 HTML 轨迹文件（例如 `*_trace.html`）。
+
+---
+
+## 引用
+
+如果 Crayotter 对您的研究或工作有帮助，欢迎引用我们的论文：
+
+```bibtex
+@misc{yan2026crayottertraceablemultiagentworkflows,
+      title={Crayotter: Traceable Multi-Agent Workflows for Long-Form Video Editing},
+      author={Lecheng Yan and Yichong Zhang and Ben Pan and Xiaoyu Zheng and Jiawei Qian and Anqi Wu and Wenxi Li and Chenyang Lyu},
+      year={2026},
+      eprint={2606.07636},
+      archivePrefix={arXiv},
+      primaryClass={cs.CV},
+      url={https://arxiv.org/abs/2606.07636},
+}
+```
 
 ---
 

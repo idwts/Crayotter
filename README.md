@@ -18,6 +18,9 @@
   <a href="https://idwts.github.io/Crayotter/paper/" target="_blank" rel="noopener noreferrer">
     <img src="https://img.shields.io/badge/Blog-Paper%20Page-6f7cff?style=for-the-badge" alt="Research Blog">
   </a>
+  <a href="https://arxiv.org/abs/2606.07636" target="_blank" rel="noopener noreferrer">
+    <img src="https://img.shields.io/badge/arXiv-2606.07636-b31b1b?style=for-the-badge&logo=arxiv&logoColor=white" alt="arXiv Paper">
+  </a>
 </p>
 
 <p align="center">
@@ -33,6 +36,7 @@ It combines **planning**, **deep editing research**, and **tool-based execution*
 
 ## NEWS
 
+- 2026.5.31: Our paper is now available: [Crayotter: Traceable Multi-Agent Workflows for Long-Form Video Editing](https://arxiv.org/abs/2606.07636).
 - 2026.5.23: 100 Stars achieved!
 - 2026.5.11: The paper page is now live at [Crayotter Paper Page](https://idwts.github.io/Crayotter/paper/).
 - 2026.4.10: The release has been updated.
@@ -209,6 +213,24 @@ python script\visualize.py --port 8080
 ```
 
 `script\visualize.py` also exports a static trace HTML file next to the input log (e.g., `*_trace.html`).
+
+---
+
+## Citation
+
+If you find Crayotter useful for your research or work, please cite:
+
+```bibtex
+@misc{yan2026crayottertraceablemultiagentworkflows,
+      title={Crayotter: Traceable Multi-Agent Workflows for Long-Form Video Editing},
+      author={Lecheng Yan and Yichong Zhang and Ben Pan and Xiaoyu Zheng and Jiawei Qian and Anqi Wu and Wenxi Li and Chenyang Lyu},
+      year={2026},
+      eprint={2606.07636},
+      archivePrefix={arXiv},
+      primaryClass={cs.CV},
+      url={https://arxiv.org/abs/2606.07636},
+}
+```
 
 ---
 
