@@ -167,10 +167,14 @@ CRAYOTTER_DIRECT_PHASE3_EXECUTION=false
 # 是否优先使用本地素材（true=优先本地，false=优先在线获取）
 CRAYOTTER_PREFER_LOCAL_MATERIALS=false
 
-# Phase 1 DAG、下载和视频分析的并发上限
-CRAYOTTER_PREP_MAX_CONCURRENCY=4
-CRAYOTTER_DOWNLOAD_MAX_CONCURRENCY=2
-CRAYOTTER_VIDEO_ANALYSIS_MAX_CONCURRENCY=2
+# 资源池并发上限
+CRAYOTTER_SEARCH_POOL_SIZE=4
+CRAYOTTER_DOWNLOAD_POOL_SIZE=2
+CRAYOTTER_VIDEO_ANALYSIS_POOL_SIZE=2
+CRAYOTTER_LLM_POOL_SIZE=2
+CRAYOTTER_FFMPEG_POOL_SIZE=2
+CRAYOTTER_TTS_POOL_SIZE=2
+CRAYOTTER_EXPORT_POOL_SIZE=1
 
 # 智能代理超时等待时间（单位：秒，默认150秒，超时会自动结束当前任务）
 CRAYOTTER_AGENT_STALL_TIMEOUT_SECONDS=150
@@ -181,7 +185,7 @@ CRAYOTTER_AGENT_STALL_TIMEOUT_SECONDS=150
 
 - `CRAYOTTER_DIRECT_PHASE3_EXECUTION=true`：跳过 Phase 2 素材搜索/下载，直接走“现有素材分析 + Phase 3 执行”链路。
 - `CRAYOTTER_PREFER_LOCAL_MATERIALS=true`：先分析本地素材，若当前素材已足够则直接进入后续剪辑，不足时才联网补充。
-- 三个并发参数分别控制 Phase 1 ready steps、并行下载和并行视频分析的上限。
+- 资源池参数分别控制搜索、下载、视频分析、LLM、FFmpeg、TTS 和最终导出的并发上限。
 - `CRAYOTTER_AGENT_STALL_TIMEOUT_SECONDS`：控制任务“长时间无新进展”判定阈值。
 - 环境隐式逻辑：图形化工作台中的 API 设置、Phase 2、直达 Phase 3、本地素材优先和超时设置，都会同步写回同一份 `.env`。
 - 成品画幅控制：候选素材排序现在会把目标横竖屏当成评分因子：默认优先横屏；如果用户明确要求竖屏，则优先竖屏。Phase 3 合并/导出也改成“放缩后居中裁切”，不再简单拉伸。
@@ -247,6 +251,7 @@ http://127.0.0.1:8765/ui/
 - `GET /jobs/{job_id}`
 - `GET /jobs/{job_id}/events`
 - `POST /jobs/{job_id}/cancel`
+- `POST /jobs/{job_id}/resume`
 
 > 图形化工作台以运行根目录 `.env` 作为唯一配置真源。不要提交真实 `.env`。
 

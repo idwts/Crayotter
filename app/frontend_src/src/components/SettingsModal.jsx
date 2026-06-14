@@ -116,6 +116,17 @@ export function SettingsModal({ configForm, setConfigForm, configMessage, setCon
                         <Field label={t("stallTimeout")} value={configForm.stallTimeout} onChange={(value) => update("stallTimeout", value)} placeholder="150" type="number" />
                       </div>
                     </SettingSection>
+                    <SettingSection icon={SlidersHorizontal} title={t("resourcePools")}>
+                      <div className="grid gap-4 md:grid-cols-2">
+                        <Field label={t("searchPool")} value={configForm.searchPoolSize} onChange={(value) => update("searchPoolSize", value)} placeholder="4" type="number" />
+                        <Field label={t("downloadPool")} value={configForm.downloadPoolSize} onChange={(value) => update("downloadPoolSize", value)} placeholder="2" type="number" />
+                        <Field label={t("videoAnalysisPool")} value={configForm.videoAnalysisPoolSize} onChange={(value) => update("videoAnalysisPoolSize", value)} placeholder="2" type="number" />
+                        <Field label={t("llmPool")} value={configForm.llmPoolSize} onChange={(value) => update("llmPoolSize", value)} placeholder="2" type="number" />
+                        <Field label={t("ffmpegPool")} value={configForm.ffmpegPoolSize} onChange={(value) => update("ffmpegPoolSize", value)} placeholder="2" type="number" />
+                        <Field label={t("ttsPool")} value={configForm.ttsPoolSize} onChange={(value) => update("ttsPoolSize", value)} placeholder="2" type="number" />
+                        <Field label={t("exportPool")} value={configForm.exportPoolSize} onChange={(value) => update("exportPoolSize", value)} placeholder="1" type="number" />
+                      </div>
+                    </SettingSection>
                   </>
                 )}
               </div>

@@ -104,7 +104,7 @@ class RuntimeManager:
             running = [
                 job.record.job_id
                 for job in self._jobs.values()
-                if job.record.status == "running"
+                if job.record.status in {"queued", "running"}
             ]
             if running:
                 raise RuntimeError(
@@ -172,6 +172,47 @@ class RuntimeManager:
             "note": "Cancellation requested.",
         }
 
+    def resume_job(self, job_id: str) -> dict[str, Any]:
+        job = self.get_job(job_id)
+        if job is None:
+            raise KeyError(job_id)
+        with self._lock:
+            running = [
+                item.record.job_id
+                for item in self._jobs.values()
+                if item.record.status in {"queued", "running"}
+            ]
+            if running:
+                raise RuntimeError(f"Another job is already running: {running[0]}.")
+            if job.record.status != "interrupted":
+                raise RuntimeError("Only interrupted jobs can be resumed.")
+
+            config = self.config_store.load()
+            request = JobRequest(
+                task=job.record.task,
+                mode=job.record.mode,
+                profile=job.record.profile,
+                enable_phase2_research=job.record.enable_phase2_research,
+                direct_phase3_execution=job.record.direct_phase3_execution,
+                prefer_local_materials=job.record.prefer_local_materials,
+            )
+            job.record.status = "queued"
+            job.record.error = None
+            job.record.completed_at = None
+            job.cancel_requested.clear()
+            self._write_summary(job)
+
+        self._publish(job, "job_resume_requested", {"job_id": job_id})
+        worker = threading.Thread(
+            target=self._run_job,
+            args=(job, request, config, True),
+            name=f"job-resume-{job_id}",
+            daemon=True,
+        )
+        job.thread = worker
+        worker.start()
+        return job.record.model_dump()
+
     def delete_job(self, job_id: str) -> dict[str, Any]:
         with self._lock:
             job = self._jobs.get(job_id)
@@ -196,13 +237,19 @@ class RuntimeManager:
             raise KeyError(job_id)
         return job.bus.wait_for_events(after_sequence=after_sequence, timeout=timeout)
 
-    def _run_job(self, job: ManagedJob, request: JobRequest, config: AppConfig) -> None:
+    def _run_job(
+        self,
+        job: ManagedJob,
+        request: JobRequest,
+        config: AppConfig,
+        resume: bool = False,
+    ) -> None:
         self._mark_running(job)
         try:
             if request.mode == "demo":
                 self._run_demo_job(job, request)
             else:
-                self._run_agent_job(job, request, config)
+                self._run_agent_job(job, request, config, resume=resume)
         except Exception as exc:
             self._mark_failed(job, str(exc))
 
@@ -282,7 +329,14 @@ class RuntimeManager:
             output_files=[str(artifact_path)],
         )
 
-    def _run_agent_job(self, job: ManagedJob, request: JobRequest, config: AppConfig) -> None:
+    def _run_agent_job(
+        self,
+        job: ManagedJob,
+        request: JobRequest,
+        config: AppConfig,
+        *,
+        resume: bool = False,
+    ) -> None:
         configure_runtime_environment()
         bundle_root = get_bundle_root()
         runtime_root = get_runtime_root()
@@ -298,14 +352,19 @@ class RuntimeManager:
         runtime_config["enable_phase2_research"] = job.record.enable_phase2_research
         runtime_config["direct_phase3_execution"] = job.record.direct_phase3_execution
         runtime_config["prefer_local_materials"] = job.record.prefer_local_materials
-        runtime_config["prep_max_concurrency"] = config.prep_max_concurrency
-        runtime_config["download_max_concurrency"] = config.download_max_concurrency
-        runtime_config["video_analysis_max_concurrency"] = config.video_analysis_max_concurrency
+        runtime_config["search_pool_size"] = config.search_pool_size
+        runtime_config["download_pool_size"] = config.download_pool_size
+        runtime_config["video_analysis_pool_size"] = config.video_analysis_pool_size
+        runtime_config["llm_pool_size"] = config.llm_pool_size
+        runtime_config["ffmpeg_pool_size"] = config.ffmpeg_pool_size
+        runtime_config["tts_pool_size"] = config.tts_pool_size
+        runtime_config["export_pool_size"] = config.export_pool_size
         runtime_config["short_form_optimizations"] = config.short_form_optimizations
         runtime_config["short_form_max_sources"] = config.short_form_max_sources
         runtime_config["video_analysis_proxy_max_seconds"] = config.video_analysis_proxy_max_seconds
         runtime_config["download_max_height"] = config.download_max_height
         runtime_config["agent_stall_timeout_seconds"] = job.stall_timeout_seconds
+        runtime_config["resume_execution"] = resume
         config_path.write_text(
             json.dumps(runtime_config, ensure_ascii=False, indent=2),
             encoding="utf-8",
@@ -317,6 +376,10 @@ class RuntimeManager:
         child_env["PYTHONUTF8"] = "1"
         child_env["CRAYOTTER_RUNTIME_ROOT"] = str(runtime_root)
         child_env["CRAYOTTER_BUNDLE_ROOT"] = str(bundle_root)
+        child_env["CRAYOTTER_TASK_WORKSPACE"] = str(job.job_dir / "workspace")
+        child_env["CRAYOTTER_USER_WORKSPACE"] = str(runtime_root / "user_temp")
+        child_env["CRAYOTTER_PERSIST_WORKSPACE"] = "true"
+        child_env["CRAYOTTER_JOB_ID"] = job.record.job_id
 
         if is_frozen():
             command = [
@@ -584,6 +647,7 @@ class RuntimeManager:
         runtime_root = get_runtime_root()
         results: list[dict[str, Any]] = []
         seen: set[str] = set()
+        registry_metadata: dict[str, dict[str, Any]] = {}
 
         candidate_paths: list[Path] = []
         for path_str in job.record.output_files:
@@ -594,6 +658,18 @@ class RuntimeManager:
             for path in sorted(output_dir.rglob("*")):
                 if path.is_file():
                     candidate_paths.append(path)
+        manifest_path = job.job_dir / "workspace" / ".crayotter" / "artifact_manifest.json"
+        if manifest_path.exists():
+            try:
+                manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+                for artifact in manifest.get("artifacts", []):
+                    raw_path = str(artifact.get("path") or "")
+                    if not raw_path:
+                        continue
+                    registry_metadata[str(Path(raw_path).resolve(strict=False))] = dict(artifact)
+                    candidate_paths.append(Path(raw_path))
+            except Exception:
+                pass
 
         for path in candidate_paths:
             try:
@@ -601,9 +677,30 @@ class RuntimeManager:
             except Exception:
                 resolved = path
             key = str(resolved)
-            if key in seen or not resolved.exists() or not resolved.is_file():
+            registry_item = registry_metadata.get(key, {})
+            if key in seen:
                 continue
             seen.add(key)
+            exists = resolved.exists() and resolved.is_file()
+            if not exists:
+                if registry_item:
+                    results.append(
+                        {
+                            "path": str(resolved),
+                            "display_path": str(resolved),
+                            "name": resolved.name,
+                            "suffix": resolved.suffix.lower(),
+                            "kind": registry_item.get("kind", "file"),
+                            "size_bytes": 0,
+                            "duration_seconds": None,
+                            "artifact_id": registry_item.get("id", ""),
+                            "producer_task_id": registry_item.get("producer_task_id", ""),
+                            "phase": registry_item.get("phase", ""),
+                            "valid": False,
+                            "metadata": registry_item.get("metadata", {}),
+                        }
+                    )
+                continue
             try:
                 relative = resolved.relative_to(runtime_root)
                 display_path = str(relative)
@@ -611,7 +708,7 @@ class RuntimeManager:
                 display_path = str(resolved)
             suffix = resolved.suffix.lower()
             stat = resolved.stat()
-            kind = cls._artifact_kind(suffix)
+            kind = str(registry_item.get("kind") or cls._artifact_kind(suffix))
             results.append(
                 {
                     "path": str(resolved),
@@ -620,7 +717,16 @@ class RuntimeManager:
                     "suffix": suffix,
                     "kind": kind,
                     "size_bytes": stat.st_size,
-                    "duration_seconds": cls._video_duration_seconds(resolved, stat) if kind == "video" else None,
+                    "duration_seconds": (
+                        cls._video_duration_seconds(resolved, stat)
+                        if suffix in cls.VIDEO_SUFFIXES
+                        else None
+                    ),
+                    "artifact_id": registry_item.get("id", ""),
+                    "producer_task_id": registry_item.get("producer_task_id", ""),
+                    "phase": registry_item.get("phase", ""),
+                    "valid": bool(registry_item.get("valid", True)),
+                    "metadata": registry_item.get("metadata", {}),
                 }
             )
         return sorted(results, key=lambda item: item["display_path"])
@@ -646,9 +752,9 @@ class RuntimeManager:
                             continue
                         seeded_events.append(json.loads(line))
                     job.bus.seed(seeded_events)
-                if record.status not in TERMINAL_JOB_STATUSES:
-                    record.status = "cancelled"
-                    record.completed_at = record.completed_at or utc_now_iso()
+                if record.status not in TERMINAL_JOB_STATUSES and record.status != "interrupted":
+                    record.status = "interrupted"
+                    record.completed_at = None
                     record.error = record.error or "Backend restarted before the task finished."
                     self._write_summary(job)
                 self._jobs[record.job_id] = job

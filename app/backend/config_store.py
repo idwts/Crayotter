@@ -33,9 +33,13 @@ APP_ENV_VARS = {
     "enable_phase2_research": "CRAYOTTER_ENABLE_PHASE2_RESEARCH",
     "direct_phase3_execution": "CRAYOTTER_DIRECT_PHASE3_EXECUTION",
     "prefer_local_materials": "CRAYOTTER_PREFER_LOCAL_MATERIALS",
-    "prep_max_concurrency": "CRAYOTTER_PREP_MAX_CONCURRENCY",
-    "download_max_concurrency": "CRAYOTTER_DOWNLOAD_MAX_CONCURRENCY",
-    "video_analysis_max_concurrency": "CRAYOTTER_VIDEO_ANALYSIS_MAX_CONCURRENCY",
+    "search_pool_size": "CRAYOTTER_SEARCH_POOL_SIZE",
+    "download_pool_size": "CRAYOTTER_DOWNLOAD_POOL_SIZE",
+    "video_analysis_pool_size": "CRAYOTTER_VIDEO_ANALYSIS_POOL_SIZE",
+    "llm_pool_size": "CRAYOTTER_LLM_POOL_SIZE",
+    "ffmpeg_pool_size": "CRAYOTTER_FFMPEG_POOL_SIZE",
+    "tts_pool_size": "CRAYOTTER_TTS_POOL_SIZE",
+    "export_pool_size": "CRAYOTTER_EXPORT_POOL_SIZE",
     "short_form_optimizations": "CRAYOTTER_SHORT_FORM_OPTIMIZATIONS",
     "short_form_max_sources": "CRAYOTTER_SHORT_FORM_MAX_SOURCES",
     "video_analysis_proxy_max_seconds": "CRAYOTTER_VIDEO_ANALYSIS_PROXY_MAX_SECONDS",
@@ -49,6 +53,12 @@ BOOL_FIELDS = {
     "prefer_local_materials",
     "short_form_optimizations",
 }
+
+REMOVED_RESOURCE_ENV_VARS = (
+    "CRAYOTTER_PREP_MAX_CONCURRENCY",
+    "CRAYOTTER_DOWNLOAD_MAX_CONCURRENCY",
+    "CRAYOTTER_VIDEO_ANALYSIS_MAX_CONCURRENCY",
+)
 
 
 def _coerce_env_bool(value: Any, default: bool) -> bool:
@@ -128,6 +138,7 @@ class ConfigStore:
                 else str(getattr(config, field_name))
                 for field_name, env_name in APP_ENV_VARS.items()
             },
+            **{env_name: None for env_name in REMOVED_RESOURCE_ENV_VARS},
         }
         write_runtime_env_file(env_updates)
         self._remove_legacy_config()
@@ -142,6 +153,16 @@ class ConfigStore:
         raw = read_runtime_env_file()
         if not raw:
             return {}
+        if any(name in raw for name in REMOVED_RESOURCE_ENV_VARS):
+            migration: dict[str, str | None] = {
+                name: None for name in REMOVED_RESOURCE_ENV_VARS
+            }
+            defaults = AppConfig()
+            for field_name, env_name in APP_ENV_VARS.items():
+                if field_name.endswith("_pool_size") and env_name not in raw:
+                    migration[env_name] = str(getattr(defaults, field_name))
+            write_runtime_env_file(migration)
+            raw = read_runtime_env_file()
 
         payload: dict[str, Any] = {}
         default_profile: dict[str, Any] = {}

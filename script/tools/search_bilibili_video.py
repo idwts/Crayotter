@@ -12,6 +12,7 @@ def search_bilibili_video(
     pages: int = 2,
     expand_variants: int = 3,
     max_total_results: int | None = None,
+    request_concurrency: int | None = None,
 ) -> str:
     """在 Bilibili 上搜索视频资源，返回视频标题、BV号、时长、播放量等信息。
     搜索结果会自动写入候选池，供后续 rank_video_candidates 聚合使用。
@@ -69,7 +70,11 @@ def search_bilibili_video(
         async def do_search():
             max_concurrency = max(
                 1,
-                int(os.environ.get("CRAYOTTER_PREP_MAX_CONCURRENCY", "4") or 4),
+                int(
+                    request_concurrency
+                    if request_concurrency is not None
+                    else os.environ.get("CRAYOTTER_SEARCH_POOL_SIZE", "4") or 4
+                ),
             )
             semaphore = asyncio.Semaphore(max_concurrency)
 

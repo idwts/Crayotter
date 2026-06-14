@@ -42,18 +42,13 @@ SHORT_FORM_OPTIMIZATIONS = str(
     os.environ.get("CRAYOTTER_SHORT_FORM_OPTIMIZATIONS", "true")
 ).strip().lower() not in {"0", "false", "no", "off"}
 try:
-    PREP_MAX_CONCURRENCY = max(
-        1,
-        int(os.environ.get("CRAYOTTER_PREP_MAX_CONCURRENCY", "4") or 4),
-    )
-    DOWNLOAD_MAX_CONCURRENCY = max(
-        1,
-        int(os.environ.get("CRAYOTTER_DOWNLOAD_MAX_CONCURRENCY", "2") or 2),
-    )
-    VIDEO_ANALYSIS_MAX_CONCURRENCY = max(
-        1,
-        int(os.environ.get("CRAYOTTER_VIDEO_ANALYSIS_MAX_CONCURRENCY", "2") or 2),
-    )
+    SEARCH_POOL_SIZE = max(1, int(os.environ.get("CRAYOTTER_SEARCH_POOL_SIZE", "4") or 4))
+    DOWNLOAD_POOL_SIZE = max(1, int(os.environ.get("CRAYOTTER_DOWNLOAD_POOL_SIZE", "2") or 2))
+    VIDEO_ANALYSIS_POOL_SIZE = max(1, int(os.environ.get("CRAYOTTER_VIDEO_ANALYSIS_POOL_SIZE", "2") or 2))
+    LLM_POOL_SIZE = max(1, int(os.environ.get("CRAYOTTER_LLM_POOL_SIZE", "2") or 2))
+    FFMPEG_POOL_SIZE = max(1, int(os.environ.get("CRAYOTTER_FFMPEG_POOL_SIZE", "2") or 2))
+    TTS_POOL_SIZE = max(1, int(os.environ.get("CRAYOTTER_TTS_POOL_SIZE", "2") or 2))
+    EXPORT_POOL_SIZE = max(1, int(os.environ.get("CRAYOTTER_EXPORT_POOL_SIZE", "1") or 1))
     SHORT_FORM_MAX_SOURCES = min(
         4,
         max(3, int(os.environ.get("CRAYOTTER_SHORT_FORM_MAX_SOURCES", "4") or 4)),
@@ -67,9 +62,13 @@ try:
         int(os.environ.get("CRAYOTTER_DOWNLOAD_MAX_HEIGHT", "720") or 720),
     )
 except (TypeError, ValueError):
-    PREP_MAX_CONCURRENCY = 4
-    DOWNLOAD_MAX_CONCURRENCY = 2
-    VIDEO_ANALYSIS_MAX_CONCURRENCY = 2
+    SEARCH_POOL_SIZE = 4
+    DOWNLOAD_POOL_SIZE = 2
+    VIDEO_ANALYSIS_POOL_SIZE = 2
+    LLM_POOL_SIZE = 2
+    FFMPEG_POOL_SIZE = 2
+    TTS_POOL_SIZE = 2
+    EXPORT_POOL_SIZE = 1
     SHORT_FORM_MAX_SOURCES = 4
     VIDEO_ANALYSIS_PROXY_MAX_SECONDS = 45
     DOWNLOAD_MAX_HEIGHT = 720
@@ -89,6 +88,7 @@ try:
     )
 except (TypeError, ValueError):
     AGENT_STALL_TIMEOUT_SECONDS = 150
+RESUME_EXECUTION = False
 
 # 配置 agent 日志（始终写到仓库根目录 logs/）
 SCRIPT_DIR = Path(__file__).resolve().parent
@@ -204,9 +204,13 @@ def _build_runtime_settings() -> dict[str, Any]:
         "enable_phase2_research": ENABLE_PHASE2_RESEARCH,
         "direct_phase3_execution": DIRECT_PHASE3_EXECUTION,
         "prefer_local_materials": PREFER_LOCAL_MATERIALS,
-        "prep_max_concurrency": PREP_MAX_CONCURRENCY,
-        "download_max_concurrency": DOWNLOAD_MAX_CONCURRENCY,
-        "video_analysis_max_concurrency": VIDEO_ANALYSIS_MAX_CONCURRENCY,
+        "search_pool_size": SEARCH_POOL_SIZE,
+        "download_pool_size": DOWNLOAD_POOL_SIZE,
+        "video_analysis_pool_size": VIDEO_ANALYSIS_POOL_SIZE,
+        "llm_pool_size": LLM_POOL_SIZE,
+        "ffmpeg_pool_size": FFMPEG_POOL_SIZE,
+        "tts_pool_size": TTS_POOL_SIZE,
+        "export_pool_size": EXPORT_POOL_SIZE,
         "short_form_optimizations": SHORT_FORM_OPTIMIZATIONS,
         "short_form_max_sources": SHORT_FORM_MAX_SOURCES,
         "video_analysis_proxy_max_seconds": VIDEO_ANALYSIS_PROXY_MAX_SECONDS,
@@ -256,7 +260,9 @@ def _coerce_positive_int(value: Any, default: int) -> int:
 def apply_runtime_config(config: Mapping[str, Any] | None = None) -> dict[str, Any]:
     global API_KEY, BASE_URL, MODEL_NAME, ENABLE_PHASE2_RESEARCH
     global DIRECT_PHASE3_EXECUTION, PREFER_LOCAL_MATERIALS, AGENT_STALL_TIMEOUT_SECONDS
-    global PREP_MAX_CONCURRENCY, DOWNLOAD_MAX_CONCURRENCY, VIDEO_ANALYSIS_MAX_CONCURRENCY
+    global RESUME_EXECUTION
+    global SEARCH_POOL_SIZE, DOWNLOAD_POOL_SIZE, VIDEO_ANALYSIS_POOL_SIZE
+    global LLM_POOL_SIZE, FFMPEG_POOL_SIZE, TTS_POOL_SIZE, EXPORT_POOL_SIZE
     global SHORT_FORM_OPTIMIZATIONS, SHORT_FORM_MAX_SOURCES
     global VIDEO_ANALYSIS_PROXY_MAX_SECONDS, DOWNLOAD_MAX_HEIGHT
     global VIDEO_API_KEY, VIDEO_BASE_URL, VIDEO_MODEL_NAME
@@ -279,18 +285,19 @@ def apply_runtime_config(config: Mapping[str, Any] | None = None) -> dict[str, A
         config.get("prefer_local_materials"),
         PREFER_LOCAL_MATERIALS,
     )
-    PREP_MAX_CONCURRENCY = _coerce_positive_int(
-        config.get("prep_max_concurrency"),
-        PREP_MAX_CONCURRENCY,
+    SEARCH_POOL_SIZE = _coerce_positive_int(config.get("search_pool_size"), SEARCH_POOL_SIZE)
+    DOWNLOAD_POOL_SIZE = _coerce_positive_int(config.get("download_pool_size"), DOWNLOAD_POOL_SIZE)
+    VIDEO_ANALYSIS_POOL_SIZE = _coerce_positive_int(
+        config.get("video_analysis_pool_size"), VIDEO_ANALYSIS_POOL_SIZE
     )
-    DOWNLOAD_MAX_CONCURRENCY = _coerce_positive_int(
-        config.get("download_max_concurrency"),
-        DOWNLOAD_MAX_CONCURRENCY,
+    RESUME_EXECUTION = _coerce_bool(
+        config.get("resume_execution"),
+        RESUME_EXECUTION,
     )
-    VIDEO_ANALYSIS_MAX_CONCURRENCY = _coerce_positive_int(
-        config.get("video_analysis_max_concurrency"),
-        VIDEO_ANALYSIS_MAX_CONCURRENCY,
-    )
+    LLM_POOL_SIZE = _coerce_positive_int(config.get("llm_pool_size"), LLM_POOL_SIZE)
+    FFMPEG_POOL_SIZE = _coerce_positive_int(config.get("ffmpeg_pool_size"), FFMPEG_POOL_SIZE)
+    TTS_POOL_SIZE = _coerce_positive_int(config.get("tts_pool_size"), TTS_POOL_SIZE)
+    EXPORT_POOL_SIZE = _coerce_positive_int(config.get("export_pool_size"), EXPORT_POOL_SIZE)
     SHORT_FORM_OPTIMIZATIONS = _coerce_bool(
         config.get("short_form_optimizations"),
         SHORT_FORM_OPTIMIZATIONS,
@@ -313,11 +320,13 @@ def apply_runtime_config(config: Mapping[str, Any] | None = None) -> dict[str, A
         config.get("download_max_height"),
         DOWNLOAD_MAX_HEIGHT,
     )
-    os.environ["CRAYOTTER_PREP_MAX_CONCURRENCY"] = str(PREP_MAX_CONCURRENCY)
-    os.environ["CRAYOTTER_DOWNLOAD_MAX_CONCURRENCY"] = str(DOWNLOAD_MAX_CONCURRENCY)
-    os.environ["CRAYOTTER_VIDEO_ANALYSIS_MAX_CONCURRENCY"] = str(
-        VIDEO_ANALYSIS_MAX_CONCURRENCY
-    )
+    os.environ["CRAYOTTER_SEARCH_POOL_SIZE"] = str(SEARCH_POOL_SIZE)
+    os.environ["CRAYOTTER_DOWNLOAD_POOL_SIZE"] = str(DOWNLOAD_POOL_SIZE)
+    os.environ["CRAYOTTER_VIDEO_ANALYSIS_POOL_SIZE"] = str(VIDEO_ANALYSIS_POOL_SIZE)
+    os.environ["CRAYOTTER_LLM_POOL_SIZE"] = str(LLM_POOL_SIZE)
+    os.environ["CRAYOTTER_FFMPEG_POOL_SIZE"] = str(FFMPEG_POOL_SIZE)
+    os.environ["CRAYOTTER_TTS_POOL_SIZE"] = str(TTS_POOL_SIZE)
+    os.environ["CRAYOTTER_EXPORT_POOL_SIZE"] = str(EXPORT_POOL_SIZE)
     os.environ["CRAYOTTER_SHORT_FORM_OPTIMIZATIONS"] = (
         "true" if SHORT_FORM_OPTIMIZATIONS else "false"
     )
@@ -354,9 +363,13 @@ def apply_runtime_config(config: Mapping[str, Any] | None = None) -> dict[str, A
     graph_module.ENABLE_PHASE2_RESEARCH = ENABLE_PHASE2_RESEARCH
     graph_module.DIRECT_PHASE3_EXECUTION = DIRECT_PHASE3_EXECUTION
     graph_module.PREFER_LOCAL_MATERIALS = PREFER_LOCAL_MATERIALS
-    graph_module.PREP_MAX_CONCURRENCY = PREP_MAX_CONCURRENCY
-    graph_module.DOWNLOAD_MAX_CONCURRENCY = DOWNLOAD_MAX_CONCURRENCY
-    graph_module.VIDEO_ANALYSIS_MAX_CONCURRENCY = VIDEO_ANALYSIS_MAX_CONCURRENCY
+    graph_module.SEARCH_POOL_SIZE = SEARCH_POOL_SIZE
+    graph_module.DOWNLOAD_POOL_SIZE = DOWNLOAD_POOL_SIZE
+    graph_module.VIDEO_ANALYSIS_POOL_SIZE = VIDEO_ANALYSIS_POOL_SIZE
+    graph_module.LLM_POOL_SIZE = LLM_POOL_SIZE
+    graph_module.FFMPEG_POOL_SIZE = FFMPEG_POOL_SIZE
+    graph_module.TTS_POOL_SIZE = TTS_POOL_SIZE
+    graph_module.EXPORT_POOL_SIZE = EXPORT_POOL_SIZE
     graph_module.SHORT_FORM_OPTIMIZATIONS = SHORT_FORM_OPTIMIZATIONS
     graph_module.SHORT_FORM_MAX_SOURCES = SHORT_FORM_MAX_SOURCES
     tools_module.configure(
@@ -388,7 +401,32 @@ def _serialize_plan(plan: Any) -> dict[str, Any]:
 
 
 def _list_workspace_mp4_files() -> list[str]:
-    return [str(path) for path in sorted(WORKSPACE.glob("*.mp4")) if path.is_file()]
+    manifest_path = WORKSPACE / ".crayotter" / "artifact_manifest.json"
+    if manifest_path.exists():
+        try:
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            final_paths = [
+                Path(str(item.get("path") or ""))
+                for item in manifest.get("artifacts", [])
+                if item.get("kind") == "final_video" and item.get("valid", True)
+            ]
+            existing = [path for path in final_paths if path.exists() and path.is_file()]
+            if existing:
+                return [str(path.resolve()) for path in existing]
+        except Exception:
+            pass
+
+    files = [path for path in WORKSPACE.glob("*.mp4") if path.is_file()]
+    final_named = [
+        path
+        for path in files
+        if "final" in path.stem.lower() or "output" in path.stem.lower()
+    ]
+    if final_named:
+        return [str(path.resolve()) for path in sorted(final_named)]
+    if files:
+        return [str(max(files, key=lambda path: path.stat().st_mtime).resolve())]
+    return []
 
 
 def _emit_state_update(
@@ -923,16 +961,23 @@ def run_task(
         agent_logger.info(f"📋 新任务开始: {task}")
         agent_logger.info(f"{'='*60}")
 
+        import graph as graph_module
+
+        graph_module.RUNTIME_EVENT_SINK = (
+            (lambda event_type, payload: _emit_runtime_event(event_callback, event_type, payload))
+            if event_callback is not None
+            else None
+        )
         graph = build_graph()
 
-        deleted_before = _cleanup_workspace_before_task()
+        deleted_before = 0 if RESUME_EXECUTION else _cleanup_workspace_before_task()
         if deleted_before > 0:
             agent_logger.info("🧹 任务前已清理 temp 文件: %s", deleted_before)
             if verbose:
                 print(f"🧹 任务前已清理 temp 文件: {deleted_before}")
 
         candidate_pool = WORKSPACE / "candidate_pool.jsonl"
-        if candidate_pool.exists():
+        if not RESUME_EXECUTION and candidate_pool.exists():
             try:
                 candidate_pool.unlink()
                 agent_logger.info("🧹 已清理候选池缓存: %s", candidate_pool)
@@ -985,7 +1030,14 @@ def run_task(
         if output and any(output.startswith(marker) for marker in failure_markers):
             raise RuntimeError(output)
 
-        deleted_after, kept = _cleanup_workspace_after_task()
+        persist_workspace = str(
+            os.environ.get("CRAYOTTER_PERSIST_WORKSPACE", "false")
+        ).strip().lower() in {"1", "true", "yes", "on"}
+        deleted_after, kept = (
+            (0, [path.name for path in WORKSPACE.glob("*.mp4") if path.is_file()])
+            if persist_workspace
+            else _cleanup_workspace_after_task()
+        )
         if deleted_after > 0:
             agent_logger.info("🧹 任务后已清理中间文件: %s", deleted_after)
             if verbose:
