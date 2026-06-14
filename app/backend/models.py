@@ -49,9 +49,13 @@ class AppConfig(BaseModel):
     enable_phase2_research: bool = True
     direct_phase3_execution: bool = False
     prefer_local_materials: bool = False
-    prep_max_concurrency: int = Field(default=4, ge=1)
-    download_max_concurrency: int = Field(default=2, ge=1)
-    video_analysis_max_concurrency: int = Field(default=2, ge=1)
+    search_pool_size: int = Field(default=4, ge=1)
+    download_pool_size: int = Field(default=2, ge=1)
+    video_analysis_pool_size: int = Field(default=2, ge=1)
+    llm_pool_size: int = Field(default=2, ge=1)
+    ffmpeg_pool_size: int = Field(default=2, ge=1)
+    tts_pool_size: int = Field(default=2, ge=1)
+    export_pool_size: int = Field(default=1, ge=1)
     short_form_optimizations: bool = True
     short_form_max_sources: int = Field(default=4, ge=3, le=4)
     video_analysis_proxy_max_seconds: int = Field(default=45, ge=15, le=180)
@@ -91,7 +95,7 @@ class JobRecord(BaseModel):
     enable_phase2_research: bool = True
     direct_phase3_execution: bool = False
     prefer_local_materials: bool = False
-    status: Literal["queued", "running", "completed", "failed", "cancelled"] = "queued"
+    status: Literal["queued", "running", "interrupted", "completed", "failed", "cancelled"] = "queued"
     profile: str | None = None
     created_at: str = Field(default_factory=utc_now_iso)
     started_at: str | None = None

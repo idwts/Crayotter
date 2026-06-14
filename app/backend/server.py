@@ -83,6 +83,7 @@ class BackendHandler(BaseHTTPRequestHandler):
                             "POST /uploads",
                             "DELETE /uploads?path=user_temp/<file>",
                             "POST /jobs/{job_id}/cancel",
+                            "POST /jobs/{job_id}/resume",
                             "DELETE /jobs/{job_id}",
                         ],
                     },
@@ -180,6 +181,12 @@ class BackendHandler(BaseHTTPRequestHandler):
             if path.startswith("/jobs/") and path.endswith("/cancel"):
                 job_id = path.split("/")[2]
                 result = SERVICE.runtime_manager.cancel_job(job_id)
+                self._write_json(HTTPStatus.OK, result)
+                return
+
+            if path.startswith("/jobs/") and path.endswith("/resume"):
+                job_id = path.split("/")[2]
+                result = SERVICE.runtime_manager.resume_job(job_id)
                 self._write_json(HTTPStatus.OK, result)
                 return
 
@@ -531,7 +538,7 @@ class BackendHandler(BaseHTTPRequestHandler):
                 job = SERVICE.runtime_manager.get_job(job_id)
                 if job is None:
                     break
-                if job.record.status in {"completed", "failed", "cancelled"} and not events:
+                if job.record.status in {"completed", "failed", "cancelled", "interrupted"} and not events:
                     self.wfile.write(b"event: end\ndata: {}\n\n")
                     self.wfile.flush()
                     break

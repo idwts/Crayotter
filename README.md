@@ -70,22 +70,28 @@ Supporting folders:
 Crayotter uses a three-phase architecture:
 
 1. **Phase 1 — Material Preparation (Planner + Executor)**
-   - Planner emits an explicit dependency DAG; ready steps are dispatched concurrently with bounded `Send` fan-out
+   - Planner emits an explicit dependency DAG
+   - A deterministic scheduler validates dependencies, resource pools, retries, and write conflicts
+   - Search, per-video download, and per-video analysis tasks execute concurrently when resources are available
+   - A Material Gap Evaluator decides whether to proceed or run an incremental sourcing round
    - Search candidate videos
    - Rank/select high-quality candidates
    - Download selected videos
    - Analyze each source video multimodally
 
 2. **Phase 2 — Editing Research**
-   - Read all analysis outputs
-   - Build a structured editing blueprint (narrative, rhythm, transitions, narration strategy)
+   - Research source analyses concurrently
+   - Build narrative, visual, pacing, and narration strategies concurrently
+   - Integrate them into one structured editing blueprint
    - No editing tools are called in this phase
 
    This phase can be disabled with `CRAYOTTER_ENABLE_PHASE2_RESEARCH=false` in the runtime `.env` to save tokens.
    When disabled, the workflow becomes: Phase 1 → Phase 3.
 
 3. **Phase 3 — ReAct Editing Execution**
-   - Execute cutting, merging, transition design, narration/subtitles, and final export
+   - Prefer a controlled editing DAG with parallel clip cutting and segmented TTS
+   - Keep timeline merge, mixing, subtitles, quality evaluation, and export serial
+   - Fall back to the existing ReAct editor when structured planning or validation fails
    - Log full tool-call trajectory for later trace visualization
 
 ---
@@ -150,9 +156,13 @@ CRAYOTTER_TTS_MODEL_NAME=qwen-tts-latest
 CRAYOTTER_ENABLE_PHASE2_RESEARCH=true
 CRAYOTTER_DIRECT_PHASE3_EXECUTION=false
 CRAYOTTER_PREFER_LOCAL_MATERIALS=false
-CRAYOTTER_PREP_MAX_CONCURRENCY=4
-CRAYOTTER_DOWNLOAD_MAX_CONCURRENCY=2
-CRAYOTTER_VIDEO_ANALYSIS_MAX_CONCURRENCY=2
+CRAYOTTER_SEARCH_POOL_SIZE=4
+CRAYOTTER_DOWNLOAD_POOL_SIZE=2
+CRAYOTTER_VIDEO_ANALYSIS_POOL_SIZE=2
+CRAYOTTER_LLM_POOL_SIZE=2
+CRAYOTTER_FFMPEG_POOL_SIZE=2
+CRAYOTTER_TTS_POOL_SIZE=2
+CRAYOTTER_EXPORT_POOL_SIZE=1
 CRAYOTTER_AGENT_STALL_TIMEOUT_SECONDS=150
 ```
 
@@ -160,7 +170,7 @@ Notes:
 
 - `CRAYOTTER_DIRECT_PHASE3_EXECUTION=true` skips material search/download and goes straight into the existing-material analysis + Phase 3 execution path.
 - `CRAYOTTER_PREFER_LOCAL_MATERIALS=true` analyzes local materials first and only searches online when the current materials are not enough.
-- The three concurrency variables bound Phase 1 ready-step fan-out, parallel downloads, and parallel video analysis respectively.
+- Resource-pool variables bound search, download, video analysis, LLM, FFmpeg, TTS, and final export work.
 - `CRAYOTTER_AGENT_STALL_TIMEOUT_SECONDS` controls the “no new progress” watchdog threshold for running jobs.
 - The workbench UI writes API settings, Phase 2, direct Phase 3, local-first mode, and timeout changes back to the same `.env`.
 - Candidate ranking now treats target orientation as a scoring factor: landscape by default, portrait when the user explicitly asks for it. Merge/export also use scale-to-cover plus centered crop instead of direct stretching.
@@ -221,6 +231,7 @@ The backend also exposes local runtime routes such as:
 - `GET /jobs/{job_id}`
 - `GET /jobs/{job_id}/events`
 - `POST /jobs/{job_id}/cancel`
+- `POST /jobs/{job_id}/resume`
 
 > The GUI uses the runtime-root `.env` as the only configuration source of truth. Do not commit real `.env` values.
 

@@ -22,6 +22,7 @@ import {
   Play,
   Plus,
   RefreshCw,
+  RotateCcw,
   Search,
   Send,
   Settings,
@@ -782,6 +783,7 @@ export function JobsView({
   selectJob,
   deleteJob,
   stopSelectedJob,
+  resumeJob,
   openWorkbench,
   createTask,
   displayTaskTitle,
@@ -868,6 +870,15 @@ export function JobsView({
                   {selectedJob.status === "running" && (
                     <button className="secondary-button" onClick={() => stopSelectedJob().catch((error) => notify("error", t("operationFailed", { message: error.message })))} type="button">
                       <CircleStop size={16} />{t("stopJobFirst")}
+                    </button>
+                  )}
+                  {selectedJob.status === "interrupted" && (
+                    <button
+                      className="secondary-button"
+                      onClick={() => resumeJob(selectedJob.job_id).catch((error) => notify("error", t("operationFailed", { message: error.message })))}
+                      type="button"
+                    >
+                      <RotateCcw size={16} />{t("resumeJob")}
                     </button>
                   )}
                   <button

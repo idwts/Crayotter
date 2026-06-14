@@ -136,6 +136,13 @@ function App() {
     ttsBaseUrl: "",
     ttsModel: "",
     stallTimeout: "150",
+    searchPoolSize: "4",
+    downloadPoolSize: "2",
+    videoAnalysisPoolSize: "2",
+    llmPoolSize: "2",
+    ffmpegPoolSize: "2",
+    ttsPoolSize: "2",
+    exportPoolSize: "1",
     enablePhase2Research: true,
     directPhase3Execution: false,
     preferLocalMaterials: false,
@@ -235,6 +242,7 @@ function App() {
       pending: "statusPending",
       queued: "statusQueued",
       running: "statusRunning",
+      interrupted: "statusInterrupted",
       completed: "statusCompleted",
       failed: "statusFailed",
       cancelled: "statusCancelled",
@@ -291,6 +299,18 @@ function App() {
         return { title: t("eventDependencyWaiting"), body: `step=${payload.step_id} · depends_on=${payload.depends_on || "[]"}` };
       case "step_failed":
         return { title: t("eventStepFailed"), body: safeDisplayText(payload.error, t("eventFailedBody")) };
+      case "task_plan_started":
+        return { title: t("eventPlanStarted"), body: `${payload.phase || ""} · ${payload.task_count || 0} tasks` };
+      case "resource_acquired":
+        return { title: t("eventResourceAcquired"), body: `${payload.task_id || ""} · ${JSON.stringify(payload.resources || {})}` };
+      case "task_retrying":
+        return { title: t("eventTaskRetrying"), body: `${payload.task_id || ""} · ${safeDisplayText(payload.error, "")}` };
+      case "artifact_registered":
+        return { title: t("eventArtifactRegistered"), body: `${payload.kind || ""} · ${payload.path || ""}` };
+      case "evaluator_decision":
+        return { title: t("eventEvaluatorDecision"), body: `${payload.phase || ""} · ${payload.decision || ""}` };
+      case "checkpoint_saved":
+        return { title: t("eventCheckpointSaved"), body: payload.path || "" };
       case "tool_called":
         return { title: toolLabel(payload.tool_name), body: t("eventToolCalledBody") };
       case "tool_result":
@@ -338,6 +358,13 @@ function App() {
       ttsBaseUrl: profile.tts_base_url || "",
       ttsModel: profile.tts_model_name || "",
       stallTimeout: String(config.agent_stall_timeout_seconds || 150),
+      searchPoolSize: String(config.search_pool_size || 4),
+      downloadPoolSize: String(config.download_pool_size || 2),
+      videoAnalysisPoolSize: String(config.video_analysis_pool_size || 2),
+      llmPoolSize: String(config.llm_pool_size || 2),
+      ffmpegPoolSize: String(config.ffmpeg_pool_size || 2),
+      ttsPoolSize: String(config.tts_pool_size || 2),
+      exportPoolSize: String(config.export_pool_size || 1),
       enablePhase2Research: config.enable_phase2_research !== false,
       directPhase3Execution: config.direct_phase3_execution === true,
       preferLocalMaterials: config.prefer_local_materials === true,
@@ -490,12 +517,16 @@ function App() {
   const isPrimaryArtifact = (artifact) => {
     const name = String(artifact?.name || "").toLowerCase();
     const suffix = String(artifact?.suffix || "").toLowerCase();
+    if (artifact?.artifact_id) return suffix !== ".log";
     if ([".json", ".jsonl", ".log"].includes(suffix)) return false;
     if (name === "events.jsonl" || name === "summary.json") return false;
     return [".txt", ".md", ".mp4", ".webm", ".mov"].includes(suffix);
   };
 
   const artifactLabel = (artifact) => {
+    if (artifact?.kind && artifact.kind !== "video" && artifact.kind !== "text") {
+      return artifact.kind;
+    }
     const suffix = String(artifact?.suffix || "").toLowerCase();
     if ([".mp4", ".webm", ".mov"].includes(suffix)) return t("artifactVideo");
     if (suffix === ".md") return t("artifactMd");
@@ -533,6 +564,7 @@ function App() {
   const submitConfig = async (event) => {
     event.preventDefault();
     const stallTimeout = Math.max(10, Number(configForm.stallTimeout || 150));
+    const poolSize = (value, fallback) => Math.max(1, Number(value || fallback));
     const payload = {
       active_profile: "default",
       profiles: {
@@ -552,6 +584,13 @@ function App() {
       direct_phase3_execution: configForm.directPhase3Execution,
       prefer_local_materials: configForm.preferLocalMaterials,
       agent_stall_timeout_seconds: stallTimeout,
+      search_pool_size: poolSize(configForm.searchPoolSize, 4),
+      download_pool_size: poolSize(configForm.downloadPoolSize, 2),
+      video_analysis_pool_size: poolSize(configForm.videoAnalysisPoolSize, 2),
+      llm_pool_size: poolSize(configForm.llmPoolSize, 2),
+      ffmpeg_pool_size: poolSize(configForm.ffmpegPoolSize, 2),
+      tts_pool_size: poolSize(configForm.ttsPoolSize, 2),
+      export_pool_size: poolSize(configForm.exportPoolSize, 1),
     };
     try {
       const config = await request("/config", { method: "PUT", body: JSON.stringify(payload) });
@@ -679,11 +718,22 @@ function App() {
     await refreshJobs(false);
   };
 
+  const resumeJob = async (jobId) => {
+    const job = await request(`/jobs/${jobId}/resume`, {
+      method: "POST",
+      body: JSON.stringify({}),
+    });
+    setSelectedJob(job);
+    await refreshJobs(true);
+  };
+
   const selectedMeaningfulEvents = getMeaningfulEvents(selectedEvents);
   const logEvents = getVisibleLogEvents(selectedEvents);
   const latestEvent = [...selectedMeaningfulEvents].reverse()[0];
   const summary = selectedJob?.status === "failed"
     ? t("taskFailedSummary")
+    : selectedJob?.status === "interrupted"
+      ? t("taskInterruptedSummary")
     : selectedJob?.status === "cancelled"
       ? t("taskCancelledSummary")
       : selectedJob?.status === "completed"
@@ -698,13 +748,15 @@ function App() {
     ? t("done")
     : selectedJob?.status === "cancelled"
       ? t("statusCancelled")
+      : selectedJob?.status === "interrupted"
+        ? t("statusInterrupted")
       : selectedJob?.status === "failed"
         ? t("statusFailed")
         : ["pending", "queued"].includes(selectedJob?.status)
           ? t("notStarted")
           : phaseLabel(currentPhaseCode);
   const recentProgressEvents = selectedMeaningfulEvents
-    .filter((event) => ["thinking_summary", "step_completed", "tool_result", "job_completed", "job_failed"].includes(event.type))
+    .filter((event) => ["thinking_summary", "step_completed", "tool_result", "artifact_registered", "evaluator_decision", "job_completed", "job_failed"].includes(event.type))
     .slice(-5);
   const phaseMilestones = ["phase1", "phase2", "phase3"]
     .map((phase) => [...selectedMeaningfulEvents].reverse().find(
@@ -827,6 +879,7 @@ function App() {
               selectJob={selectJob}
               deleteJob={deleteJob}
               stopSelectedJob={stopSelectedJob}
+              resumeJob={resumeJob}
               openWorkbench={() => setCurrentView("workbench")}
               createTask={openWorkbenchComposer}
               displayTaskTitle={displayTaskTitle}

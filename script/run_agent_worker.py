@@ -114,7 +114,7 @@ def main(argv: list[str] | None = None) -> int:
             {
                 "kind": "result",
                 "final_output": final_output,
-                "output_files": [str(path) for path in agent.WORKSPACE.glob("*.mp4") if path.is_file()],
+                "output_files": agent._list_workspace_mp4_files(),
             }
         )
         return 0
