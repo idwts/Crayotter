@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 import threading
-from typing import Any
+from typing import Any, Callable
 from urllib.parse import urlparse
 
 from . import _shared
@@ -30,6 +30,7 @@ from ._shared import (
 
 _FATAL_ANALYSIS_ERROR = ""
 _FATAL_ANALYSIS_ERROR_LOCK = threading.Lock()
+_DASHSCOPE_RETRY_DELAYS_SECONDS = (5.0, 15.0, 30.0)
 
 
 def _format_api_error(exc: Exception) -> str:
@@ -69,6 +70,58 @@ def _is_fatal_media_input_error(status_code: Any, message: str) -> bool:
         or "unsupported model" in normalized
         or "model not found" in normalized
     )
+
+
+def _is_retryable_dashscope_error(exc: Exception) -> bool:
+    markers = (
+        "sslerror",
+        "ssleoferror",
+        "max retries exceeded",
+        "connectionerror",
+        "connection error",
+        "readtimeout",
+        "read timed out",
+    )
+    parts: list[str] = []
+    current: BaseException | None = exc
+    seen: set[int] = set()
+    while current is not None and id(current) not in seen:
+        seen.add(id(current))
+        parts.append(current.__class__.__name__)
+        parts.append(str(current))
+        current = current.__cause__ or current.__context__
+    normalized = " ".join(parts).lower()
+    return any(marker in normalized for marker in markers)
+
+
+def _call_dashscope_with_retry(
+    call: Callable[[], Any],
+    *,
+    model_name: str,
+    video_input: str,
+) -> Any:
+    for attempt in range(len(_DASHSCOPE_RETRY_DELAYS_SECONDS) + 1):
+        try:
+            return call()
+        except Exception as exc:
+            if (
+                not _is_retryable_dashscope_error(exc)
+                or attempt >= len(_DASHSCOPE_RETRY_DELAYS_SECONDS)
+            ):
+                raise
+            delay = _DASHSCOPE_RETRY_DELAYS_SECONDS[attempt]
+            logger.warning(
+                "⚠️ DashScope 视频分析网络异常，将在 %.0fs 后重试 "
+                "(retry=%d/%d, model=%s, video_input=%s): %s",
+                delay,
+                attempt + 1,
+                len(_DASHSCOPE_RETRY_DELAYS_SECONDS),
+                model_name,
+                video_input,
+                _format_api_error(exc),
+            )
+            time.sleep(delay)
+    raise RuntimeError("DashScope retry loop exited unexpectedly.")
 
 
 def _get_fatal_analysis_error() -> str:
@@ -312,123 +365,159 @@ def analyze_video(
             dashscope.api_key = _shared.VIDEO_API_KEY
             dashscope.base_http_api_url = _normalize_dashscope_api_url(_shared.VIDEO_BASE_URL)
 
-            for vitem in video_inputs:
-                vdisplay = vitem["display"]
-                started_at = time.perf_counter()
-                try:
-                    ensure_model_calls_allowed()
-                    emit_benchmark_event(
-                        "model_call_started",
-                        {
-                            "stage": "video_analysis",
-                            "model": _shared.VIDEO_MODEL_NAME,
-                            "source": resolved_video.name,
-                        },
-                    )
-                    response = dashscope.MultiModalConversation.call(
-                        model=_shared.VIDEO_MODEL_NAME,
-                        messages=[
-                            {
-                                "role": "user",
-                                "content": [
-                                    {"video": vitem["value"]},
-                                    {"text": analysis_prompt},
-                                ],
-                            }
-                        ],
-                    )
-                    status_code = getattr(response, "status_code", None)
-                    if status_code == 200:
-                        analysis = _extract_dashscope_content(response)
-                        if analysis:
-                            mode_tag = "DashScope音视频" if is_omni else "DashScope视觉"
-                            logger.info("视频分析完成（%s）: %s", mode_tag, analysis[:100])
-                            analysis_json_path = _save_analysis_json(
-                                source_video=resolved_video,
-                                analysis_video=analysis_video,
-                                analysis_goal=analysis_goal,
-                                analysis_text=analysis,
-                                video_url_used=vdisplay,
-                                audio_url_used="",
-                            )
-                            _store_cached_analysis(
-                                resolved_video,
-                                analysis_goal,
-                                _shared.VIDEO_MODEL_NAME,
-                                analysis_json_path,
-                            )
-                            emit_benchmark_event(
-                                "model_call_completed",
-                                {
-                                    "stage": "video_analysis",
-                                    "model": _shared.VIDEO_MODEL_NAME,
-                                    "source": resolved_video.name,
-                                    "duration_seconds": round(time.perf_counter() - started_at, 3),
-                                },
-                            )
-                            return (
-                                f"视频分析完成（{mode_tag}）:\n\n"
-                                f"- media_mode: dashscope_file_url\n"
-                                f"- video_input: {vdisplay}\n"
-                                f"- audio_input: N/A\n\n"
-                                f"- analysis_json: {str(analysis_json_path) if analysis_json_path else 'N/A'}\n\n"
-                                f"{analysis}"
-                            )
+            model_candidates = [_shared.VIDEO_MODEL_NAME]
+            if _shared.VIDEO_MODEL_NAME.endswith("-latest"):
+                model_candidates.append(_shared.VIDEO_MODEL_NAME[:-7])
 
-                    message = str(getattr(response, "message", "") or "").strip()
-                    req_id = str(getattr(response, "request_id", "") or "").strip()
-                    last_error = f"status={status_code}; request_id={req_id}; message={message}".strip("; ")
-                    logger.warning(
-                        "⚠️ DashScope 视频分析调用失败: video_input=%s, error=%s",
-                        vdisplay,
-                        last_error,
-                    )
-                    if fail_fast_model_errors():
-                        raise_model_failure(
-                            stage="video_analysis",
-                            model=_shared.VIDEO_MODEL_NAME,
-                            message=message or "DashScope returned a non-success status.",
-                            status_code=status_code,
-                            request_id=req_id,
-                            duration_seconds=time.perf_counter() - started_at,
+            for model_index, model_name in enumerate(model_candidates):
+                has_model_fallback = model_index + 1 < len(model_candidates)
+                for vitem in video_inputs:
+                    vdisplay = vitem["display"]
+                    started_at = time.perf_counter()
+                    try:
+                        ensure_model_calls_allowed()
+                        emit_benchmark_event(
+                            "model_call_started",
+                            {
+                                "stage": "video_analysis",
+                                "model": model_name,
+                                "source": resolved_video.name,
+                            },
                         )
-                    if _is_fatal_access_error(status_code, message):
-                        _set_fatal_analysis_error(last_error)
-                        return (
-                            "视频分析出错: DashScope 拒绝访问多模态模型。"
-                            f"请检查视频模型权限或 API Key: {last_error}"
+                        response = _call_dashscope_with_retry(
+                            lambda: dashscope.MultiModalConversation.call(
+                                model=model_name,
+                                messages=[
+                                    {
+                                        "role": "user",
+                                        "content": [
+                                            {"video": vitem["value"]},
+                                            {"text": analysis_prompt},
+                                        ],
+                                    }
+                                ],
+                            ),
+                            model_name=model_name,
+                            video_input=vdisplay,
                         )
-                    if _is_fatal_media_input_error(status_code, message):
-                        _set_fatal_analysis_error(last_error)
-                        return (
-                            "视频分析出错: 当前视频模型或媒体输入格式不受支持，"
-                            "已停止后续重复调用。请检查 CRAYOTTER_VIDEO_MODEL_NAME。"
+                        status_code = getattr(response, "status_code", None)
+                        if status_code == 200:
+                            analysis = _extract_dashscope_content(response)
+                            if analysis:
+                                mode_tag = "DashScope音视频" if is_omni else "DashScope视觉"
+                                logger.info(
+                                    "视频分析完成（%s，model=%s）: %s",
+                                    mode_tag,
+                                    model_name,
+                                    analysis[:100],
+                                )
+                                analysis_json_path = _save_analysis_json(
+                                    source_video=resolved_video,
+                                    analysis_video=analysis_video,
+                                    analysis_goal=analysis_goal,
+                                    analysis_text=analysis,
+                                    video_url_used=vdisplay,
+                                    audio_url_used="",
+                                )
+                                _store_cached_analysis(
+                                    resolved_video,
+                                    analysis_goal,
+                                    model_name,
+                                    analysis_json_path,
+                                )
+                                emit_benchmark_event(
+                                    "model_call_completed",
+                                    {
+                                        "stage": "video_analysis",
+                                        "model": model_name,
+                                        "source": resolved_video.name,
+                                        "duration_seconds": round(time.perf_counter() - started_at, 3),
+                                    },
+                                )
+                                return (
+                                    f"视频分析完成（{mode_tag}）:\n\n"
+                                    f"- model: {model_name}\n"
+                                    f"- media_mode: dashscope_file_url\n"
+                                    f"- video_input: {vdisplay}\n"
+                                    f"- audio_input: N/A\n\n"
+                                    f"- analysis_json: {str(analysis_json_path) if analysis_json_path else 'N/A'}\n\n"
+                                    f"{analysis}"
+                                )
+
+                        message = str(getattr(response, "message", "") or "").strip()
+                        req_id = str(getattr(response, "request_id", "") or "").strip()
+                        last_error = (
+                            f"model={model_name}; status={status_code}; "
+                            f"request_id={req_id}; message={message}"
+                        ).strip("; ")
+                        logger.warning(
+                            "⚠️ DashScope 视频分析调用失败: video_input=%s, error=%s",
+                            vdisplay,
+                            last_error,
                         )
-                except ModelCallError:
-                    raise
-                except Exception as e:
-                    last_error = _format_api_error(e)
-                    logger.warning(
-                        "⚠️ DashScope 视频分析调用异常: video_input=%s, error=%s",
-                        vdisplay,
-                        last_error,
-                    )
-                    if fail_fast_model_errors():
-                        response_obj = getattr(e, "response", None)
-                        raise_model_failure(
-                            stage="video_analysis",
-                            model=_shared.VIDEO_MODEL_NAME,
-                            message=last_error,
-                            status_code=getattr(response_obj, "status_code", None),
-                            duration_seconds=time.perf_counter() - started_at,
+                        if fail_fast_model_errors():
+                            raise_model_failure(
+                                stage="video_analysis",
+                                model=model_name,
+                                message=message or "DashScope returned a non-success status.",
+                                status_code=status_code,
+                                request_id=req_id,
+                                duration_seconds=time.perf_counter() - started_at,
+                            )
+                        if _is_fatal_access_error(status_code, message):
+                            if has_model_fallback:
+                                logger.warning(
+                                    "⚠️ 模型 %s 无访问权限，降级到 %s",
+                                    model_name,
+                                    model_candidates[model_index + 1],
+                                )
+                                break
+                            _set_fatal_analysis_error(last_error)
+                            return (
+                                "视频分析出错: DashScope 拒绝访问多模态模型。"
+                                f"请检查视频模型权限或 API Key: {last_error}"
+                            )
+                        if _is_fatal_media_input_error(status_code, message):
+                            _set_fatal_analysis_error(last_error)
+                            return (
+                                "视频分析出错: 当前视频模型或媒体输入格式不受支持，"
+                                "已停止后续重复调用。请检查 CRAYOTTER_VIDEO_MODEL_NAME。"
+                            )
+                    except ModelCallError:
+                        raise
+                    except Exception as e:
+                        last_error = _format_api_error(e)
+                        logger.warning(
+                            "⚠️ DashScope 视频分析调用异常: video_input=%s, error=%s",
+                            vdisplay,
+                            last_error,
                         )
-                    if _is_fatal_access_error(getattr(getattr(e, "response", None), "status_code", None), last_error):
-                        _set_fatal_analysis_error(last_error)
-                        return (
-                            "视频分析出错: DashScope 拒绝访问多模态模型。"
-                            f"请检查视频模型权限或 API Key: {last_error}"
-                        )
-                    continue
+                        if fail_fast_model_errors():
+                            response_obj = getattr(e, "response", None)
+                            raise_model_failure(
+                                stage="video_analysis",
+                                model=model_name,
+                                message=last_error,
+                                status_code=getattr(response_obj, "status_code", None),
+                                duration_seconds=time.perf_counter() - started_at,
+                            )
+                        if _is_fatal_access_error(
+                            getattr(getattr(e, "response", None), "status_code", None),
+                            last_error,
+                        ):
+                            if has_model_fallback:
+                                logger.warning(
+                                    "⚠️ 模型 %s 无访问权限，降级到 %s",
+                                    model_name,
+                                    model_candidates[model_index + 1],
+                                )
+                                break
+                            _set_fatal_analysis_error(last_error)
+                            return (
+                                "视频分析出错: DashScope 拒绝访问多模态模型。"
+                                f"请检查视频模型权限或 API Key: {last_error}"
+                            )
+                        continue
 
             return f"视频分析出错: DashScope 调用失败: {last_error or 'unknown error'}"
 

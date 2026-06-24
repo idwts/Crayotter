@@ -26,6 +26,7 @@ class SchedulerError(RuntimeError):
 
 TaskExecutor = Callable[[TaskSpec, dict[str, TaskState]], TaskExecutionResult | dict[str, Any]]
 EventSink = Callable[[str, dict[str, Any]], None]
+SafePointCallback = Callable[[dict[str, Any]], None]
 
 
 class ResourceScheduler:
@@ -47,6 +48,7 @@ class ResourceScheduler:
         artifact_registry: ArtifactRegistry,
         event_sink: EventSink | None = None,
         cancel_requested: Callable[[], bool] | None = None,
+        safe_point: SafePointCallback | None = None,
     ) -> None:
         self.pools = pools.as_dict()
         self.workspace = workspace.resolve(strict=False)
@@ -54,6 +56,7 @@ class ResourceScheduler:
         self.registry = artifact_registry
         self.event_sink = event_sink
         self.cancel_requested = cancel_requested or (lambda: False)
+        self.safe_point = safe_point
         self.state_dir = self.workspace / ".crayotter"
         self.state_dir.mkdir(parents=True, exist_ok=True)
         self._state_lock = threading.RLock()
@@ -66,6 +69,7 @@ class ResourceScheduler:
         executor: TaskExecutor,
         *,
         resume: bool = True,
+        allow_partial_failure: bool = False,
     ) -> dict[str, TaskState]:
         self.validate_plan(plan)
         plan_path = self.state_dir / f"{plan.plan_id}.plan.json"
@@ -103,7 +107,7 @@ class ResourceScheduler:
             {"plan_id": plan.plan_id, "phase": plan.phase, "task_count": len(plan.tasks)},
         )
         with ThreadPoolExecutor(max_workers=max_workers, thread_name_prefix=f"{plan.phase}-task") as pool:
-            while len(completed) < len(plan.tasks):
+            while len(completed) + len(failed) < len(plan.tasks):
                 if self.cancel_requested():
                     for future in running:
                         future.cancel()
@@ -173,14 +177,14 @@ class ResourceScheduler:
                     made_progress = True
 
                 if not running:
-                    if failed:
-                        details = "; ".join(
-                            f"{task_id}: {states[task_id].error}" for task_id in sorted(failed)
-                        )
-                        raise SchedulerError(f"Execution plan failed: {details}")
+                    self._run_safe_point(plan, completed, states)
+                    if len(completed) + len(failed) >= len(plan.tasks):
+                        break
                     if not made_progress:
                         pending = [
-                            task.id for task in plan.tasks if task.id not in completed
+                            task.id
+                            for task in plan.tasks
+                            if task.id not in completed and task.id not in failed
                         ]
                         raise SchedulerError(
                             f"No schedulable tasks remain in {plan.plan_id}: {pending}"
@@ -269,11 +273,52 @@ class ResourceScheduler:
                             )
                     self._checkpoint(state_path, states)
 
+                if not running:
+                    self._run_safe_point(plan, completed, states)
+
+        if failed and not allow_partial_failure:
+            details = "; ".join(
+                f"{task_id}: {states[task_id].error}" for task_id in sorted(failed)
+            )
+            raise SchedulerError(f"Execution plan failed: {details}")
+        if failed:
+            self._emit(
+                "task_plan_degraded",
+                {
+                    "plan_id": plan.plan_id,
+                    "phase": plan.phase,
+                    "completed_count": len(completed),
+                    "failed_count": len(failed),
+                    "failed_task_ids": sorted(failed),
+                },
+            )
         self._emit(
             "task_plan_completed",
             {"plan_id": plan.plan_id, "phase": plan.phase, "task_count": len(plan.tasks)},
         )
         return states
+
+    def _run_safe_point(
+        self,
+        plan: ExecutionPlan,
+        completed: set[str],
+        states: dict[str, TaskState],
+    ) -> None:
+        if self.safe_point is None:
+            return
+        pending = [
+            task.id
+            for task in plan.tasks
+            if task.id not in completed and states[task.id].status not in {"failed", "skipped"}
+        ]
+        self.safe_point(
+            {
+                "plan_id": plan.plan_id,
+                "phase": plan.phase,
+                "completed_task_ids": sorted(completed),
+                "pending_task_ids": pending,
+            }
+        )
 
     def validate_plan(self, plan: ExecutionPlan) -> None:
         task_ids = [task.id for task in plan.tasks]
@@ -450,7 +495,22 @@ class ResourceScheduler:
             json.dumps(payload, ensure_ascii=False, indent=2),
             encoding="utf-8",
         )
-        os.replace(temp_path, path)
+        last_error: OSError | None = None
+        for attempt in range(6):
+            try:
+                os.replace(temp_path, path)
+                return
+            except OSError as exc:
+                last_error = exc
+                if getattr(exc, "winerror", None) not in {5, 32, 33} and not isinstance(exc, PermissionError):
+                    raise
+                time.sleep(0.05 * (2 ** attempt))
+        try:
+            temp_path.unlink(missing_ok=True)
+        except OSError:
+            pass
+        if last_error is not None:
+            raise last_error
 
     def _emit(self, event_type: str, payload: dict[str, Any]) -> None:
         if self.event_sink is not None:

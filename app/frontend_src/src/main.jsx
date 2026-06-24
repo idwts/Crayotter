@@ -108,10 +108,13 @@ function App() {
   const [selectedJobId, setSelectedJobId] = useState(null);
   const [selectedJob, setSelectedJob] = useState(null);
   const [selectedEvents, setSelectedEvents] = useState([]);
+  const [selectedMessages, setSelectedMessages] = useState([]);
+  const [selectedPlan, setSelectedPlan] = useState(null);
   const [hasSavedConfig, setHasSavedConfig] = useState(false);
   const [healthText, setHealthText] = useState("");
   const [sidebarCollapsed, setSidebarCollapsed] = useState(() => localStorage.getItem(STORAGE_KEYS.sidebarCollapsed) === "1");
   const [enablePhase2Research, setEnablePhase2Research] = useState(true);
+  const [enablePlanReview, setEnablePlanReview] = useState(true);
   const [directPhase3Execution, setDirectPhase3Execution] = useState(false);
   const [preferLocalMaterials, setPreferLocalMaterials] = useState(false);
   const [workflowConfigSaving, setWorkflowConfigSaving] = useState(false);
@@ -144,6 +147,7 @@ function App() {
     ttsPoolSize: "2",
     exportPoolSize: "1",
     enablePhase2Research: true,
+    enablePlanReview: true,
     directPhase3Execution: false,
     preferLocalMaterials: false,
   });
@@ -315,12 +319,39 @@ function App() {
         return { title: toolLabel(payload.tool_name), body: t("eventToolCalledBody") };
       case "tool_result":
         return { title: toolLabel(payload.tool_name), body: safeDisplayText(payload.summary, t("eventToolResultBody")) };
+      case "editing_plan_created":
+        return { title: t("eventEditingPlanCreated"), body: t("eventEditingPlanCreatedBody", { version: payload.version || "" }) };
+      case "editing_plan_validated":
+        return { title: t("eventEditingPlanValidated"), body: t("eventEditingPlanValidatedBody", { version: payload.version || "" }) };
+      case "plan_review_waiting":
+        return { title: t("eventPlanReviewWaiting"), body: t("eventPlanReviewWaitingBody", { version: payload.version || "" }) };
+      case "plan_revised":
+        return { title: t("eventPlanRevised"), body: t("eventPlanRevisedBody", { version: payload.to_version || "" }) };
+      case "plan_approved":
+      case "editing_plan_frozen":
+        return { title: t("eventPlanApproved"), body: t("eventPlanApprovedBody", { version: payload.version || "" }) };
+      case "plan_validation_failed":
+        return { title: t("eventPlanValidationFailed"), body: t("eventPlanValidationFailedBody") };
       case "job_completed":
         return { title: t("eventCompleted"), body: safeDisplayText(payload.final_output, t("eventCompletedBody")) };
       case "job_failed":
         return { title: t("eventFailed"), body: t("eventFailedBody") };
       case "job_cancelled":
         return { title: t("eventCancelled"), body: t("eventCancelledBody") };
+      case "guidance_received":
+        return { title: t("eventGuidanceReceived"), body: safeDisplayText(payload.content, t("eventGuidanceReceivedBody")) };
+      case "guidance_applied":
+        return { title: t("eventGuidanceApplied"), body: `${payload.checkpoint || ""} · ${payload.category || ""}` };
+      case "guidance_unsupported":
+        return { title: t("eventGuidanceUnsupported"), body: safeDisplayText(payload.reason, t("eventGuidanceUnsupportedBody")) };
+      case "steering_replan_started":
+        return { title: t("eventReplanStarted"), body: `${payload.required_phase || ""} · ${payload.checkpoint || ""}` };
+      case "steering_waiting_user":
+        return { title: t("eventWaitingApproval"), body: payload.checkpoint || t("eventWaitingApprovalBody") };
+      case "revision_started":
+        return { title: t("eventRevisionStarted"), body: t("revisionLabel", { revision: payload.revision || 1 }) };
+      case "revision_completed":
+        return { title: t("eventRevisionCompleted"), body: t("revisionLabel", { revision: payload.revision || 1 }) };
       default:
         return {
           title: t("eventUpdate"),
@@ -345,6 +376,32 @@ function App() {
     setUploads(Array.isArray(payload.items) ? payload.items : []);
   }, []);
 
+  const loadMessages = useCallback(async (jobId) => {
+    if (!jobId) {
+      setSelectedMessages([]);
+      return [];
+    }
+    const payload = await request(`/jobs/${jobId}/messages`);
+    const items = Array.isArray(payload.items) ? payload.items : [];
+    setSelectedMessages(items);
+    return items;
+  }, []);
+
+  const loadCurrentPlan = useCallback(async (jobId) => {
+    if (!jobId) {
+      setSelectedPlan(null);
+      return null;
+    }
+    try {
+      const payload = await request(`/jobs/${jobId}/plans/current`);
+      setSelectedPlan(payload);
+      return payload;
+    } catch (_) {
+      setSelectedPlan(null);
+      return null;
+    }
+  }, []);
+
   const applyConfig = useCallback((config) => {
     const profile = config.profiles?.[config.active_profile] || config.profiles?.default || {};
     setConfigForm({
@@ -366,10 +423,12 @@ function App() {
       ttsPoolSize: String(config.tts_pool_size || 2),
       exportPoolSize: String(config.export_pool_size || 1),
       enablePhase2Research: config.enable_phase2_research !== false,
+      enablePlanReview: config.enable_plan_review !== false,
       directPhase3Execution: config.direct_phase3_execution === true,
       preferLocalMaterials: config.prefer_local_materials === true,
     });
     setEnablePhase2Research(config.enable_phase2_research !== false);
+    setEnablePlanReview(config.enable_plan_review !== false);
     setDirectPhase3Execution(config.direct_phase3_execution === true);
     setPreferLocalMaterials(config.prefer_local_materials === true);
     setHasSavedConfig(Boolean(profile.api_key));
@@ -398,11 +457,14 @@ function App() {
           ? { ...current, ...job, artifacts: current.artifacts || [] }
           : job);
         if (selectRunning || selectedJobId !== targetId) {
-          const [detail, eventsPayload] = await Promise.all([
+          const [detail, eventsPayload, messagesPayload] = await Promise.all([
             request(`/jobs/${targetId}`),
             request(`/jobs/${targetId}/events`),
+            request(`/jobs/${targetId}/messages`),
           ]);
           setSelectedJob(detail);
+          setSelectedMessages(Array.isArray(messagesPayload.items) ? messagesPayload.items : []);
+          loadCurrentPlan(targetId).catch(() => {});
           const fetchedEvents = Array.isArray(eventsPayload.items) ? eventsPayload.items : [];
           setSelectedEvents((current) => selectedJobId === targetId
             ? mergeRuntimeEvents(current, fetchedEvents)
@@ -413,8 +475,10 @@ function App() {
       setSelectedJobId(null);
       setSelectedJob(null);
       setSelectedEvents([]);
+      setSelectedMessages([]);
+      setSelectedPlan(null);
     }
-  }, [selectedJobId]);
+  }, [loadCurrentPlan, selectedJobId]);
 
   const attachEventStream = useCallback((job, existingEvents = []) => {
     closeEventStream();
@@ -425,6 +489,19 @@ function App() {
     source.onmessage = (message) => {
       const event = normalizeRuntimeEvent(JSON.parse(message.data));
       setSelectedEvents((current) => mergeRuntimeEvents(current, [event]));
+      if (["guidance_received", "guidance_applied", "revision_started"].includes(event.type)) {
+        loadMessages(job.job_id).catch(() => {});
+      }
+      if (["editing_plan_created", "editing_plan_validated", "plan_review_waiting", "plan_revised", "plan_approved", "editing_plan_frozen", "plan_validation_failed"].includes(event.type)) {
+        loadCurrentPlan(job.job_id).catch(() => {});
+      }
+      if (["artifact_registered", "artifact_created"].includes(event.type)) {
+        request(`/jobs/${job.job_id}`)
+          .then((detail) => {
+            setSelectedJob((current) => current?.job_id === job.job_id ? detail : current);
+          })
+          .catch(() => {});
+      }
       if (["job_completed", "job_failed", "job_cancelled"].includes(event.type)) {
         refreshJobs(true).catch(() => {});
       }
@@ -436,17 +513,20 @@ function App() {
     source.onerror = () => {
       closeEventStream();
     };
-  }, [closeEventStream, refreshJobs]);
+  }, [closeEventStream, loadCurrentPlan, loadMessages, refreshJobs]);
 
   const selectJob = useCallback(async (jobId) => {
     const job = jobs.find((item) => item.job_id === jobId);
     if (!job) return;
     setSelectedJobId(jobId);
-    const [detail, eventsPayload] = await Promise.all([
+    const [detail, eventsPayload, messagesPayload] = await Promise.all([
       request(`/jobs/${jobId}`),
       request(`/jobs/${jobId}/events`),
+      request(`/jobs/${jobId}/messages`),
     ]);
     setSelectedJob(detail);
+    setSelectedMessages(Array.isArray(messagesPayload.items) ? messagesPayload.items : []);
+    loadCurrentPlan(jobId).catch(() => {});
     const fetchedEvents = mergeRuntimeEvents(
       Array.isArray(eventsPayload.items) ? eventsPayload.items : [],
     );
@@ -581,6 +661,7 @@ function App() {
         },
       },
       enable_phase2_research: configForm.enablePhase2Research,
+      enable_plan_review: configForm.enablePlanReview,
       direct_phase3_execution: configForm.directPhase3Execution,
       prefer_local_materials: configForm.preferLocalMaterials,
       agent_stall_timeout_seconds: stallTimeout,
@@ -663,7 +744,7 @@ function App() {
 
   const deleteJob = async (jobId) => {
     const job = jobs.find((item) => item.job_id === jobId) || (selectedJob?.job_id === jobId ? selectedJob : null);
-    if (job?.status === "running") {
+    if (["queued", "running"].includes(job?.status)) {
       notify("info", t("runningJobDeleteBlocked"));
       return false;
     }
@@ -679,6 +760,8 @@ function App() {
           setSelectedJobId(null);
           setSelectedJob(null);
           setSelectedEvents([]);
+          setSelectedMessages([]);
+          setSelectedPlan(null);
           closeEventStream();
         }
         await refreshJobs(false);
@@ -695,11 +778,13 @@ function App() {
       notify("info", t("apiRequired"));
       return;
     }
+    const effectiveDirectPhase3 = directPhase3Execution;
     const payload = {
       task,
       mode,
-      enable_phase2_research: enablePhase2Research,
-      direct_phase3_execution: directPhase3Execution,
+      enable_phase2_research: effectiveDirectPhase3 ? false : enablePhase2Research,
+      enable_plan_review: enablePlanReview,
+      direct_phase3_execution: effectiveDirectPhase3,
       prefer_local_materials: preferLocalMaterials,
     };
     const job = await request("/jobs", { method: "POST", body: JSON.stringify(payload) });
@@ -707,6 +792,8 @@ function App() {
     setSelectedJobId(job.job_id);
     setSelectedJob(job);
     setSelectedEvents([]);
+    setSelectedMessages([]);
+    setSelectedPlan(null);
     await refreshJobs(true);
   };
 
@@ -725,6 +812,58 @@ function App() {
     });
     setSelectedJob(job);
     await refreshJobs(true);
+  };
+
+  const sendGuidance = async (content) => {
+    if (!selectedJob) return;
+    const message = await request(`/jobs/${selectedJob.job_id}/messages`, {
+      method: "POST",
+      body: JSON.stringify({ content }),
+    });
+    setSelectedMessages((current) => {
+      if (current.some((item) => item.message_id === message.message_id)) {
+        return current;
+      }
+      return [...current, message];
+    });
+    setSelectedJob((job) => job?.job_id === selectedJob.job_id
+      ? { ...job, steering_status: "pending" }
+      : job);
+    loadMessages(selectedJob.job_id).catch(() => {});
+    refreshJobs(false).catch(() => {});
+  };
+
+  const sendPlanFeedback = async (version, feedback) => {
+    if (!selectedJob || !version) return;
+    const payload = await request(`/jobs/${selectedJob.job_id}/plans/${version}/feedback`, {
+      method: "POST",
+      body: JSON.stringify({ feedback }),
+    });
+    setSelectedPlan((current) => ({ ...(current || {}), ...payload }));
+    await loadCurrentPlan(selectedJob.job_id);
+    notify("success", t("planFeedbackApplied"));
+  };
+
+  const approvePlan = async (version) => {
+    if (!selectedJob || !version) return;
+    await request(`/jobs/${selectedJob.job_id}/plans/${version}/approve`, {
+      method: "POST",
+      body: JSON.stringify({}),
+    });
+    await loadCurrentPlan(selectedJob.job_id);
+    await refreshJobs(false);
+    notify("success", t("planApproved"));
+  };
+
+  const rejectPlan = async (version) => {
+    if (!selectedJob || !version) return;
+    await request(`/jobs/${selectedJob.job_id}/plans/${version}/reject`, {
+      method: "POST",
+      body: JSON.stringify({}),
+    });
+    await loadCurrentPlan(selectedJob.job_id);
+    await refreshJobs(false);
+    notify("success", t("planRejected"));
   };
 
   const selectedMeaningfulEvents = getMeaningfulEvents(selectedEvents);
@@ -755,19 +894,7 @@ function App() {
         : ["pending", "queued"].includes(selectedJob?.status)
           ? t("notStarted")
           : phaseLabel(currentPhaseCode);
-  const recentProgressEvents = selectedMeaningfulEvents
-    .filter((event) => ["thinking_summary", "step_completed", "tool_result", "artifact_registered", "evaluator_decision", "job_completed", "job_failed"].includes(event.type))
-    .slice(-5);
-  const phaseMilestones = ["phase1", "phase2", "phase3"]
-    .map((phase) => [...selectedMeaningfulEvents].reverse().find(
-      (event) => event.type === "phase_started" && event.payload?.phase === phase,
-    ))
-    .filter(Boolean);
-  const progressCards = mergeRuntimeEvents(phaseMilestones, recentProgressEvents)
-    .slice(-8)
-    .map((event) => ({ event, item: describeEvent(event) }));
   const primaryArtifacts = (selectedJob?.artifacts || []).filter(isPrimaryArtifact);
-
   const composerProps = {
     taskText,
     setTaskText,
@@ -776,10 +903,14 @@ function App() {
     selectedJob,
     submitJob,
     stopSelectedJob,
+    messages: selectedMessages,
+    sendGuidance,
     enablePhase2Research,
+    enablePlanReview,
     directPhase3Execution,
     preferLocalMaterials,
     setEnablePhase2Research,
+    setEnablePlanReview,
     setDirectPhase3Execution,
     setPreferLocalMaterials,
     syncWorkflowConfig,
@@ -844,9 +975,7 @@ function App() {
               summary={summary}
               currentPhase={currentPhase}
               currentPhaseCode={currentPhaseCode}
-              progressCards={progressCards}
               primaryArtifacts={primaryArtifacts}
-              uploads={uploads}
               activeTab={activeContextTab}
               setActiveTab={setActiveContextTab}
               displayTaskTitle={displayTaskTitle}
@@ -858,12 +987,10 @@ function App() {
               fileUrl={fileUrl}
               downloadFileUrl={downloadFileUrl}
               formatDuration={formatDuration}
-              uploadAnalysisBadgeLabel={uploadAnalysisBadgeLabel}
-              uploadAnalysisHint={uploadAnalysisHint}
-              formatBytes={formatBytes}
-              setTaskText={setTaskText}
-              deleteUpload={deleteUpload}
-              loadUploads={loadUploads}
+              planInfo={selectedPlan}
+              sendPlanFeedback={sendPlanFeedback}
+              approvePlan={approvePlan}
+              rejectPlan={rejectPlan}
               composerProps={composerProps}
               copyFullLog={copyFullLog}
               downloadFullLog={downloadFullLog}

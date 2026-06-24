@@ -4,6 +4,7 @@ import hashlib
 import json
 import os
 import threading
+import time
 import uuid
 from pathlib import Path
 from typing import Any
@@ -12,14 +13,18 @@ from .models import ArtifactRef, utc_now_iso
 
 
 class ArtifactRegistry:
+    _locks_guard = threading.RLock()
+    _manifest_locks: dict[str, threading.RLock] = {}
+
     def __init__(self, workspace: Path, manifest_path: Path | None = None) -> None:
         self.workspace = workspace.resolve(strict=False)
         self.workspace.mkdir(parents=True, exist_ok=True)
         self.manifest_path = manifest_path or (self.workspace / ".crayotter" / "artifact_manifest.json")
         self.manifest_path.parent.mkdir(parents=True, exist_ok=True)
-        self._lock = threading.RLock()
+        self._lock = self._lock_for_manifest(self.manifest_path)
         self._artifacts: dict[str, ArtifactRef] = {}
-        self._load()
+        with self._lock:
+            self._load()
 
     def register(
         self,
@@ -55,6 +60,7 @@ class ArtifactRegistry:
             valid=not resolved_path or Path(resolved_path).is_file(),
         )
         with self._lock:
+            self._load(merge=True)
             self._artifacts[artifact.id] = artifact
             self._save()
         return artifact
@@ -105,17 +111,30 @@ class ArtifactRegistry:
                 "artifacts": [item.model_dump() for item in self._artifacts.values()],
             }
 
-    def _load(self) -> None:
+    @classmethod
+    def _lock_for_manifest(cls, manifest_path: Path) -> threading.RLock:
+        key = str(manifest_path.resolve(strict=False)).lower()
+        with cls._locks_guard:
+            lock = cls._manifest_locks.get(key)
+            if lock is None:
+                lock = threading.RLock()
+                cls._manifest_locks[key] = lock
+            return lock
+
+    def _load(self, *, merge: bool = False) -> None:
         if not self.manifest_path.exists():
             return
         try:
             payload = json.loads(self.manifest_path.read_text(encoding="utf-8"))
+            if not merge:
+                self._artifacts = {}
             for raw in payload.get("artifacts", []):
                 artifact = ArtifactRef.model_validate(raw)
                 self._artifacts[artifact.id] = artifact
             self.validate()
         except Exception:
-            self._artifacts = {}
+            if not merge:
+                self._artifacts = {}
 
     def _save(self) -> None:
         payload = {
@@ -131,7 +150,26 @@ class ArtifactRegistry:
             json.dumps(payload, ensure_ascii=False, indent=2),
             encoding="utf-8",
         )
-        os.replace(temp_path, self.manifest_path)
+        self._replace_with_retry(temp_path, self.manifest_path)
+
+    @staticmethod
+    def _replace_with_retry(temp_path: Path, target_path: Path) -> None:
+        last_error: OSError | None = None
+        for attempt in range(6):
+            try:
+                os.replace(temp_path, target_path)
+                return
+            except OSError as exc:
+                last_error = exc
+                if getattr(exc, "winerror", None) not in {5, 32, 33} and not isinstance(exc, PermissionError):
+                    raise
+                time.sleep(0.05 * (2 ** attempt))
+        try:
+            temp_path.unlink(missing_ok=True)
+        except OSError:
+            pass
+        if last_error is not None:
+            raise last_error
 
     def _assert_allowed_path(self, path: Path) -> None:
         allowed = [self.workspace]

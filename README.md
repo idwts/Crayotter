@@ -36,6 +36,7 @@ It combines **planning**, **deep editing research**, and **tool-based execution*
 
 ## NEWS
 
+- 2026.6.15: The asynchronous scheduling upgrade accelerated the overall video generation workflow by approximately 1.6x.
 - 2026.5.31: Our paper is now available: [Crayotter: Traceable Multi-Agent Workflows for Long-Form Video Editing](https://arxiv.org/abs/2606.07636).
 - 2026.5.23: 100 Stars achieved!
 - 2026.5.11: The paper page is now live at [Crayotter Paper Page](https://idwts.github.io/Crayotter/paper/).
@@ -154,6 +155,7 @@ CRAYOTTER_VIDEO_MODEL_NAME=qwen-vl-max-latest
 CRAYOTTER_TTS_MODEL_NAME=qwen-tts-latest
 
 CRAYOTTER_ENABLE_PHASE2_RESEARCH=true
+CRAYOTTER_ENABLE_PLAN_REVIEW=true
 CRAYOTTER_DIRECT_PHASE3_EXECUTION=false
 CRAYOTTER_PREFER_LOCAL_MATERIALS=false
 CRAYOTTER_SEARCH_POOL_SIZE=4
@@ -169,6 +171,7 @@ CRAYOTTER_AGENT_STALL_TIMEOUT_SECONDS=150
 Notes:
 
 - `CRAYOTTER_DIRECT_PHASE3_EXECUTION=true` skips material search/download and goes straight into the existing-material analysis + Phase 3 execution path.
+- `CRAYOTTER_ENABLE_PLAN_REVIEW=true` generates a visual EditingPlan before editing and waits for user approval or natural-language revisions before Phase 3.
 - `CRAYOTTER_PREFER_LOCAL_MATERIALS=true` analyzes local materials first and only searches online when the current materials are not enough.
 - Resource-pool variables bound search, download, video analysis, LLM, FFmpeg, TTS, and final export work.
 - `CRAYOTTER_AGENT_STALL_TIMEOUT_SECONDS` controls the “no new progress” watchdog threshold for running jobs.

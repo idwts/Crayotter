@@ -17,6 +17,14 @@ from .models import AppConfig, JobRecord, JobRequest, RuntimeEvent, TERMINAL_JOB
 from .task_titles import summarize_task_title
 from app.media_metadata import video_duration_seconds
 from app.runtime_paths import configure_runtime_environment, get_bundle_root, get_runtime_root, is_frozen
+from app.steering import SteeringCoordinator, SteeringStore, classify_guidance
+from script.editing_plan import (
+    EditingPlanStore,
+    PlanPatch,
+    apply_plan_patch,
+    heuristic_patch_from_feedback,
+    validate_editing_plan,
+)
 
 
 class ManagedJob:
@@ -29,6 +37,8 @@ class ManagedJob:
         self.process: subprocess.Popen[str] | None = None
         self.events_path = job_dir / "events.jsonl"
         self.summary_path = job_dir / "summary.json"
+        self.steering_dir = job_dir / "steering"
+        self.steering_store = SteeringStore(self.steering_dir)
         self.lock = threading.RLock()
         self.last_activity_monotonic = time.monotonic()
         self.stall_timeout_seconds = max(10, int(stall_timeout_seconds))
@@ -78,6 +88,129 @@ class RuntimeManager:
             raise KeyError(job_id)
         return self._collect_artifacts(job)
 
+    def get_current_plan(self, job_id: str) -> dict[str, Any]:
+        job = self.get_job(job_id)
+        if job is None:
+            raise KeyError(job_id)
+        plan = self._plan_store(job).current()
+        if plan is None:
+            raise KeyError(f"{job_id}/plans/current")
+        return {
+            "plan": plan.model_dump(),
+            "versions": self._plan_store(job).list_versions(),
+            "approved": self._plan_store(job).approved().model_dump()
+            if self._plan_store(job).approved() is not None
+            else None,
+        }
+
+    def get_plan(self, job_id: str, version: str) -> dict[str, Any]:
+        job = self.get_job(job_id)
+        if job is None:
+            raise KeyError(job_id)
+        plan = self._plan_store(job).get_plan(version)
+        if plan is None:
+            raise KeyError(f"{job_id}/plans/{version}")
+        return {"plan": plan.model_dump()}
+
+    def get_plan_diff(self, job_id: str, from_version: str, to_version: str) -> dict[str, Any]:
+        job = self.get_job(job_id)
+        if job is None:
+            raise KeyError(job_id)
+        return {"diff": self._plan_store(job).diff(from_version, to_version).model_dump()}
+
+    def apply_plan_feedback(self, job_id: str, version: str, feedback: str) -> dict[str, Any]:
+        job = self.get_job(job_id)
+        if job is None:
+            raise KeyError(job_id)
+        text = str(feedback or "").strip()
+        if not text:
+            raise ValueError("Plan feedback cannot be empty.")
+        store = self._plan_store(job)
+        base = store.get_plan(version)
+        if base is None:
+            raise KeyError(f"{job_id}/plans/{version}")
+
+        patch = self._generate_plan_patch(job, base.model_dump(), text)
+        if patch.base_version != base.version:
+            patch.base_version = base.version
+        updated, plan_diff = apply_plan_patch(base, patch)
+        report = validate_editing_plan(updated, allowed_source_paths=updated.source_video_paths)
+        if not report.ok:
+            self._publish(
+                job,
+                "plan_validation_failed",
+                {
+                    "version": updated.version,
+                    "base_version": base.version,
+                    "issues": [item.model_dump() for item in report.issues],
+                },
+            )
+            raise ValueError(
+                "Plan feedback produced an invalid plan: "
+                + "; ".join(item.message for item in report.issues if item.severity == "error")
+            )
+        updated.status = "WAITING_FOR_USER_REVIEW"
+        store.save_plan(updated)
+        patch_path = store.root / f"plan_patch_{base.version}_to_{updated.version}.json"
+        patch_path.write_text(
+            json.dumps(patch.model_dump(), ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+        diff_path = store.root / f"plan_diff_{base.version}_to_{updated.version}.json"
+        diff_path.write_text(
+            json.dumps(plan_diff.model_dump(), ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+        self._publish(
+            job,
+            "plan_revised",
+            {
+                "from_version": base.version,
+                "to_version": updated.version,
+                "summary": patch.summary,
+                "diff_summary": plan_diff.summary,
+            },
+        )
+        return {
+            "plan": updated.model_dump(),
+            "patch": patch.model_dump(),
+            "diff": plan_diff.model_dump(),
+            "validation": report.model_dump(),
+        }
+
+    def approve_plan(self, job_id: str, version: str) -> dict[str, Any]:
+        job = self.get_job(job_id)
+        if job is None:
+            raise KeyError(job_id)
+        store = self._plan_store(job)
+        plan = store.approve(version)
+        control = job.steering_store.read_control()
+        if control.get("status") == "requested" and control.get("mode") == "plan_review":
+            token = str(control.get("token") or "")
+            if token:
+                job.steering_store.approve(token)
+                self._publish(
+                    job,
+                    "steering_approval_received",
+                    {"pause_token": token, "revision": job.record.revision},
+                )
+        self._publish(
+            job,
+            "plan_approved",
+            {"version": plan.version, "path": str(store.approved_path)},
+        )
+        return {"plan": plan.model_dump(), "approved_path": str(store.approved_path)}
+
+    def reject_plan(self, job_id: str, version: str) -> dict[str, Any]:
+        job = self.get_job(job_id)
+        if job is None:
+            raise KeyError(job_id)
+        plan = self._plan_store(job).reject(version)
+        self._publish(job, "plan_rejected", {"version": plan.version})
+        if job.record.status == "running":
+            self.cancel_job(job_id)
+        return {"plan": plan.model_dump(), "status": job.record.status}
+
     def create_job(self, request: JobRequest) -> dict[str, Any]:
         config = self.config_store.load()
         if request.mode == "demo" and not config.allow_demo_jobs:
@@ -87,6 +220,11 @@ class RuntimeManager:
             config.enable_phase2_research
             if request.enable_phase2_research is None
             else request.enable_phase2_research
+        )
+        enable_plan_review = (
+            config.enable_plan_review
+            if request.enable_plan_review is None
+            else request.enable_plan_review
         )
         direct_phase3_execution = (
             config.direct_phase3_execution
@@ -120,6 +258,7 @@ class RuntimeManager:
                 title=summarize_task_title(request.task),
                 mode=request.mode,
                 enable_phase2_research=enable_phase2_research,
+                enable_plan_review=enable_plan_review,
                 direct_phase3_execution=direct_phase3_execution,
                 prefer_local_materials=prefer_local_materials,
                 profile=request.profile or config.active_profile,
@@ -193,6 +332,7 @@ class RuntimeManager:
                 mode=job.record.mode,
                 profile=job.record.profile,
                 enable_phase2_research=job.record.enable_phase2_research,
+                enable_plan_review=job.record.enable_plan_review,
                 direct_phase3_execution=job.record.direct_phase3_execution,
                 prefer_local_materials=job.record.prefer_local_materials,
             )
@@ -218,8 +358,8 @@ class RuntimeManager:
             job = self._jobs.get(job_id)
             if job is None:
                 raise KeyError(job_id)
-            if job.record.status == "running":
-                raise RuntimeError("Running jobs cannot be deleted. Stop the job first.")
+            if job.record.status in {"queued", "running"}:
+                raise RuntimeError("Queued or running jobs cannot be deleted. Stop the job first.")
             self._jobs.pop(job_id, None)
 
         shutil.rmtree(job.job_dir, ignore_errors=False)
@@ -230,6 +370,106 @@ class RuntimeManager:
         if job is None:
             raise KeyError(job_id)
         return job.bus.list_from(after_sequence=after_sequence)
+
+    def list_messages(self, job_id: str) -> list[dict[str, Any]]:
+        job = self.get_job(job_id)
+        if job is None:
+            raise KeyError(job_id)
+        return job.steering_store.list_messages()
+
+    def add_message(self, job_id: str, content: str) -> dict[str, Any]:
+        job = self.get_job(job_id)
+        if job is None:
+            raise KeyError(job_id)
+        if job.record.status in {"failed", "cancelled"}:
+            raise RuntimeError("Failed or cancelled jobs do not accept guidance.")
+
+        classification = classify_guidance(content)
+        restart_completed = job.record.status == "completed"
+        if restart_completed:
+            with self._lock:
+                running = [
+                    item.record.job_id
+                    for item in self._jobs.values()
+                    if item.record.status in {"queued", "running"}
+                ]
+                if running:
+                    raise RuntimeError(f"Another job is already running: {running[0]}.")
+                job.record.revision += 1
+                job.record.status = "queued"
+                job.record.completed_at = None
+                job.record.error = None
+                job.record.steering_status = "pending"
+                job.cancel_requested.clear()
+                self._write_summary(job)
+
+        message = job.steering_store.append_message(content, job.record.revision)
+        with job.lock:
+            if job.record.steering_status != "waiting_user":
+                job.record.steering_status = "pending"
+            self._write_summary(job)
+        self._publish(
+            job,
+            "guidance_received",
+            {
+                "message_id": message["message_id"],
+                "sequence": message["sequence"],
+                "content": message["content"],
+                "revision": job.record.revision,
+                **classification,
+            },
+        )
+
+        if restart_completed:
+            config = self.config_store.load()
+            request = JobRequest(
+                task=job.record.task,
+                mode=job.record.mode,
+                profile=job.record.profile,
+                enable_phase2_research=job.record.enable_phase2_research,
+                enable_plan_review=job.record.enable_plan_review,
+                direct_phase3_execution=job.record.direct_phase3_execution,
+                prefer_local_materials=job.record.prefer_local_materials,
+            )
+            self._publish(
+                job,
+                "revision_started",
+                {"revision": job.record.revision, "trigger_message_id": message["message_id"]},
+            )
+            worker = threading.Thread(
+                target=self._run_job,
+                args=(job, request, config, True),
+                name=f"job-revision-{job_id}-{job.record.revision}",
+                daemon=True,
+            )
+            job.thread = worker
+            worker.start()
+        return message
+
+    def pause_job(self, job_id: str, mode: str = "next_safe_point") -> dict[str, Any]:
+        job = self.get_job(job_id)
+        if job is None:
+            raise KeyError(job_id)
+        if job.record.status != "running":
+            raise RuntimeError("Only running jobs can be paused.")
+        control = job.steering_store.request_pause(mode)
+        with job.lock:
+            job.record.steering_status = "pending"
+            self._write_summary(job)
+        self._publish(job, "pause_requested", control)
+        return control
+
+    def approve_job(self, job_id: str, token: str) -> dict[str, Any]:
+        job = self.get_job(job_id)
+        if job is None:
+            raise KeyError(job_id)
+        control = job.steering_store.approve(token)
+        self._publish(
+            job,
+            "steering_approval_received",
+            {"pause_token": token, "revision": job.record.revision},
+        )
+        return control
 
     def wait_for_events(self, job_id: str, after_sequence: int = 0, timeout: float = 1.0) -> list[dict[str, Any]]:
         job = self.get_job(job_id)
@@ -254,6 +494,12 @@ class RuntimeManager:
             self._mark_failed(job, str(exc))
 
     def _run_demo_job(self, job: ManagedJob, request: JobRequest) -> None:
+        steering = SteeringCoordinator(
+            workspace=job.job_dir / "workspace",
+            steering_dir=job.steering_dir,
+            revision=job.record.revision,
+            event_sink=lambda event_type, payload: self._publish(job, event_type, payload),
+        )
         if job.record.direct_phase3_execution:
             phase_steps = [
                 ("phase1", "executor", "复用现有本地素材并补齐多模态分析", "analyze_video", "已完成本地素材分析，直接进入创作阶段"),
@@ -283,6 +529,7 @@ class RuntimeManager:
             if job.cancel_requested.is_set():
                 self._mark_cancelled(job)
                 return
+            steering.apply_pending(f"demo_step_{index}", phase_id)
             if phase_id not in seen_phases:
                 seen_phases.add(phase_id)
                 self._publish(job, "phase_started", {"phase": phase_id, "node": node_name})
@@ -317,7 +564,7 @@ class RuntimeManager:
 
         output_dir = job.job_dir / "output"
         output_dir.mkdir(parents=True, exist_ok=True)
-        artifact_path = output_dir / "demo_final_summary.txt"
+        artifact_path = output_dir / f"demo_final_summary_r{job.record.revision:03d}.txt"
         artifact_path.write_text(
             f"Demo job completed for task:\n{request.task}\n",
             encoding="utf-8",
@@ -326,7 +573,10 @@ class RuntimeManager:
         self._mark_completed(
             job,
             final_output="Demo job completed. Backend service, event bus, and job persistence are working.",
-            output_files=[str(artifact_path)],
+            output_files=[
+                *[path for path in job.record.output_files if path != str(artifact_path)],
+                str(artifact_path),
+            ],
         )
 
     def _run_agent_job(
@@ -350,6 +600,7 @@ class RuntimeManager:
         task_path = job.job_dir / "task.txt"
         runtime_config = profile.to_runtime_config()
         runtime_config["enable_phase2_research"] = job.record.enable_phase2_research
+        runtime_config["enable_plan_review"] = job.record.enable_plan_review
         runtime_config["direct_phase3_execution"] = job.record.direct_phase3_execution
         runtime_config["prefer_local_materials"] = job.record.prefer_local_materials
         runtime_config["search_pool_size"] = config.search_pool_size
@@ -363,8 +614,10 @@ class RuntimeManager:
         runtime_config["short_form_max_sources"] = config.short_form_max_sources
         runtime_config["video_analysis_proxy_max_seconds"] = config.video_analysis_proxy_max_seconds
         runtime_config["download_max_height"] = config.download_max_height
+        runtime_config["post_task_review_mode"] = config.post_task_review_mode
         runtime_config["agent_stall_timeout_seconds"] = job.stall_timeout_seconds
         runtime_config["resume_execution"] = resume
+        runtime_config["revision"] = job.record.revision
         config_path.write_text(
             json.dumps(runtime_config, ensure_ascii=False, indent=2),
             encoding="utf-8",
@@ -380,6 +633,8 @@ class RuntimeManager:
         child_env["CRAYOTTER_USER_WORKSPACE"] = str(runtime_root / "user_temp")
         child_env["CRAYOTTER_PERSIST_WORKSPACE"] = "true"
         child_env["CRAYOTTER_JOB_ID"] = job.record.job_id
+        child_env["CRAYOTTER_REVISION"] = str(job.record.revision)
+        child_env["CRAYOTTER_STEERING_DIR"] = str(job.steering_dir)
 
         if is_frozen():
             command = [
@@ -468,6 +723,12 @@ class RuntimeManager:
             elif message_kind == "result":
                 final_output = str(message.get("final_output", ""))
                 output_files = [str(path) for path in message.get("output_files", [])]
+                if job.record.status not in TERMINAL_JOB_STATUSES:
+                    self._mark_completed(
+                        job,
+                        final_output=final_output,
+                        output_files=output_files,
+                    )
             elif message_kind == "error":
                 worker_error = str(message.get("error", "Agent worker failed."))
 
@@ -482,7 +743,8 @@ class RuntimeManager:
             return
 
         if return_code == 0:
-            self._mark_completed(job, final_output=final_output, output_files=output_files)
+            if job.record.status not in TERMINAL_JOB_STATUSES:
+                self._mark_completed(job, final_output=final_output, output_files=output_files)
             return
 
         self._mark_failed(
@@ -556,6 +818,7 @@ class RuntimeManager:
             job.record.completed_at = utc_now_iso()
             job.record.final_output = final_output
             job.record.output_files = output_files
+            job.record.steering_status = "idle"
             self._write_summary(job)
         self._publish(
             job,
@@ -564,8 +827,10 @@ class RuntimeManager:
                 "completed_at": job.record.completed_at,
                 "final_output": final_output,
                 "output_files": output_files,
+                "revision": job.record.revision,
             },
         )
+        self._publish(job, "revision_completed", {"revision": job.record.revision})
 
     def _mark_failed(self, job: ManagedJob, error_message: str) -> None:
         with job.lock:
@@ -590,11 +855,114 @@ class RuntimeManager:
         raw_event = RuntimeEvent(job_id=job.record.job_id, type=event_type, payload=payload).model_dump()
         stored = job.bus.publish(raw_event)
         with job.lock:
+            if event_type in {"guidance_received", "guidance_deferred", "pause_requested"}:
+                if job.record.steering_status != "waiting_user":
+                    job.record.steering_status = "pending"
+            elif event_type in {"guidance_applying", "guidance_classified"}:
+                job.record.steering_status = "applying"
+            elif event_type == "steering_replan_started":
+                job.record.steering_status = "replanning"
+            elif event_type == "steering_waiting_user":
+                job.record.steering_status = "waiting_user"
+            elif event_type in {
+                "guidance_applied",
+                "guidance_unsupported",
+                "steering_approved",
+                "steering_replan_completed",
+            }:
+                job.record.steering_status = "idle"
+            if payload.get("checkpoint"):
+                job.record.current_checkpoint = str(payload["checkpoint"])
             job.record.events_count = stored["sequence"]
             job.last_activity_monotonic = time.monotonic()
             self._append_event(job.events_path, stored)
             self._write_summary(job)
         return stored
+
+    @staticmethod
+    def _plan_store(job: ManagedJob) -> EditingPlanStore:
+        return EditingPlanStore(job.job_dir / "workspace")
+
+    def _generate_plan_patch(
+        self,
+        job: ManagedJob,
+        plan_payload: dict[str, Any],
+        feedback: str,
+    ) -> PlanPatch:
+        plan_version = str(plan_payload.get("version") or "v001")
+        config_path = job.job_dir / "runtime_profile.json"
+        try:
+            runtime_config = json.loads(config_path.read_text(encoding="utf-8"))
+        except Exception:
+            runtime_config = {}
+        api_key = str(runtime_config.get("api_key") or "").strip()
+        base_url = str(runtime_config.get("base_url") or "").strip()
+        model_name = str(runtime_config.get("model_name") or "qwen-plus").strip() or "qwen-plus"
+        if not api_key:
+            current = self._plan_store(job).get_plan(plan_version)
+            if current is None:
+                raise ValueError("Current plan was not found.")
+            return heuristic_patch_from_feedback(current, feedback)
+
+        prompt = (
+            "你是剪辑计划编辑 Agent。只返回 JSON，不要 Markdown。"
+            "你必须把用户自然语言反馈转成 PlanPatch。"
+            "允许的 operation.op 只有 update_global、update_scene、delete_scene、add_scene、reorder_scenes。"
+            "update_global 的 field 只能是 target_duration_seconds、aspect_ratio、style、pacing、"
+            "narration_strategy、subtitle_strategy、bgm_strategy。"
+            "update_scene 的 field 只能是 start、end、narrative_purpose、source_path、source_start、"
+            "source_end、crop、transition、subtitle、narration、alternatives、locked。"
+            "替换素材只能使用原计划 source_video_paths 中存在的路径。"
+            "不要删除 locked=true 的分镜。输出结构："
+            '{"base_version":"","feedback":"","summary":"","operations":[{"op":"update_scene","scene_id":"","field":"","value":null}]}'
+        )
+        try:
+            from openai import OpenAI
+
+            client = OpenAI(api_key=api_key, base_url=base_url or None)
+            response = client.chat.completions.create(
+                model=model_name,
+                temperature=0.1,
+                max_tokens=2200,
+                messages=[
+                    {"role": "system", "content": prompt},
+                    {
+                        "role": "user",
+                        "content": json.dumps(
+                            {"plan": plan_payload, "feedback": feedback},
+                            ensure_ascii=False,
+                        )[:50000],
+                    },
+                ],
+            )
+            content = response.choices[0].message.content or ""
+            parsed = self._parse_json_object(content)
+            parsed["base_version"] = plan_version
+            parsed["feedback"] = feedback
+            return PlanPatch.model_validate(parsed)
+        except Exception as exc:
+            self._publish(
+                job,
+                "plan_patch_fallback",
+                {"version": plan_version, "reason": str(exc)[:300]},
+            )
+            current = self._plan_store(job).get_plan(plan_version)
+            if current is None:
+                raise ValueError("Current plan was not found.") from exc
+            return heuristic_patch_from_feedback(current, feedback)
+
+    @staticmethod
+    def _parse_json_object(content: str) -> dict[str, Any]:
+        text = str(content or "").strip()
+        if "```json" in text:
+            text = text.split("```json", 1)[1].split("```", 1)[0].strip()
+        elif "```" in text:
+            text = text.split("```", 1)[1].split("```", 1)[0].strip()
+        start = text.find("{")
+        end = text.rfind("}")
+        if start >= 0 and end > start:
+            text = text[start : end + 1]
+        return json.loads(text)
 
     @staticmethod
     def _append_event(path: Path, event: dict[str, Any]) -> None:
@@ -684,6 +1052,10 @@ class RuntimeManager:
             exists = resolved.exists() and resolved.is_file()
             if not exists:
                 if registry_item:
+                    metadata = dict(registry_item.get("metadata", {}))
+                    artifact_revision = int(metadata.get("revision", 1) or 1)
+                    metadata["revision"] = artifact_revision
+                    metadata["current"] = artifact_revision == job.record.revision
                     results.append(
                         {
                             "path": str(resolved),
@@ -697,7 +1069,9 @@ class RuntimeManager:
                             "producer_task_id": registry_item.get("producer_task_id", ""),
                             "phase": registry_item.get("phase", ""),
                             "valid": False,
-                            "metadata": registry_item.get("metadata", {}),
+                            "metadata": metadata,
+                            "revision": artifact_revision,
+                            "is_current": metadata["current"],
                         }
                     )
                 continue
@@ -709,6 +1083,10 @@ class RuntimeManager:
             suffix = resolved.suffix.lower()
             stat = resolved.stat()
             kind = str(registry_item.get("kind") or cls._artifact_kind(suffix))
+            metadata = dict(registry_item.get("metadata", {}))
+            artifact_revision = int(metadata.get("revision", 1) or 1)
+            metadata["revision"] = artifact_revision
+            metadata["current"] = artifact_revision == job.record.revision
             results.append(
                 {
                     "path": str(resolved),
@@ -726,7 +1104,9 @@ class RuntimeManager:
                     "producer_task_id": registry_item.get("producer_task_id", ""),
                     "phase": registry_item.get("phase", ""),
                     "valid": bool(registry_item.get("valid", True)),
-                    "metadata": registry_item.get("metadata", {}),
+                    "metadata": metadata,
+                    "revision": artifact_revision,
+                    "is_current": metadata["current"],
                 }
             )
         return sorted(results, key=lambda item: item["display_path"])
