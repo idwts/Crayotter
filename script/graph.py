@@ -21,11 +21,14 @@
 from __future__ import annotations
 
 import json
+import math
 import hashlib
 import logging
 import operator
 import os
 import re
+import shutil
+import subprocess
 import time
 import threading
 import uuid
@@ -42,6 +45,14 @@ from langgraph.types import Send
 from pydantic import BaseModel, Field
 
 from app.media_index import build_analysis_index, iter_analysis_files, iter_video_files, match_analysis_files
+from app.steering import SteeringCoordinator, classify_guidance
+from editing_plan import (
+    EditingPlan,
+    EditingPlanStore,
+    EditingScene,
+    normalize_plan_timeline,
+    validate_editing_plan,
+)
 from memory_reference import INJECTION_MEMORY_CHAR_LIMIT, load_memory_reference
 from tools import ALL_TOOLS, MEMORY_EXPERIENCE_DIR, USER_WORKSPACE, WORKSPACE
 from tools._shared import _tts_generate
@@ -73,6 +84,8 @@ API_KEY: str = os.environ.get("OPENAI_API_KEY", "")
 BASE_URL: str = "https://api.openai.com/v1"
 MODEL_NAME: str = "gpt-4o"
 ENABLE_PHASE2_RESEARCH: bool = True
+ENABLE_PLAN_REVIEW: bool = True
+REVISION: int = max(1, int(os.environ.get("CRAYOTTER_REVISION", "1") or 1))
 DIRECT_PHASE3_EXECUTION: bool = False
 PREFER_LOCAL_MATERIALS: bool = False
 SEARCH_POOL_SIZE: int = 4
@@ -87,15 +100,17 @@ SHORT_FORM_OPTIMIZATIONS: bool = str(
 ).strip().lower() not in {"0", "false", "no", "off"}
 SHORT_FORM_MAX_SOURCES: int = max(
     1,
-    int(os.environ.get("CRAYOTTER_SHORT_FORM_MAX_SOURCES", "4") or 4),
+    min(4, int(os.environ.get("CRAYOTTER_SHORT_FORM_MAX_SOURCES", "2") or 2)),
 )
 
 graph_logger = logging.getLogger("graph")
 RUNTIME_EVENT_SINK: Any = None
+_STEERING_COORDINATOR: SteeringCoordinator | None = None
 
 
 class _RealtimeToolTraceHandler(BaseCallbackHandler):
     def __init__(self) -> None:
+        self.raise_error = True
         self._started: dict[str, tuple[str, float]] = {}
         self._model_started: dict[str, float] = {}
         self._lock = threading.RLock()
@@ -187,6 +202,28 @@ class _RealtimeToolTraceHandler(BaseCallbackHandler):
                 "duration_seconds": round(duration, 3),
             },
         )
+        self._apply_guidance_after_tool(name)
+
+    @staticmethod
+    def _apply_guidance_after_tool(tool_name: str) -> None:
+        coordinator = _steering_coordinator()
+        if coordinator is None:
+            return
+        checkpoint = f"after_tool:{tool_name}"
+        result = coordinator.apply_pending(checkpoint, "phase3")
+        if not result.get("applied"):
+            return
+        required_phase = str(result.get("required_phase") or "phase3")
+        _emit_orchestration_event(
+            "steering_replan_started",
+            {
+                "checkpoint": checkpoint,
+                "required_phase": required_phase,
+                "categories": result.get("categories", []),
+                "revision": REVISION,
+            },
+        )
+        raise SteeringReplanRequested(required_phase)
 
     def on_tool_error(self, error: BaseException, *, run_id: Any, **kwargs: Any) -> None:
         key = str(run_id)
@@ -281,6 +318,11 @@ class AgentState(BaseModel):
 
     # 用户输入
     user_request: str = ""
+    base_user_request: str = ""
+    guidance_context: str = ""
+    steering_target_phase: str = ""
+    current_checkpoint: str = ""
+    revision: int = 1
 
     # Phase 1: 结构化规划
     plan: Plan | None = None
@@ -298,6 +340,8 @@ class AgentState(BaseModel):
 
     # Phase 2: 剪辑研究蓝图
     editing_blueprint: str = ""
+    editing_plan_version: str = ""
+    editing_plan_status: str = ""
     material_gap_report: dict[str, Any] = Field(default_factory=dict)
     gap_round: int = 0
     phase2_artifact_ids: list[str] = Field(default_factory=list)
@@ -378,17 +422,474 @@ def _emit_orchestration_event(event_type: str, payload: dict[str, Any]) -> None:
         RUNTIME_EVENT_SINK(event_type, payload)
 
 
+def _steering_coordinator() -> SteeringCoordinator | None:
+    global _STEERING_COORDINATOR
+    steering_dir = str(os.environ.get("CRAYOTTER_STEERING_DIR", "")).strip()
+    if not steering_dir:
+        return None
+    if _STEERING_COORDINATOR is None:
+        _STEERING_COORDINATOR = SteeringCoordinator(
+            workspace=WORKSPACE,
+            steering_dir=steering_dir,
+            revision=REVISION,
+            event_sink=_emit_orchestration_event,
+            classifier=_classify_guidance_with_llm,
+        )
+    return _STEERING_COORDINATOR
+
+
+def _classify_guidance_with_llm(content: str) -> dict[str, Any]:
+    fallback = classify_guidance(content)
+    if fallback.get("category") in {"pause", "unsupported"}:
+        return fallback
+    prompt = (
+        "你是视频编辑工作流指导分类器。只返回 JSON，字段为 "
+        "category、required_phase、impact、normalized_guidance。"
+        "category 只能是 material/style/narrative/narration/subtitle/general/global；"
+        "required_phase 只能是 phase1/phase2/phase3；"
+        "impact 只能是 local/phase。"
+        "需要新素材或主题完全改变归 phase1；叙事结构和整体风格归 phase2；"
+        "旁白、字幕和局部剪辑归 phase3。"
+    )
+    try:
+        response = _get_llm(temperature=0.0).bind(max_tokens=300).invoke(
+            [
+                SystemMessage(content=prompt),
+                HumanMessage(content=content),
+            ]
+        )
+        parsed = _parse_json_object(str(response.content))
+        category = str(parsed.get("category") or "")
+        required_phase = str(parsed.get("required_phase") or "")
+        impact = str(parsed.get("impact") or "")
+        if category not in {
+            "material",
+            "style",
+            "narrative",
+            "narration",
+            "subtitle",
+            "general",
+            "global",
+        }:
+            return fallback
+        if required_phase not in {"phase1", "phase2", "phase3"} or impact not in {"local", "phase"}:
+            return fallback
+        return {
+            "category": category,
+            "required_phase": required_phase,
+            "impact": impact,
+            "normalized_guidance": str(
+                parsed.get("normalized_guidance") or content
+            ).strip(),
+        }
+    except Exception as exc:
+        graph_logger.warning("指导分类模型不可用，使用关键词降级: %s", exc)
+        return fallback
+
+
+def _effective_user_request(base_request: str, guidance_context: str) -> str:
+    base = str(base_request or "").strip()
+    guidance = str(guidance_context or "").strip()
+    if not guidance:
+        return base
+    return (
+        f"{base}\n\n"
+        "## 用户运行中追加指导（优先级高于历史经验）\n"
+        f"{guidance}"
+    )
+
+
+def _apply_steering_checkpoint(
+    state: AgentState,
+    checkpoint: str,
+    current_phase: str,
+) -> dict[str, Any]:
+    coordinator = _steering_coordinator()
+    base_request = state.base_user_request or state.user_request
+    target_duration = (
+        state.target_duration_seconds
+        or _extract_target_duration_seconds(base_request)
+    )
+    existing_blueprint = state.editing_blueprint
+    blueprint_path = WORKSPACE / "editing_blueprint.md"
+    if not existing_blueprint and blueprint_path.exists():
+        try:
+            existing_blueprint = blueprint_path.read_text(encoding="utf-8")
+        except OSError:
+            existing_blueprint = ""
+    if coordinator is None:
+        return {
+            "base_user_request": base_request,
+            "user_request": state.user_request,
+            "steering_target_phase": "",
+            "current_checkpoint": checkpoint,
+            "revision": REVISION,
+            "target_duration_seconds": target_duration,
+            "editing_blueprint": existing_blueprint,
+        }
+    result = coordinator.apply_pending(checkpoint, current_phase)
+    guidance_context = coordinator.guidance_text()
+    target_phase = str(result.get("required_phase") or "")
+    if target_phase:
+        _emit_orchestration_event(
+            "steering_replan_started",
+            {
+                "checkpoint": checkpoint,
+                "required_phase": target_phase,
+                "categories": result.get("categories", []),
+                "revision": REVISION,
+            },
+        )
+        coordinator = _steering_coordinator()
+        if coordinator is not None:
+            result = coordinator.apply_pending("after_each_tool_call", "phase3")
+            required_phase = str(result.get("required_phase") or "")
+            if required_phase:
+                raise SteeringReplanRequested(required_phase)
+    elif state.steering_target_phase:
+        _emit_orchestration_event(
+            "steering_replan_completed",
+            {
+                "checkpoint": checkpoint,
+                "required_phase": state.steering_target_phase,
+                "revision": REVISION,
+            },
+        )
+    return {
+        "base_user_request": base_request,
+        "user_request": _effective_user_request(base_request, guidance_context),
+        "guidance_context": guidance_context,
+        "steering_target_phase": target_phase,
+        "current_checkpoint": checkpoint,
+        "revision": REVISION,
+        "target_duration_seconds": target_duration,
+        "editing_blueprint": existing_blueprint,
+    }
+
+
+def steering_entry_node(state: AgentState) -> dict[str, Any]:
+    return _apply_steering_checkpoint(state, "entry", "phase1")
+
+
+def steering_after_planner_node(state: AgentState) -> dict[str, Any]:
+    return _apply_steering_checkpoint(state, "after_planner", "phase1")
+
+
+def steering_after_phase1_node(state: AgentState) -> dict[str, Any]:
+    return _apply_steering_checkpoint(state, "after_material_analysis", "phase1")
+
+
+def steering_after_material_gap_node(state: AgentState) -> dict[str, Any]:
+    return _apply_steering_checkpoint(state, "phase1_boundary", "phase1")
+
+
+def steering_after_blueprint_node(state: AgentState) -> dict[str, Any]:
+    return _apply_steering_checkpoint(state, "after_blueprint_generation", "phase2")
+
+
+def _route_steering_entry(state: AgentState) -> str:
+    target = state.steering_target_phase
+    has_analysis = bool(_iter_analysis_json_files())
+    if target == "phase3" and has_analysis:
+        return "react_editor"
+    if target == "phase2" and has_analysis and ENABLE_PHASE2_RESEARCH:
+        return "editing_research"
+    return "planner"
+
+
+def _route_after_planner_steering(state: AgentState) -> str:
+    return "planner" if state.steering_target_phase == "phase1" else "phase1_scheduler"
+
+
+def _route_after_phase1_steering(state: AgentState) -> str:
+    return "planner" if state.steering_target_phase == "phase1" else "material_gap_evaluator"
+
+
+def _route_after_material_gap_steering(state: AgentState) -> str:
+    target = state.steering_target_phase
+    if target == "phase1":
+        return "planner"
+    if target == "phase2" and ENABLE_PHASE2_RESEARCH:
+        return "editing_research"
+    if target == "phase3":
+        return "generate_editing_plan" if ENABLE_PLAN_REVIEW else "react_editor"
+    return route_after_material_gap(state)
+
+
+def _route_after_blueprint_steering(state: AgentState) -> str:
+    target = state.steering_target_phase
+    if target == "phase1":
+        return "planner"
+    if target == "phase2":
+        return "editing_research"
+    return "generate_editing_plan" if ENABLE_PLAN_REVIEW else "react_editor"
+
+
 def _artifact_registry() -> ArtifactRegistry:
     return ArtifactRegistry(WORKSPACE)
 
 
+def _editing_plan_store() -> EditingPlanStore:
+    return EditingPlanStore(WORKSPACE)
+
+
+def _register_plan_artifact(plan: EditingPlan, kind: str = "editing_plan") -> None:
+    store = _editing_plan_store()
+    path = store.version_path(plan.version)
+    if not path.exists():
+        return
+    _artifact_registry().register(
+        kind=kind,
+        producer_task_id=f"editing_plan_{plan.version}",
+        phase="phase2",
+        path=path,
+        artifact_id=f"editing_plan_{plan.version}",
+        metadata={
+            "version": plan.version,
+            "status": plan.status,
+            "revision": REVISION,
+        },
+    )
+
+
+def _fallback_editing_plan(state: AgentState) -> EditingPlan:
+    source_paths = [str(path.resolve()) for path in _iter_source_videos()]
+    analysis_paths = [str(path.resolve()) for path in _iter_analysis_json_files()]
+    target = state.target_duration_seconds or _extract_target_duration_seconds(state.user_request) or 30.0
+    scene_count = max(1, min(6, len(source_paths) or 1))
+    scene_duration = max(2.0, target / scene_count)
+    scenes: list[EditingScene] = []
+    for index in range(scene_count):
+        source = source_paths[index % len(source_paths)] if source_paths else ""
+        start = round(index * scene_duration, 3)
+        end = round(start + scene_duration, 3)
+        scenes.append(
+            EditingScene(
+                scene_id=f"scene_{index + 1:02d}",
+                start=start,
+                end=end,
+                narrative_purpose=f"分镜 {index + 1}: 承接用户需求并展示核心素材",
+                source_path=source,
+                source_start=0.0,
+                source_end=scene_duration,
+                crop="fit_center_crop",
+                transition="crossfade" if index else "",
+            )
+        )
+    return normalize_plan_timeline(
+        EditingPlan(
+            version="v001",
+            status="DRAFT",
+            user_request=state.user_request,
+            target_duration_seconds=target,
+            aspect_ratio="9:16" if _user_requested_vertical(state.user_request) else "16:9",
+            style="根据用户需求和素材分析确定",
+            pacing="中等节奏，按分镜叙事推进",
+            narration_strategy="按分镜补充简洁旁白",
+            subtitle_strategy="优先使用旁白同步字幕",
+            bgm_strategy="当前工具链不主动选曲，仅保留空间",
+            scenes=scenes,
+            source_analysis_paths=analysis_paths,
+            source_video_paths=source_paths,
+            blueprint_markdown=state.editing_blueprint,
+        )
+    )
+
+
+def _user_requested_vertical(request: str) -> bool:
+    text = str(request or "").lower()
+    return any(marker in text for marker in ("竖屏", "竖版", "vertical", "9:16", "shorts", "抖音", "小红书"))
+
+
+def generate_editing_plan_node(state: AgentState) -> dict[str, Any]:
+    store = _editing_plan_store()
+    approved = store.approved()
+    if approved is not None:
+        return {"editing_plan_version": approved.version, "editing_plan_status": approved.status, "phase": "react"}
+    current = store.current()
+    if current is not None and current.status in {"VALIDATED", "WAITING_FOR_USER_REVIEW", "REVISING", "FROZEN"}:
+        return {"editing_plan_version": current.version, "editing_plan_status": current.status, "phase": "plan_review"}
+
+    source_paths = [str(path.resolve()) for path in _iter_source_videos()]
+    analysis_paths = [str(path.resolve()) for path in _iter_analysis_json_files()]
+    prompt = (
+        "你是视频剪辑计划生成器。根据用户需求、剪辑蓝图、素材路径和分析摘要生成可审阅 EditingPlan JSON。"
+        "只允许引用 source_video_paths 中的真实素材路径。scene 的 start/end 是成片时间轴，"
+        "source_start/source_end 是原素材入点/出点。输出字段必须包含 version、user_request、"
+        "target_duration_seconds、aspect_ratio、style、pacing、narration_strategy、subtitle_strategy、"
+        "bgm_strategy、scenes。scenes 每项包含 scene_id、start、end、narrative_purpose、source_path、"
+        "source_start、source_end、crop、transition、subtitle、narration、alternatives、locked。只返回 JSON。"
+    )
+    try:
+        response = _invoke_llm(
+            _get_llm(temperature=0.15).bind(max_tokens=5000),
+            [
+                SystemMessage(content=prompt),
+                HumanMessage(
+                    content=json.dumps(
+                        {
+                            "user_request": state.user_request,
+                            "target_duration_seconds": state.target_duration_seconds,
+                            "source_video_paths": source_paths,
+                            "source_analysis_paths": analysis_paths,
+                            "blueprint_markdown": state.editing_blueprint[:20000],
+                            "analysis": _build_full_analysis_context()[:30000],
+                        },
+                        ensure_ascii=False,
+                    )
+                ),
+            ],
+            "editing_plan_generator",
+        )
+        parsed = _parse_json_object(str(response.content))
+        parsed["version"] = "v001"
+        parsed["status"] = "DRAFT"
+        parsed["user_request"] = state.user_request
+        parsed["source_video_paths"] = source_paths
+        parsed["source_analysis_paths"] = analysis_paths
+        parsed["blueprint_markdown"] = state.editing_blueprint
+        plan = normalize_plan_timeline(EditingPlan.model_validate(parsed))
+    except ModelCallError:
+        raise
+    except Exception as exc:
+        graph_logger.warning("剪辑计划生成失败，使用降级计划: %s", exc)
+        _emit_orchestration_event("editing_plan_fallback", {"reason": str(exc)[:300]})
+        plan = _fallback_editing_plan(state)
+
+    store.save_plan(plan)
+    _register_plan_artifact(plan)
+    _emit_orchestration_event(
+        "editing_plan_created",
+        {
+            "version": plan.version,
+            "scene_count": len(plan.scenes),
+            "target_duration_seconds": plan.target_duration_seconds,
+            "path": str(store.version_path(plan.version)),
+        },
+    )
+    return {"editing_plan_version": plan.version, "editing_plan_status": plan.status, "phase": "plan_review"}
+
+
+def validate_editing_plan_node(state: AgentState) -> dict[str, Any]:
+    store = _editing_plan_store()
+    plan = store.current()
+    if plan is None:
+        raise RuntimeError("缺少可校验的剪辑计划")
+    report = validate_editing_plan(plan, allowed_source_paths=plan.source_video_paths)
+    report_path = store.root / f"editing_plan_{plan.version}_validation.json"
+    report_path.write_text(json.dumps(report.model_dump(), ensure_ascii=False, indent=2), encoding="utf-8")
+    if not report.ok:
+        _emit_orchestration_event(
+            "editing_plan_validation_failed",
+            {"version": plan.version, "issues": [issue.model_dump() for issue in report.issues]},
+        )
+        raise RuntimeError(
+            "剪辑计划校验失败: "
+            + "; ".join(issue.message for issue in report.issues if issue.severity == "error")
+        )
+    plan.status = "VALIDATED"
+    store.save_plan(plan)
+    _register_plan_artifact(plan)
+    _emit_orchestration_event(
+        "editing_plan_validated",
+        {"version": plan.version, "warnings": [issue.model_dump() for issue in report.issues]},
+    )
+    return {"editing_plan_version": plan.version, "editing_plan_status": plan.status, "phase": "plan_review"}
+
+
+def plan_review_gate_node(state: AgentState) -> dict[str, Any]:
+    store = _editing_plan_store()
+    plan = store.current()
+    if plan is None:
+        return {"phase": "react"}
+    coordinator = _steering_coordinator()
+    if not ENABLE_PLAN_REVIEW or coordinator is None:
+        plan = store.approve(plan.version)
+        _register_plan_artifact(plan, kind="approved_editing_plan")
+        _emit_orchestration_event(
+            "editing_plan_frozen",
+            {"version": plan.version, "auto_approved": coordinator is None or not ENABLE_PLAN_REVIEW},
+        )
+        return {"editing_plan_version": plan.version, "editing_plan_status": plan.status, "phase": "react"}
+
+    approved = store.approved()
+    if approved is not None:
+        return {"editing_plan_version": approved.version, "editing_plan_status": approved.status, "phase": "react"}
+
+    plan.status = "WAITING_FOR_USER_REVIEW"
+    store.save_plan(plan)
+    control = coordinator.store.read_control()
+    if control.get("status") != "requested" or control.get("mode") != "plan_review":
+        control = coordinator.store.request_pause("plan_review")
+    _emit_orchestration_event(
+        "plan_review_waiting",
+        {"version": plan.version, "pause_token": control.get("token", ""), "path": str(store.version_path(plan.version))},
+    )
+    coordinator.wait_if_paused("plan_review")
+    approved = store.approved()
+    if approved is None:
+        current = store.current()
+        if current is None:
+            raise RuntimeError("计划审阅恢复后未找到当前计划")
+        approved = store.approve(current.version)
+    _register_plan_artifact(approved, kind="approved_editing_plan")
+    _emit_orchestration_event("editing_plan_frozen", {"version": approved.version, "path": str(store.approved_path)})
+    return {"editing_plan_version": approved.version, "editing_plan_status": approved.status, "phase": "react"}
+
+
+def _register_revision_final(path: str | Path, producer_task_id: str) -> None:
+    candidate = Path(path).resolve(strict=False)
+    if not candidate.exists() or not candidate.is_file():
+        return
+    revision_suffix = f"_r{REVISION:03d}"
+    if not candidate.stem.endswith(revision_suffix):
+        snapshot = candidate.with_name(
+            f"{candidate.stem}{revision_suffix}{candidate.suffix}"
+        )
+        if not snapshot.exists():
+            shutil.copy2(candidate, snapshot)
+        candidate = snapshot
+    _artifact_registry().register(
+        artifact_id=f"phase3_final_video_r{REVISION:03d}",
+        kind="final_video",
+        producer_task_id=producer_task_id,
+        phase="phase3",
+        path=candidate,
+        metadata={"revision": REVISION, "current": True},
+    )
+
+
+def _register_latest_react_video() -> None:
+    candidates = [path for path in WORKSPACE.glob("*.mp4") if path.is_file()]
+    if not candidates:
+        return
+    preferred = [
+        path
+        for path in candidates
+        if "final" in path.stem.lower() or "output" in path.stem.lower()
+    ]
+    _register_revision_final(
+        max(preferred or candidates, key=lambda path: path.stat().st_mtime),
+        "phase3_react_fallback",
+    )
+
+
 def _resource_scheduler(registry: ArtifactRegistry) -> ResourceScheduler:
+    coordinator = _steering_coordinator()
     return ResourceScheduler(
         pools=_resource_pool_config(),
         workspace=WORKSPACE,
         artifact_registry=registry,
         event_sink=_emit_orchestration_event,
         cancel_requested=model_abort_requested,
+        safe_point=(
+            lambda context: coordinator.scheduler_safe_point(
+                f"{context['plan_id']}:idle",
+                str(context.get("phase") or "phase3"),
+            )
+            if coordinator is not None
+            else None
+        ),
     )
 
 
@@ -494,13 +995,13 @@ def _extract_target_duration_seconds(user_request: str) -> float:
 
 def _recommend_material_counts(target_duration_seconds: float) -> dict[str, int]:
     """根据目标时长推荐素材搜索数量与下载数量区间。"""
-    if SHORT_FORM_OPTIMIZATIONS and 0 < target_duration_seconds <= 15:
+    if SHORT_FORM_OPTIMIZATIONS and 0 < target_duration_seconds <= 20:
         return {
-            "search_per_source": 12,
+            "search_per_source": 8,
             "search_pages": 1,
-            "max_candidates": 48,
-            "mllm_review": 40,
-            "top_k_min": min(3, SHORT_FORM_MAX_SOURCES),
+            "max_candidates": 24,
+            "mllm_review": 24,
+            "top_k_min": 1,
             "top_k_max": SHORT_FORM_MAX_SOURCES,
         }
     if target_duration_seconds <= 0:
@@ -673,7 +1174,7 @@ def _validate_and_normalize_plan(
     short_form = (
         SHORT_FORM_OPTIMIZATIONS
         and counts.get("search_pages") == 1
-        and counts.get("max_candidates") == 48
+        and counts.get("max_candidates") <= 24
     )
     if short_form:
         kept_search_ids = {
@@ -693,8 +1194,8 @@ def _validate_and_normalize_plan(
             step.depends_on = [dependency for dependency in step.depends_on if dependency in kept_ids]
             if step.tool_hint == "search_bilibili_video":
                 step.arguments["max_results"] = min(
-                    int(step.arguments.get("max_results", 12) or 12),
-                    12,
+                    int(step.arguments.get("max_results", 8) or 8),
+                    8,
                 )
                 step.arguments["pages"] = 1
                 step.arguments["expand_variants"] = min(
@@ -702,8 +1203,8 @@ def _validate_and_normalize_plan(
                     2,
                 )
                 step.arguments["max_total_results"] = min(
-                    int(step.arguments.get("max_total_results", 48) or 48),
-                    48,
+                    int(step.arguments.get("max_total_results", 24) or 24),
+                    24,
                 )
             elif step.tool_hint == "rank_video_candidates":
                 step.arguments["top_k"] = min(
@@ -711,8 +1212,8 @@ def _validate_and_normalize_plan(
                     SHORT_FORM_MAX_SOURCES,
                 )
                 step.arguments["max_review"] = min(
-                    int(step.arguments.get("max_review", 40) or 40),
-                    40,
+                    int(step.arguments.get("max_review", 24) or 24),
+                    24,
                 )
 
     if DIRECT_PHASE3_EXECUTION:
@@ -1873,11 +2374,13 @@ def _run_phase1_downloads(
     state: AgentState,
     scheduler: ResourceScheduler,
     selected_videos: list[dict[str, Any]],
+    *,
+    start_index: int = 1,
 ) -> list[str]:
     if not selected_videos:
         return []
     tasks: list[TaskSpec] = []
-    for index, video in enumerate(selected_videos, start=1):
+    for index, video in enumerate(selected_videos, start=start_index):
         bvid = str(video.get("bvid") or "").strip()
         url = str(bvid or video.get("url") or "").strip()
         if not url:
@@ -1898,8 +2401,13 @@ def _run_phase1_downloads(
                 retry=RetryPolicy(max_attempts=2, backoff_seconds=1.0),
             )
         )
+    plan_id = (
+        f"phase1_download_round_{state.gap_round}"
+        if start_index == 1
+        else f"phase1_download_round_{state.gap_round}_{start_index}"
+    )
     plan = ExecutionPlan(
-        plan_id=f"phase1_download_round_{state.gap_round}",
+        plan_id=plan_id,
         phase="phase1",
         goal=state.user_request,
         tasks=tasks,
@@ -1907,7 +2415,10 @@ def _run_phase1_downloads(
 
     def execute(task: TaskSpec, dependencies: dict[str, Any]) -> TaskExecutionResult:
         raw = _TOOL_NAME_MAP["download_bilibili_video"].invoke(task.arguments)
-        parsed = json.loads(str(raw))
+        try:
+            parsed = json.loads(str(raw))
+        except (TypeError, ValueError) as exc:
+            raise RuntimeError(f"素材下载失败: {str(raw)[:500]}") from exc
         if parsed.get("status") != "success" or not parsed.get("path"):
             raise RuntimeError(f"素材下载失败: {str(raw)[:300]}")
         path = str(parsed["path"])
@@ -1964,7 +2475,7 @@ def _run_phase1_analyses(
             resources={"video_analysis_pool": 1, "ffmpeg_pool": 1},
             conflict_keys=[f"analysis:{path.resolve(strict=False)}"],
             output_kinds=["video_analysis"],
-            retry=RetryPolicy(max_attempts=2, backoff_seconds=1.0),
+            retry=RetryPolicy(max_attempts=1),
         )
         for path in pending
     ]
@@ -1996,12 +2507,49 @@ def _run_phase1_analyses(
             ],
         )
 
-    states = scheduler.run(plan, execute, resume=True)
-    return [
-        str(item.result.get("analysis_path"))
-        for item in states.values()
-        if item.status == "completed" and item.result.get("analysis_path")
+    states = scheduler.run(
+        plan,
+        execute,
+        resume=True,
+        allow_partial_failure=True,
+    )
+    refreshed_index = build_analysis_index([WORKSPACE, USER_WORKSPACE])
+    completed_paths = [
+        str(matches[0].resolve())
+        for video_path in source_videos
+        if (matches := match_analysis_files(video_path, analysis_index=refreshed_index))
     ]
+    required_successes = max(1, math.ceil(len(source_videos) * 2 / 3))
+    failed_states = [item for item in states.values() if item.status == "failed"]
+    if len(completed_paths) < required_successes:
+        details = "; ".join(item.error[:240] for item in failed_states)
+        raise RuntimeError(
+            "素材分析成功数不足，无法安全进入后续剪辑阶段："
+            f"成功 {len(completed_paths)}/{len(source_videos)}，"
+            f"最低要求 {required_successes}。失败详情：{details or 'unknown'}"
+        )
+    if failed_states:
+        graph_logger.warning(
+            "⚠️ 素材分析部分失败，按降级策略继续：成功 %d/%d，失败 %d，最低要求 %d",
+            len(completed_paths),
+            len(source_videos),
+            len(failed_states),
+            required_successes,
+        )
+        _emit_orchestration_event(
+            "analysis_batch_degraded",
+            {
+                "source_count": len(source_videos),
+                "analyzed_count": len(completed_paths),
+                "failed_count": len(failed_states),
+                "required_successes": required_successes,
+                "failed_tasks": [
+                    {"task_id": item.task_id, "error": item.error[:500]}
+                    for item in failed_states
+                ],
+            },
+        )
+    return completed_paths
 
 
 def phase1_scheduler_node(state: AgentState) -> dict[str, Any]:
@@ -2020,8 +2568,46 @@ def phase1_scheduler_node(state: AgentState) -> dict[str, Any]:
     downloaded: list[str] = []
     if not DIRECT_PHASE3_EXECUTION and not local_only:
         selected = _run_phase1_search_and_rank(state, scheduler)
-        downloaded = _run_phase1_downloads(state, scheduler, selected)
-    analyses = _run_phase1_analyses(state, scheduler)
+        if SHORT_FORM_OPTIMIZATIONS and 0 < state.target_duration_seconds <= 20:
+            max_sources = max(1, min(SHORT_FORM_MAX_SOURCES, len(selected)))
+            analyses: list[str] = []
+            for offset, video in enumerate(selected[:max_sources], start=1):
+                downloaded.extend(
+                    _run_phase1_downloads(
+                        state,
+                        scheduler,
+                        [video],
+                        start_index=offset,
+                    )
+                )
+                analyses = _run_phase1_analyses(state, scheduler)
+                metrics = _material_gap_metrics(state)
+                if (
+                    metrics["analyzed_count"] >= 1
+                    and metrics["usable_seconds"] >= metrics["target_seconds"] * 2
+                    and metrics["topic_coverage_ratio"] >= 0.15
+                    and metrics["orientation_match_ratio"] >= 0.5
+                ):
+                    graph_logger.info(
+                        "✅ 短片素材早停: analyzed=%s usable=%.1fs target=%.1fs",
+                        metrics["analyzed_count"],
+                        metrics["usable_seconds"],
+                        metrics["target_seconds"],
+                    )
+                    _emit_orchestration_event(
+                        "short_form_material_early_stop",
+                        {
+                            "source_downloaded_count": len(downloaded),
+                            "analysis_count": len(analyses),
+                            **metrics,
+                        },
+                    )
+                    break
+        else:
+            downloaded = _run_phase1_downloads(state, scheduler, selected)
+            analyses = _run_phase1_analyses(state, scheduler)
+    else:
+        analyses = _run_phase1_analyses(state, scheduler)
 
     summary = (
         f"资源调度完成：候选 {len(selected)}，新增下载 {len(downloaded)}，"
@@ -2150,7 +2736,7 @@ def material_gap_evaluator_node(state: AgentState) -> dict[str, Any]:
     def execute(task_spec: TaskSpec, dependencies: dict[str, Any]) -> TaskExecutionResult:
         deterministic_sufficient = (
             metrics["source_count"] >= metrics["required_sources"]
-            and metrics["analysis_complete_ratio"] >= 1.0
+            and metrics["analysis_complete_ratio"] >= 2 / 3
             and metrics["duration_coverage_ratio"] >= 1.0
             and metrics["topic_coverage_ratio"] >= 0.15
             and metrics["orientation_match_ratio"] >= 0.5
@@ -2409,7 +2995,7 @@ def route_after_prep_router(
     if state.phase == "researching":
         return "editing_research"
     if state.phase == "react":
-        return "react_editor"
+        return "generate_editing_plan" if ENABLE_PLAN_REVIEW else "react_editor"
     if state.phase == "replan":
         return "planner"
     if state.plan:
@@ -2713,12 +3299,119 @@ def _legacy_editing_research_node(state: AgentState) -> dict[str, Any]:
     }
 
 
+def _compact_editing_research_node(state: AgentState) -> dict[str, Any]:
+    """短片专用蓝图生成：单个 LLM 任务，减少多 Agent 排队和整合成本。"""
+    graph_logger.info("🔬 Phase 2 使用短片 compact blueprint")
+    registry = _artifact_registry()
+    scheduler = _resource_scheduler(registry)
+    analysis_files = _iter_analysis_json_files()
+    task = TaskSpec(
+        id="phase2_compact_blueprint",
+        phase="phase2",
+        kind="compact_blueprint",
+        description="为短片生成单次可执行剪辑蓝图",
+        arguments={
+            "target_duration_seconds": state.target_duration_seconds,
+            "analysis_count": len(analysis_files),
+        },
+        resources={"llm_pool": 1},
+        output_kinds=["editing_blueprint", "editing_blueprint_json"],
+        retry=RetryPolicy(max_attempts=2, backoff_seconds=0.5),
+    )
+    plan = ExecutionPlan(
+        plan_id="phase2_compact_blueprint",
+        phase="phase2",
+        goal=state.user_request,
+        tasks=[task],
+    )
+
+    def execute(task_spec: TaskSpec, dependencies: dict[str, Any]) -> TaskExecutionResult:
+        analysis_context = _build_full_analysis_context()
+        prompt = (
+            "你是短片剪辑蓝图生成器。只基于素材分析生成一份可执行蓝图，"
+            "包含源视频路径、真实裁剪时间段、镜头顺序、字幕/旁白时间线、"
+            "输出分辨率建议和总时长校验。不得调用工具，不得编造不存在的时间段。"
+        )
+        response = _invoke_llm(
+            _get_llm(temperature=0.2).bind(max_tokens=3600),
+            [
+                SystemMessage(content=prompt),
+                HumanMessage(
+                    content=(
+                        f"用户需求:\n{state.user_request}\n"
+                        f"目标时长: {state.target_duration_seconds:.1f}s\n\n"
+                        f"素材分析:\n{analysis_context[:50000]}"
+                    )
+                ),
+            ],
+            "phase2_compact_blueprint",
+        )
+        blueprint = str(response.content).strip()
+        if not blueprint:
+            raise RuntimeError("短片 compact blueprint 返回空结果")
+        markdown_path = WORKSPACE / "editing_blueprint.md"
+        json_path = WORKSPACE / "editing_blueprint.json"
+        markdown_path.write_text(blueprint, encoding="utf-8")
+        json_path.write_text(
+            json.dumps(
+                {
+                    "version": 1,
+                    "mode": "compact_short_form",
+                    "user_request": state.user_request,
+                    "target_duration_seconds": state.target_duration_seconds,
+                    "blueprint_markdown": blueprint,
+                    "source_analysis_paths": [str(path.resolve()) for path in analysis_files],
+                },
+                ensure_ascii=False,
+                indent=2,
+            ),
+            encoding="utf-8",
+        )
+        return TaskExecutionResult(
+            data={"content": blueprint, "path": str(markdown_path)},
+            artifacts=[
+                _task_artifact(
+                    artifact_id="editing_blueprint_markdown",
+                    kind="editing_blueprint",
+                    path=markdown_path,
+                    task=task_spec,
+                ),
+                _task_artifact(
+                    artifact_id="editing_blueprint_json",
+                    kind="editing_blueprint_json",
+                    path=json_path,
+                    task=task_spec,
+                ),
+            ],
+        )
+
+    try:
+        states = scheduler.run(plan, execute, resume=True)
+        blueprint = str(states[task.id].result.get("content", "")).strip()
+        return {
+            "editing_blueprint": blueprint,
+            "phase2_artifact_ids": states[task.id].artifact_ids,
+            "phase": "react",
+        }
+    except ModelCallError:
+        raise
+    except Exception as exc:
+        graph_logger.warning("短片 compact blueprint 失败，回退完整 Phase 2: %s", exc)
+        _emit_orchestration_event(
+            "phase2_compact_fallback",
+            {"reason": str(exc)[:500]},
+        )
+        return _legacy_editing_research_node(state)
+
+
 def editing_research_node(state: AgentState) -> dict[str, Any]:
     """并行研究每个素材，再由唯一 Integrator 生成最终蓝图。"""
     graph_logger.info("🔬 ═══ Phase 2 开始: 并行剪辑研究 ═══")
     analysis_files = _iter_analysis_json_files()
     if not analysis_files:
         return _legacy_editing_research_node(state)
+    if SHORT_FORM_OPTIMIZATIONS and 0 < state.target_duration_seconds <= 20:
+        return _compact_editing_research_node(state)
 
     registry = _artifact_registry()
     scheduler = _resource_scheduler(registry)
@@ -3089,7 +3782,7 @@ class ShortFormEditPlan(BaseModel):
     clips: list[ShortFormClip] = Field(min_length=3, max_length=4)
     narration: list[ShortFormNarration] = Field(min_length=1, max_length=3)
     voice: str = "Ethan"
-    output_name: str = "xinjiang_10s_promo"
+    output_name: str = "short_form_promo"
 
 
 class ShortFormExecutionError(RuntimeError):
@@ -3097,6 +3790,7 @@ class ShortFormExecutionError(RuntimeError):
 
 
 class ControlledClip(BaseModel):
+    scene_id: str = ""
     source_path: str
     start: float = Field(ge=0)
     end: float = Field(gt=0)
@@ -3104,6 +3798,7 @@ class ControlledClip(BaseModel):
 
 
 class ControlledNarration(BaseModel):
+    scene_id: str = ""
     text: str
     start: float = Field(ge=0)
     end: float = Field(gt=0)
@@ -3117,17 +3812,69 @@ class ControlledEditPlan(BaseModel):
     resolution: Literal["720p", "1080p", "4k"] = "1080p"
 
 
+class ControlledNarrationPlan(BaseModel):
+    narration: list[ControlledNarration] = Field(default_factory=list, max_length=24)
+    voice: str = "Ethan"
+
+
+class SteeringReplanRequested(RuntimeError):
+    def __init__(self, required_phase: str) -> None:
+        super().__init__(f"Steering requested replan from {required_phase}.")
+        self.required_phase = required_phase
+
+
+def _approved_editing_plan() -> EditingPlan | None:
+    try:
+        return _editing_plan_store().approved()
+    except Exception:
+        return None
+
+
+def _controlled_plan_from_approved(plan: EditingPlan) -> ControlledEditPlan:
+    clips = [
+        ControlledClip(
+            scene_id=scene.scene_id,
+            source_path=str(Path(scene.source_path).resolve(strict=False)) if scene.source_path else "",
+            start=scene.source_start,
+            end=scene.source_end,
+            label=scene.narrative_purpose or scene.scene_id,
+        )
+        for scene in plan.scenes
+        if scene.source_path
+    ]
+    narration = [
+        ControlledNarration(
+            scene_id=scene.scene_id,
+            text=scene.narration,
+            start=scene.start,
+            end=scene.end,
+        )
+        for scene in plan.scenes
+        if scene.narration.strip()
+    ]
+    resolution: Literal["720p", "1080p", "4k"] = "1080p"
+    if plan.target_duration_seconds and plan.target_duration_seconds <= 20:
+        resolution = "720p"
+    return ControlledEditPlan(
+        clips=clips,
+        narration=narration,
+        voice="Ethan",
+        output_name=f"approved_plan_{plan.version}",
+        resolution=resolution,
+    )
+
+
 SHORT_FORM_PLAN_PROMPT = """\
 你是短视频剪辑计划器。根据用户需求、Phase 2 蓝图和素材分析，生成可直接执行的 JSON。
 
 硬性要求：
 - 只选择输入中真实存在的 source_path。
-- 选择 3~4 个场景互补片段，总时长严格为 10 秒。
+- 选择 3~4 个场景互补片段，总时长严格贴合用户目标时长。
 - 每个片段至少 2 秒，start/end 必须来自分析数据的有效原视频时间段。
-- 至少覆盖湖泊、草原/森林、沙漠、雪山中的三类。
-- 旁白使用 1~3 段，每段起止时间位于 0~10 秒，不重叠，文案简短自然。
+- 优先覆盖用户主题中最关键的三类画面元素。
+- 旁白使用 1~3 段，每段起止时间必须位于成片时间轴内，不重叠，文案简短自然。
 - voice 固定为 Ethan。
-- output_name 固定为 xinjiang_10s_promo。
+- output_name 使用简短英文或拼音文件名，不要带扩展名。
 - 只返回 JSON，不要 Markdown。
 
 格式：
@@ -3139,9 +3886,32 @@ SHORT_FORM_PLAN_PROMPT = """\
     {"text": "旁白", "start": 0.0, "end": 4.5}
   ],
   "voice": "Ethan",
-  "output_name": "xinjiang_10s_promo"
+  "output_name": "short_form_promo"
 }
 """
+def _short_form_target_duration(state: AgentState) -> float:
+    return max(1.0, float(state.target_duration_seconds or 15.0))
+
+
+def _short_form_output_name(state: AgentState) -> str:
+    target = int(round(_short_form_target_duration(state)))
+    return f"short_form_{target}s_promo"
+
+
+def _short_form_plan_prompt(state: AgentState) -> str:
+    target = _short_form_target_duration(state)
+    return (
+        SHORT_FORM_PLAN_PROMPT
+        + "\n\n当前任务约束：\n"
+        f"- 目标总时长: {target:.1f} 秒。\n"
+        f"- 片段总时长允许误差: ±{max(1.0, target * 0.08):.1f} 秒。\n"
+        f"- 旁白起止时间必须位于 0 到 {target:.1f} 秒之间。\n"
+        f"- 推荐 output_name: {_short_form_output_name(state)}。\n"
+    )
+
+
+def _user_explicitly_requested_high_resolution(text: str) -> bool:
+    return bool(re.search(r"1080p|1920\s*[x×]\s*1080|4k|3840\s*[x×]\s*2160|高清|超清", text, re.I))
 
 
 def _parse_json_object(text: str) -> dict[str, Any]:
@@ -3191,7 +3961,7 @@ def _build_controlled_edit_plan(state: AgentState) -> ControlledEditPlan:
             "只返回 JSON，结构为："
             '{"clips":[{"source_path":"","start":0,"end":5,"label":""}],'
             '"narration":[{"text":"","start":0,"end":5}],'
-            '"voice":"Ethan","output_name":"output_final","resolution":"1080p"}。'
+            '"voice":"Ethan","output_name":"output_final","resolution":"720p"}。'
         )
         response = _invoke_llm(
             _get_llm(temperature=0.1).bind(max_tokens=5000),
@@ -3211,6 +3981,11 @@ def _build_controlled_edit_plan(state: AgentState) -> ControlledEditPlan:
         )
         parsed = _parse_json_object(str(response.content))
         plan = ControlledEditPlan.model_validate(parsed)
+        if (
+            0 < state.target_duration_seconds <= 20
+            and not _user_explicitly_requested_high_resolution(state.user_request)
+        ):
+            plan.resolution = "720p"
         available = {str(Path(path).resolve()) for path in source_paths}
         total = 0.0
         for clip in plan.clips:
@@ -3257,7 +4032,138 @@ def _build_controlled_edit_plan(state: AgentState) -> ControlledEditPlan:
     return ControlledEditPlan.model_validate(states[task.id].result["plan"])
 
 
-def _run_controlled_editor(state: AgentState) -> str:
+def _state_with_current_guidance(state: AgentState) -> AgentState:
+    coordinator = _steering_coordinator()
+    if coordinator is None:
+        return state
+    base_request = state.base_user_request or state.user_request
+    guidance = coordinator.guidance_text()
+    return state.model_copy(
+        update={
+            "base_user_request": base_request,
+            "guidance_context": guidance,
+            "user_request": _effective_user_request(base_request, guidance),
+            "revision": REVISION,
+        }
+    )
+
+
+def _phase3_checkpoint(
+    state: AgentState,
+    checkpoint: str,
+    *,
+    allow_local_categories: set[str] | None = None,
+) -> AgentState:
+    coordinator = _steering_coordinator()
+    if coordinator is None:
+        return state
+    result = coordinator.apply_pending(checkpoint, "phase3")
+    required_phase = str(result.get("required_phase") or "")
+    categories = set(str(item) for item in result.get("categories", []))
+    if required_phase in {"phase1", "phase2"}:
+        raise SteeringReplanRequested(required_phase)
+    if required_phase == "phase3" and categories:
+        allowed = allow_local_categories or set()
+        if not categories.issubset(allowed):
+            raise SteeringReplanRequested("phase3")
+    return _state_with_current_guidance(state)
+
+
+def _build_controlled_narration_plan(
+    state: AgentState,
+    *,
+    video_path: str,
+    analysis_path: str,
+    duration_seconds: float,
+) -> ControlledNarrationPlan:
+    registry = _artifact_registry()
+    scheduler = _resource_scheduler(registry)
+    analysis_file = Path(analysis_path)
+    task = TaskSpec(
+        id="phase3_narration_planner",
+        phase="phase3",
+        kind="narration_planner",
+        description="基于成片复分析和最新用户指导生成旁白计划",
+        arguments={
+            "user_request": state.user_request,
+            "video_path": video_path,
+            "analysis_path": analysis_path,
+            "analysis_size": analysis_file.stat().st_size if analysis_file.exists() else 0,
+            "duration_seconds": duration_seconds,
+        },
+        resources={"llm_pool": 1},
+        output_kinds=["narration_plan"],
+        retry=RetryPolicy(max_attempts=2, backoff_seconds=0.5),
+    )
+    execution_plan = ExecutionPlan(
+        plan_id="phase3_narration_planner",
+        phase="phase3",
+        goal=state.user_request,
+        tasks=[task],
+    )
+
+    def execute(task_spec: TaskSpec, dependencies: dict[str, Any]) -> TaskExecutionResult:
+        analysis_text = analysis_file.read_text(encoding="utf-8") if analysis_file.exists() else ""
+        prompt = (
+            "你是视频旁白计划器。必须基于当前成片复分析和用户最新指导生成旁白。"
+            "旁白时间段必须位于视频时长内、互不重叠，并为视觉强段落保留适当留白。"
+            "如果用户要求减少旁白或字幕，应减少段数并缩短文案。"
+            "只返回 JSON："
+            '{"narration":[{"text":"","start":0,"end":5}],"voice":"Ethan"}。'
+        )
+        response = _invoke_llm(
+            _get_llm(temperature=0.1).bind(max_tokens=3000),
+            [
+                SystemMessage(content=prompt),
+                HumanMessage(
+                    content=(
+                        f"user_request:\n{state.user_request}\n\n"
+                        f"duration_seconds: {duration_seconds}\n\n"
+                        f"assembled_analysis:\n{analysis_text[:30000]}"
+                    )
+                ),
+            ],
+            "phase3_narration_planner",
+        )
+        plan = ControlledNarrationPlan.model_validate(
+            _parse_json_object(str(response.content))
+        )
+        for segment in plan.narration:
+            if segment.end <= segment.start or segment.end > duration_seconds + 0.5:
+                raise RuntimeError("旁白计划包含越界时间段")
+        plan_path = WORKSPACE / "phase3_narration_plan.json"
+        plan_path.write_text(
+            json.dumps(plan.model_dump(), ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+        return TaskExecutionResult(
+            data={"plan": plan.model_dump()},
+            artifacts=[
+                _task_artifact(
+                    artifact_id="phase3_narration_plan",
+                    kind="narration_plan",
+                    path=plan_path,
+                    task=task_spec,
+                )
+            ],
+        )
+
+    states = scheduler.run(execution_plan, execute, resume=True)
+    return ControlledNarrationPlan.model_validate(states[task.id].result["plan"])
+
+
+def _subtitle_segments(
+    narration: list[ControlledNarration],
+    guidance_context: str,
+) -> list[dict[str, Any]]:
+    segments = [item.model_dump() for item in narration]
+    lowered = guidance_context.lower()
+    if any(marker in lowered for marker in ("字幕不要太多", "减少字幕", "字幕简洁", "少字幕")):
+        segments = segments[::2] or segments[:1]
+    return segments
+
+
+def _run_controlled_editor_legacy(state: AgentState) -> str:
     plan = _build_controlled_edit_plan(state)
     registry = _artifact_registry()
     scheduler = _resource_scheduler(registry)
@@ -3555,10 +4461,35 @@ def _run_controlled_editor(state: AgentState) -> str:
                     "output_name": "phase3_subtitled",
                 }
             )
-            parsed = json.loads(str(raw))
+            try:
+                parsed = json.loads(str(raw))
+            except json.JSONDecodeError:
+                graph_logger.warning("字幕渲染失败，沿用未加字幕视频继续导出: %s", str(raw)[:300])
+                emit_benchmark_event(
+                    "subtitle_render_skipped",
+                    {
+                        "phase": "phase3",
+                        "reason": str(raw)[:300],
+                        "fallback_react": False,
+                    },
+                )
+                return TaskExecutionResult(
+                    data={"path": input_path, "subtitle_status": "skipped", "subtitle_error": str(raw)[:300]}
+                )
             path = str(parsed.get("path") or "")
             if parsed.get("status") != "success" or not path:
-                raise RuntimeError(f"字幕渲染失败: {str(raw)[:300]}")
+                graph_logger.warning("字幕渲染未成功，沿用未加字幕视频继续导出: %s", str(raw)[:300])
+                emit_benchmark_event(
+                    "subtitle_render_skipped",
+                    {
+                        "phase": "phase3",
+                        "reason": str(raw)[:300],
+                        "fallback_react": False,
+                    },
+                )
+                return TaskExecutionResult(
+                    data={"path": input_path, "subtitle_status": "skipped", "subtitle_error": str(raw)[:300]}
+                )
             return TaskExecutionResult(
                 data={"path": path},
                 artifacts=[
@@ -3652,12 +4583,603 @@ def _run_controlled_editor(state: AgentState) -> str:
     )
 
 
+def _run_controlled_editor(state: AgentState) -> str:
+    state = _phase3_checkpoint(
+        state,
+        "before_timeline_execution",
+        allow_local_categories={"general", "narration", "subtitle"},
+    )
+    approved_plan = _approved_editing_plan()
+    plan = (
+        _controlled_plan_from_approved(approved_plan)
+        if approved_plan is not None
+        else _build_controlled_edit_plan(state)
+    )
+    plan_version = approved_plan.version if approved_plan is not None else ""
+    registry = _artifact_registry()
+
+    cut_tasks: list[TaskSpec] = []
+    for index, clip in enumerate(plan.clips, start=1):
+        output_name = f"phase3_clip_{index:03d}"
+        cut_tasks.append(
+            TaskSpec(
+                id=f"phase3_cut_{index:03d}",
+                phase="phase3",
+                kind="clip_cut",
+                tool_name="cut_video",
+                description=f"并行裁剪片段 {index}",
+                arguments={
+                    "plan_version": plan_version,
+                    "scene_id": clip.scene_id,
+                    "execution_step_id": f"phase3_cut_{index:03d}",
+                    "input_path": clip.source_path,
+                    "start_time": clip.start,
+                    "end_time": clip.end,
+                    "output_name": output_name,
+                },
+                resources={"ffmpeg_pool": 1},
+                conflict_keys=[f"write:{(WORKSPACE / f'{output_name}.mp4').resolve()}"],
+                output_kinds=["video_clip"],
+            )
+        )
+    cut_ids = [task.id for task in cut_tasks]
+    merge_task = TaskSpec(
+        id="phase3_timeline_merge",
+        phase="phase3",
+        kind="timeline_merge",
+        tool_name="add_transition",
+        description="串行组装主时间线和转场",
+        arguments={"clip_count": len(cut_tasks), "user_request": state.user_request},
+        depends_on=cut_ids,
+        resources={"ffmpeg_pool": 1},
+        conflict_keys=[f"write:{(WORKSPACE / 'phase3_assembled.mp4').resolve()}"],
+        output_kinds=["assembled_video"],
+    )
+    analyze_task = TaskSpec(
+        id="phase3_assembled_analysis",
+        phase="phase3",
+        kind="assembled_analysis",
+        tool_name="analyze_video",
+        description="复分析主时间线供旁白对齐",
+        depends_on=[merge_task.id],
+        resources={"video_analysis_pool": 1},
+        output_kinds=["assembled_analysis"],
+    )
+    visual_plan = ExecutionPlan(
+        plan_id="phase3_visual_execution",
+        phase="phase3",
+        goal=state.user_request,
+        tasks=[*cut_tasks, merge_task, analyze_task],
+    )
+
+    def execute_visual(
+        task: TaskSpec,
+        dependencies: dict[str, Any],
+    ) -> TaskExecutionResult:
+        if task.kind == "clip_cut":
+            raw = _TOOL_NAME_MAP["cut_video"].invoke(
+                {
+                    "input_path": task.arguments["input_path"],
+                    "start_time": task.arguments["start_time"],
+                    "end_time": task.arguments["end_time"],
+                    "output_name": task.arguments["output_name"],
+                }
+            )
+            parsed = json.loads(str(raw))
+            path = str(parsed.get("path") or "")
+            if parsed.get("status") != "success" or not path:
+                raise RuntimeError(f"裁剪失败: {str(raw)[:300]}")
+            return TaskExecutionResult(
+                data={"path": path},
+                artifacts=[
+                    _task_artifact(
+                        artifact_id=f"{task.id}_video",
+                        kind="video_clip",
+                        path=path,
+                        task=task,
+                        metadata={
+                            "plan_version": task.arguments.get("plan_version", ""),
+                            "scene_id": task.arguments.get("scene_id", ""),
+                            "execution_step_id": task.arguments.get("execution_step_id", task.id),
+                        },
+                    )
+                ],
+            )
+
+        if task.kind == "timeline_merge":
+            paths = [str(dependencies[task_id].result["path"]) for task_id in cut_ids]
+            transition_plan: list[dict[str, Any]] = []
+            if len(paths) > 1:
+                transition_raw = _TOOL_NAME_MAP["plan_transition_timeline"].invoke(
+                    {
+                        "video_paths": paths,
+                        "style": "cinematic",
+                        "base_duration": 0.3
+                        if state.target_duration_seconds <= 30
+                        else 0.6,
+                    }
+                )
+                transition_plan = list(
+                    json.loads(str(transition_raw)).get("transition_plan", [])
+                )
+            raw = _TOOL_NAME_MAP["add_transition"].invoke(
+                {
+                    "video_paths": paths,
+                    "transition_type": "crossfade",
+                    "duration": 0.3 if state.target_duration_seconds <= 30 else 0.6,
+                    "transition_plan": transition_plan,
+                    "output_name": "phase3_assembled",
+                }
+            )
+            parsed = json.loads(str(raw))
+            path = str(parsed.get("path") or "")
+            if parsed.get("status") != "success" or not path:
+                raise RuntimeError(f"主时间线合并失败: {str(raw)[:300]}")
+            return TaskExecutionResult(
+                data={"path": path},
+                artifacts=[
+                    _task_artifact(
+                        artifact_id="phase3_assembled_video",
+                        kind="assembled_video",
+                        path=path,
+                        task=task,
+                    )
+                ],
+            )
+
+        merged_path = str(dependencies[merge_task.id].result["path"])
+        raw = str(
+            _TOOL_NAME_MAP["analyze_video"].invoke(
+                {
+                    "video_path": merged_path,
+                    "analysis_goal": "核对当前成片逐段画面、叙事连续性与旁白匹配",
+                }
+            )
+        )
+        matches = match_analysis_files(
+            Path(merged_path),
+            analysis_index=build_analysis_index([WORKSPACE, USER_WORKSPACE]),
+        )
+        if not matches:
+            raise RuntimeError(f"当前成片复分析未生成 JSON: {raw[:500]}")
+        return TaskExecutionResult(
+            data={"path": merged_path, "analysis_path": str(matches[0].resolve())},
+            artifacts=[
+                _task_artifact(
+                    artifact_id="phase3_assembled_analysis_json",
+                    kind="assembled_analysis",
+                    path=matches[0],
+                    task=task,
+                )
+            ],
+        )
+
+    visual_states = _resource_scheduler(registry).run(
+        visual_plan,
+        execute_visual,
+        resume=True,
+    )
+    merged_path = str(visual_states[merge_task.id].result["path"])
+    analysis_path = str(visual_states[analyze_task.id].result["analysis_path"])
+    duration_raw = _TOOL_NAME_MAP["inspect_video_duration"].invoke(
+        {"video_path": merged_path}
+    )
+    duration_seconds = float(
+        json.loads(str(duration_raw)).get("duration_seconds", 0.0) or 0.0
+    )
+
+    state = _phase3_checkpoint(
+        state,
+        "before_narration_generation",
+        allow_local_categories={"narration", "subtitle"},
+    )
+    if approved_plan is not None and plan.narration:
+        narration_plan = ControlledNarrationPlan(narration=plan.narration, voice=plan.voice)
+    else:
+        narration_plan = _build_controlled_narration_plan(
+            state,
+            video_path=merged_path,
+            analysis_path=analysis_path,
+            duration_seconds=duration_seconds,
+        )
+    tts_tasks = [
+        TaskSpec(
+            id=f"phase3_tts_{index:03d}",
+            phase="phase3",
+            kind="tts_segment",
+            description=f"并行生成旁白音频 {index}",
+            arguments={
+                "plan_version": plan_version,
+                "scene_id": segment.scene_id,
+                "execution_step_id": f"phase3_tts_{index:03d}",
+                "text": segment.text,
+                "start": segment.start,
+                "end": segment.end,
+                "voice": narration_plan.voice,
+                "audio_path": str(narration_audio_path("phase3_tts", index)),
+            },
+            resources={"tts_pool": 1},
+            conflict_keys=[
+                f"write:{narration_audio_path('phase3_tts', index).resolve(strict=False)}"
+            ],
+            output_kinds=["narration_audio"],
+            retry=RetryPolicy(
+                max_attempts=2,
+                backoff_seconds=0.5,
+                retryable_errors=["拒绝访问", "Permission", "timeout", "TTS"],
+            ),
+        )
+        for index, segment in enumerate(narration_plan.narration, start=1)
+    ]
+    narration_task = TaskSpec(
+        id="phase3_narration_mix",
+        phase="phase3",
+        kind="narration_mix",
+        tool_name="add_narration_segments",
+        description="混合旁白音频",
+        arguments={
+            "video_path": merged_path,
+            "segments": [item.model_dump() for item in narration_plan.narration],
+        },
+        depends_on=[task.id for task in tts_tasks],
+        resources={"ffmpeg_pool": 1},
+        conflict_keys=[f"write:{(WORKSPACE / 'phase3_narrated.mp4').resolve()}"],
+        output_kinds=["narrated_video"],
+    )
+    narration_execution = ExecutionPlan(
+        plan_id="phase3_narration_execution",
+        phase="phase3",
+        goal=state.user_request,
+        tasks=[*tts_tasks, narration_task],
+    )
+
+    def execute_narration(
+        task: TaskSpec,
+        dependencies: dict[str, Any],
+    ) -> TaskExecutionResult:
+        if task.kind == "tts_segment":
+            audio_path = Path(str(task.arguments["audio_path"]))
+            error = _tts_generate(
+                str(task.arguments["text"]),
+                str(task.arguments["voice"]),
+                audio_path,
+            )
+            if error or not audio_path.exists():
+                raise RuntimeError(error or "TTS 未生成音频文件")
+            return TaskExecutionResult(
+                data={
+                    "audio_path": str(audio_path.resolve()),
+                    "text": task.arguments["text"],
+                    "start": task.arguments["start"],
+                    "end": task.arguments["end"],
+                },
+                artifacts=[
+                    _task_artifact(
+                        artifact_id=f"{task.id}_audio",
+                        kind="narration_audio",
+                        path=audio_path,
+                        task=task,
+                        metadata={
+                            "plan_version": task.arguments.get("plan_version", ""),
+                            "scene_id": task.arguments.get("scene_id", ""),
+                            "execution_step_id": task.arguments.get("execution_step_id", task.id),
+                        },
+                    )
+                ],
+            )
+        if not narration_plan.narration:
+            return TaskExecutionResult(data={"path": merged_path})
+        validation_raw = _TOOL_NAME_MAP["validate_narration_timeline"].invoke(
+            {
+                "video_path": merged_path,
+                "segments": [item.model_dump() for item in narration_plan.narration],
+            }
+        )
+        validation = json.loads(str(validation_raw))
+        if validation.get("status") == "fail":
+            raise RuntimeError(f"旁白时间线校验失败: {validation}")
+        prepared_segments = [
+            dependencies[item.id].result for item in tts_tasks
+        ]
+        raw = compose_prepared_narration(
+            video_path=merged_path,
+            prepared_segments=prepared_segments,
+            output_name="phase3_narrated",
+        )
+        parsed = json.loads(str(raw))
+        path = str(parsed.get("path") or "")
+        if parsed.get("status") != "success" or not path:
+            raise RuntimeError(f"旁白混合失败: {str(raw)[:300]}")
+        return TaskExecutionResult(
+            data={"path": path},
+            artifacts=[
+                _task_artifact(
+                    artifact_id="phase3_narrated_video",
+                    kind="narrated_video",
+                    path=path,
+                    task=task,
+                )
+            ],
+        )
+
+    narration_states = _resource_scheduler(registry).run(
+        narration_execution,
+        execute_narration,
+        resume=True,
+    )
+    narrated_path = str(narration_states[narration_task.id].result["path"])
+
+    state = _phase3_checkpoint(
+        state,
+        "before_subtitle_generation",
+        allow_local_categories={"subtitle"},
+    )
+    subtitles = _subtitle_segments(narration_plan.narration, state.guidance_context)
+    subtitle_task = TaskSpec(
+        id="phase3_subtitles",
+        phase="phase3",
+        kind="subtitle_render",
+        tool_name="add_subtitles",
+        description="烧录字幕",
+        arguments={
+            "video_path": narrated_path,
+            "subtitles": subtitles,
+            "output_name": "phase3_subtitled",
+        },
+        resources={"ffmpeg_pool": 1},
+        conflict_keys=[f"write:{(WORKSPACE / 'phase3_subtitled.mp4').resolve()}"],
+        output_kinds=["subtitled_video"],
+    )
+    subtitle_execution = ExecutionPlan(
+        plan_id="phase3_subtitle_execution",
+        phase="phase3",
+        goal=state.user_request,
+        tasks=[subtitle_task],
+    )
+
+    def execute_subtitle(
+        task: TaskSpec,
+        dependencies: dict[str, Any],
+    ) -> TaskExecutionResult:
+        if not subtitles:
+            return TaskExecutionResult(data={"path": narrated_path})
+        raw = _TOOL_NAME_MAP["add_subtitles"].invoke(task.arguments)
+        try:
+            parsed = json.loads(str(raw))
+        except json.JSONDecodeError:
+            graph_logger.warning("字幕渲染失败，沿用未加字幕视频继续导出: %s", str(raw)[:300])
+            emit_benchmark_event(
+                "subtitle_render_skipped",
+                {
+                    "phase": "phase3",
+                    "reason": str(raw)[:300],
+                    "fallback_react": False,
+                },
+            )
+            return TaskExecutionResult(
+                data={"path": narrated_path, "subtitle_status": "skipped", "subtitle_error": str(raw)[:300]}
+            )
+        path = str(parsed.get("path") or "")
+        if parsed.get("status") != "success" or not path:
+            graph_logger.warning("字幕渲染未成功，沿用未加字幕视频继续导出: %s", str(raw)[:300])
+            emit_benchmark_event(
+                "subtitle_render_skipped",
+                {
+                    "phase": "phase3",
+                    "reason": str(raw)[:300],
+                    "fallback_react": False,
+                },
+            )
+            return TaskExecutionResult(
+                data={"path": narrated_path, "subtitle_status": "skipped", "subtitle_error": str(raw)[:300]}
+            )
+        return TaskExecutionResult(
+            data={"path": path},
+            artifacts=[
+                _task_artifact(
+                    artifact_id="phase3_subtitled_video",
+                    kind="subtitled_video",
+                    path=path,
+                    task=task,
+                )
+            ],
+        )
+
+    subtitle_states = _resource_scheduler(registry).run(
+        subtitle_execution,
+        execute_subtitle,
+        resume=True,
+    )
+    subtitled_path = str(subtitle_states[subtitle_task.id].result["path"])
+
+    state = _phase3_checkpoint(state, "before_export")
+    export_output_name = f"{plan.output_name}_r{REVISION:03d}"
+    export_task = TaskSpec(
+        id="phase3_export",
+        phase="phase3",
+        kind="final_export",
+        tool_name="export_video",
+        description="独占导出最终成片",
+        arguments={
+            "input_path": subtitled_path,
+            "output_name": export_output_name,
+            "resolution": plan.resolution,
+            "revision": REVISION,
+        },
+        resources={"export_pool": 1, "ffmpeg_pool": 1},
+        conflict_keys=["phase3:final_export"],
+        output_kinds=["export_candidate"],
+    )
+    evaluate_task = TaskSpec(
+        id="phase3_evaluator",
+        phase="phase3",
+        kind="final_evaluator",
+        description="校验最终成片时长和文件有效性",
+        arguments={"revision": REVISION},
+        depends_on=[export_task.id],
+        resources={"ffmpeg_pool": 1},
+        output_kinds=["phase3_evaluation"],
+    )
+    export_execution = ExecutionPlan(
+        plan_id="phase3_export_execution",
+        phase="phase3",
+        goal=state.user_request,
+        tasks=[export_task, evaluate_task],
+    )
+
+    def execute_export(
+        task: TaskSpec,
+        dependencies: dict[str, Any],
+    ) -> TaskExecutionResult:
+        if task.kind == "final_export":
+            raw = _TOOL_NAME_MAP["export_video"].invoke(
+                {
+                    "input_path": subtitled_path,
+                    "output_name": export_output_name,
+                    "resolution": plan.resolution,
+                }
+            )
+            parsed = json.loads(str(raw))
+            path = str(parsed.get("path") or "")
+            if parsed.get("status") != "success" or not path:
+                raise RuntimeError(f"最终导出失败: {str(raw)[:300]}")
+            return TaskExecutionResult(
+                data={"path": path},
+                artifacts=[
+                    _task_artifact(
+                        artifact_id=f"phase3_export_candidate_r{REVISION:03d}",
+                        kind="export_candidate",
+                        path=path,
+                        task=task,
+                        metadata={"revision": REVISION},
+                    )
+                ],
+            )
+
+        final_path = str(dependencies[export_task.id].result["path"])
+        raw = _TOOL_NAME_MAP["inspect_video_duration"].invoke(
+            {"video_path": final_path}
+        )
+        metadata = json.loads(str(raw))
+        duration = float(metadata.get("duration_seconds", 0.0) or 0.0)
+        target = state.target_duration_seconds or duration
+        tolerance = max(1.0, target * 0.08)
+        decision = (
+            "finish"
+            if duration > 0 and abs(duration - target) <= tolerance
+            else "fallback_react"
+        )
+        report = {
+            "decision": decision,
+            "path": final_path,
+            "duration_seconds": duration,
+            "target_duration_seconds": target,
+            "tolerance_seconds": tolerance,
+            "revision": REVISION,
+        }
+        if decision != "finish" and duration > target + tolerance:
+            repair_name = f"{Path(final_path).stem}_repair_r{REVISION:03d}"
+            try:
+                repair_raw = _TOOL_NAME_MAP["cut_video"].invoke(
+                    {
+                        "input_path": final_path,
+                        "start_time": 0.0,
+                        "end_time": target,
+                        "output_name": repair_name,
+                    }
+                )
+                repair = json.loads(str(repair_raw))
+                repaired_path = str(repair.get("path") or "")
+                if repair.get("status") == "success" and repaired_path:
+                    final_path = repaired_path
+                    duration = target
+                    decision = "finish"
+                    report.update(
+                        {
+                            "decision": decision,
+                            "path": final_path,
+                            "duration_seconds": duration,
+                            "repair": "trim_tail",
+                        }
+                    )
+            except Exception as exc:
+                report["repair_error"] = str(exc)[:300]
+        report_path = WORKSPACE / f"phase3_evaluation_r{REVISION:03d}.json"
+        report_path.write_text(
+            json.dumps(report, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+        if decision != "finish":
+            raise RuntimeError(f"最终成片质量校验未通过: {report}")
+        _emit_orchestration_event("evaluator_decision", {"phase": "phase3", **report})
+        return TaskExecutionResult(
+            data=report,
+            artifacts=[
+                _task_artifact(
+                    artifact_id=f"phase3_final_video_r{REVISION:03d}",
+                    kind="final_video",
+                    path=final_path,
+                    task=task,
+                    metadata={
+                        "duration_seconds": duration,
+                        "revision": REVISION,
+                        "current": True,
+                    },
+                ),
+                _task_artifact(
+                    artifact_id=f"phase3_evaluation_r{REVISION:03d}",
+                    kind="phase3_evaluation",
+                    path=report_path,
+                    task=task,
+                    metadata={"revision": REVISION},
+                ),
+            ],
+        )
+
+    export_states = _resource_scheduler(registry).run(
+        export_execution,
+        execute_export,
+        resume=True,
+    )
+    evaluation = export_states[evaluate_task.id].result
+    _emit_orchestration_event(
+        "phase3_path",
+        {
+            "phase3_path": "controlled_dag",
+            "fallback_react": False,
+            "target_duration_seconds": state.target_duration_seconds,
+            "duration_seconds": evaluation["duration_seconds"],
+            "source_used_count": len({clip.source_path for clip in plan.clips}),
+            "ffmpeg_encode_pass_count": (
+                len(plan.clips)
+                + 2
+                + (1 if narration_plan.narration else 0)
+                + (1 if subtitles else 0)
+            ),
+            "ffmpeg_codec": "libx264",
+        },
+    )
+    return json.dumps(
+        {
+            "status": "success",
+            "executor": "controlled_dag",
+            "path": evaluation["path"],
+            "duration_seconds": evaluation["duration_seconds"],
+            "clip_count": len(plan.clips),
+            "narration_segments": len(narration_plan.narration),
+            "revision": REVISION,
+        },
+        ensure_ascii=False,
+    )
+
+
 def _build_short_form_edit_plan(state: AgentState, analysis_context: str) -> ShortFormEditPlan:
     llm = _get_llm(temperature=0.1).bind(max_tokens=2400)
+    target_duration = _short_form_target_duration(state)
     response = _invoke_llm(
         llm,
         [
-            SystemMessage(content=SHORT_FORM_PLAN_PROMPT),
+            SystemMessage(content=_short_form_plan_prompt(state)),
             HumanMessage(
                 content=(
                     f"用户需求:\n{state.user_request}\n\n"
@@ -3691,8 +5213,44 @@ def _build_short_form_edit_plan(state: AgentState, analysis_context: str) -> Sho
         if clip.end - clip.start < 1.8:
             raise ShortFormExecutionError("短片计划包含过短片段")
         total_duration += clip.end - clip.start
-    if abs(total_duration - 10.0) > 0.2:
-        raise ShortFormExecutionError(f"短片计划总时长不是 10 秒: {total_duration:.2f}")
+    tolerance = max(1.0, target_duration * 0.08)
+    if total_duration > target_duration + tolerance:
+        excess = total_duration - target_duration
+        for clip in reversed(plan.clips):
+            clip_duration = clip.end - clip.start
+            reducible = max(0.0, clip_duration - 1.8)
+            if reducible <= 0:
+                continue
+            reduction = min(excess, reducible)
+            clip.end = round(clip.end - reduction, 3)
+            excess -= reduction
+            if excess <= 0.01:
+                break
+        total_duration = sum(item.end - item.start for item in plan.clips)
+        if abs(total_duration - target_duration) <= tolerance:
+            graph_logger.info(
+                "短片计划自动裁尾到目标时长: target=%.1fs adjusted=%.2fs",
+                target_duration,
+                total_duration,
+            )
+    if abs(total_duration - target_duration) > tolerance:
+        raise ShortFormExecutionError(
+            f"短片计划总时长不符合目标 {target_duration:.1f} 秒: {total_duration:.2f}"
+        )
+    adjusted_narration: list[ShortFormNarration] = []
+    for item in plan.narration:
+        if item.start >= target_duration:
+            continue
+        if item.end > target_duration:
+            item.end = target_duration
+        if item.end <= item.start or item.end > target_duration + tolerance:
+            raise ShortFormExecutionError("短片计划包含超出目标时长的旁白时间段")
+        adjusted_narration.append(item)
+    if not adjusted_narration:
+        raise ShortFormExecutionError("短片计划没有可用旁白时间段")
+    plan.narration = adjusted_narration
+    if not str(plan.output_name or "").strip():
+        plan.output_name = _short_form_output_name(state)
     return plan
 
 
@@ -3755,56 +5313,154 @@ def _invoke_phase3_tool(tool_name: str, arguments: dict[str, Any]) -> str:
     return result
 
 
+def _run_short_form_visual_compose_ffmpeg(
+    plan: ShortFormEditPlan,
+    *,
+    output_name: str,
+) -> str | None:
+    if not plan.clips:
+        return None
+    ffmpeg = shutil.which("ffmpeg")
+    if not ffmpeg:
+        return None
+    output_path = WORKSPACE / f"{output_name}.mp4"
+    cmd = [ffmpeg, "-hide_banner", "-y"]
+    filter_parts: list[str] = []
+    concat_inputs: list[str] = []
+    for index, clip in enumerate(plan.clips):
+        duration = max(0.1, float(clip.end) - float(clip.start))
+        cmd.extend(
+            [
+                "-ss",
+                f"{float(clip.start):.3f}",
+                "-t",
+                f"{duration:.3f}",
+                "-i",
+                clip.source_path,
+            ]
+        )
+        filter_parts.append(
+            f"[{index}:v]setpts=PTS-STARTPTS,"
+            "scale=1280:720:force_original_aspect_ratio=decrease,"
+            "pad=1280:720:(ow-iw)/2:(oh-ih)/2,setsar=1"
+            f"[v{index}]"
+        )
+        concat_inputs.append(f"[v{index}]")
+    filter_parts.append(
+        "".join(concat_inputs)
+        + f"concat=n={len(plan.clips)}:v=1:a=0[vout]"
+    )
+    cmd.extend(
+        [
+            "-filter_complex",
+            ";".join(filter_parts),
+            "-map",
+            "[vout]",
+            "-an",
+            "-c:v",
+            "libx264",
+            "-preset",
+            "veryfast",
+            "-crf",
+            "23",
+            "-r",
+            "30",
+            "-pix_fmt",
+            "yuv420p",
+            str(output_path),
+        ]
+    )
+    started = time.perf_counter()
+    try:
+        completed = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=900,
+        )
+    except Exception as exc:
+        graph_logger.warning("短片 FFmpeg 快速合成不可用，回退旧路径: %s", exc)
+        return None
+    elapsed = time.perf_counter() - started
+    if completed.returncode != 0 or not output_path.exists():
+        graph_logger.warning(
+            "短片 FFmpeg 快速合成失败，回退旧路径: %s",
+            (completed.stderr or completed.stdout)[-800:],
+        )
+        return None
+    emit_benchmark_event(
+        "tool_completed",
+        {
+            "phase": "phase3",
+            "tool_name": "short_form_visual_compose_ffmpeg",
+            "duration_seconds": round(elapsed, 3),
+            "ffmpeg_codec": "libx264",
+            "ffmpeg_preset": "veryfast",
+        },
+    )
+    return str(output_path.resolve())
+
+
 def _run_short_form_editor(state: AgentState) -> str:
     graph_logger.info("⚡ Phase 3 使用短片结构化执行器")
     analysis_context = _build_full_analysis_context()
     plan = _build_short_form_edit_plan(state, analysis_context)
+    target_duration = _short_form_target_duration(state)
+    output_stem = str(plan.output_name or _short_form_output_name(state)).strip()
 
-    def cut_one(item: tuple[int, ShortFormClip]) -> tuple[int, str]:
-        index, clip = item
-        raw = _invoke_phase3_tool(
-            "cut_video",
-            {
-                "input_path": clip.source_path,
-                "start_time": clip.start,
-                "end_time": clip.end,
-                "output_name": f"short_clip_{index:02d}",
-            },
-        )
-        parsed = json.loads(raw)
-        return index, str(parsed["path"])
-
-    cut_paths: list[tuple[int, str]] = []
-    with ThreadPoolExecutor(
-        max_workers=min(len(plan.clips), max(1, FFMPEG_POOL_SIZE)),
-        thread_name_prefix="short-form-cut",
-    ) as executor:
-        futures = {
-            executor.submit(cut_one, item): item[0]
-            for item in enumerate(plan.clips, start=1)
-        }
-        for future in as_completed(futures):
-            cut_paths.append(future.result())
-    ordered_paths = [path for _, path in sorted(cut_paths)]
-
-    merged = json.loads(
-        _invoke_phase3_tool(
-            "merge_videos",
-            {
-                "video_paths": ordered_paths,
-                "output_name": "short_merged_10s",
-                "target_duration": 10.0,
-                "tolerance": 0.02,
-            },
-        )
+    merged_path = _run_short_form_visual_compose_ffmpeg(
+        plan,
+        output_name=f"{output_stem}_visual",
     )
-    merged_path = str(merged["path"])
+    fast_visual = bool(merged_path)
+    if not merged_path:
+        def cut_one(item: tuple[int, ShortFormClip]) -> tuple[int, str]:
+            index, clip = item
+            raw = _invoke_phase3_tool(
+                "cut_video",
+                {
+                    "input_path": clip.source_path,
+                    "start_time": clip.start,
+                    "end_time": clip.end,
+                    "output_name": f"short_clip_{index:02d}",
+                },
+            )
+            parsed = json.loads(raw)
+            return index, str(parsed["path"])
+
+        cut_paths: list[tuple[int, str]] = []
+        with ThreadPoolExecutor(
+            max_workers=min(len(plan.clips), max(1, FFMPEG_POOL_SIZE)),
+            thread_name_prefix="short-form-cut",
+        ) as executor:
+            futures = {
+                executor.submit(cut_one, item): item[0]
+                for item in enumerate(plan.clips, start=1)
+            }
+            for future in as_completed(futures):
+                cut_paths.append(future.result())
+        ordered_paths = [path for _, path in sorted(cut_paths)]
+
+        merged = json.loads(
+            _invoke_phase3_tool(
+                "merge_videos",
+                {
+                    "video_paths": ordered_paths,
+                    "output_name": f"{output_stem}_merged",
+                    "target_duration": target_duration,
+                    "tolerance": 0.02,
+                },
+            )
+        )
+        merged_path = str(merged["path"])
 
     _invoke_phase3_tool(
         "analyze_video",
         {
             "video_path": merged_path,
-            "analysis_goal": "逐段核对10秒新疆旅游宣传片的画面内容与旁白匹配关系",
+            "analysis_goal": f"逐段核对{target_duration:.1f}秒短片的画面内容与旁白匹配关系",
         },
     )
     narration = [item.model_dump() for item in plan.narration]
@@ -3830,38 +5486,56 @@ def _run_short_form_editor(state: AgentState) -> str:
                 "segments": narration,
                 "voice": "Ethan",
                 "add_subtitle": True,
-                "output_name": "short_narrated_10s",
+                "output_name": f"{output_stem}_narrated",
                 "min_narration_coverage_ratio": 0.35,
             },
         )
     )
-    exported = json.loads(
-        _invoke_phase3_tool(
-            "export_video",
-            {
-                "input_path": str(narrated["path"]),
-                "output_name": plan.output_name,
-                "resolution": "720p",
-            },
+    if fast_visual:
+        final_path = str(narrated["path"])
+    else:
+        exported = json.loads(
+            _invoke_phase3_tool(
+                "export_video",
+                {
+                    "input_path": str(narrated["path"]),
+                    "output_name": f"{output_stem}_r{REVISION:03d}",
+                    "resolution": "720p",
+                },
+            )
         )
-    )
+        final_path = str(exported["path"])
     final_meta = json.loads(
         _invoke_phase3_tool(
             "inspect_video_duration",
-            {"video_path": str(exported["path"])},
+            {"video_path": final_path},
         )
     )
     duration = float(final_meta.get("duration_seconds", 0.0) or 0.0)
-    if abs(duration - 10.0) > 0.2:
+    _register_revision_final(final_path, "phase3_short_form")
+    if abs(duration - target_duration) > max(1.0, target_duration * 0.08):
         raise ShortFormExecutionError(f"最终成片时长不合格: {duration:.3f}s")
+    _emit_orchestration_event(
+        "phase3_path",
+        {
+            "phase3_path": "short_form",
+            "fallback_react": False,
+            "target_duration_seconds": target_duration,
+            "duration_seconds": duration,
+            "source_used_count": len({clip.source_path for clip in plan.clips}),
+            "ffmpeg_encode_pass_count": 2 if fast_visual else len(plan.clips) + 3,
+            "ffmpeg_codec": "libx264",
+        },
+    )
     return json.dumps(
         {
             "status": "success",
             "executor": "short_form",
-            "path": exported["path"],
+            "path": final_path,
             "duration_seconds": duration,
             "clip_count": len(plan.clips),
             "narration_segments": len(plan.narration),
+            "fast_visual_compose": fast_visual,
         },
         ensure_ascii=False,
     )
@@ -3874,6 +5548,24 @@ def react_editor_node(state: AgentState) -> dict[str, Any]:
     LLM 思考 → 调工具 → 观察结果 → 再思考 → … → 完成
     """
     graph_logger.info("🎬 ═══ Phase 3 开始: ReAct Editor 自主创作 ═══")
+    try:
+        state = _phase3_checkpoint(
+            state,
+            "before_timeline_execution",
+            allow_local_categories={"general", "narration", "subtitle"},
+        )
+    except SteeringReplanRequested as exc:
+        updated = _state_with_current_guidance(state)
+        return {
+            "phase": {
+                "phase1": "planning",
+                "phase2": "researching",
+                "phase3": "react",
+            }.get(exc.required_phase, "react"),
+            "should_end": False,
+            "user_request": updated.user_request,
+            "guidance_context": updated.guidance_context,
+        }
 
     if _iter_analysis_json_files():
         try:
@@ -3883,6 +5575,18 @@ def react_editor_node(state: AgentState) -> dict[str, Any]:
                 "phase": "done",
                 "should_end": True,
                 "final_output": final_msg,
+            }
+        except SteeringReplanRequested as exc:
+            updated = _state_with_current_guidance(state)
+            return {
+                "phase": {
+                    "phase1": "planning",
+                    "phase2": "researching",
+                    "phase3": "react",
+                }.get(exc.required_phase, "react"),
+                "should_end": False,
+                "user_request": updated.user_request,
+                "guidance_context": updated.guidance_context,
             }
         except ModelCallError:
             raise
@@ -3895,7 +5599,7 @@ def react_editor_node(state: AgentState) -> dict[str, Any]:
 
     if (
         SHORT_FORM_OPTIMIZATIONS
-        and 0 < state.target_duration_seconds <= 15
+        and 0 < state.target_duration_seconds <= 20
         and state.editing_blueprint
     ):
         try:
@@ -3961,7 +5665,10 @@ def react_editor_node(state: AgentState) -> dict[str, Any]:
     user_message = "\n".join(user_msg_parts)
 
     # ── 创建 Phase 3 ReAct Agent ──
-    llm = _get_llm(temperature=0.3)  # 略高温度鼓励创意
+    llm = _get_llm(temperature=0.3).bind_tools(
+        EDITING_TOOLS,
+        parallel_tool_calls=False,
+    )
     react_agent = create_react_agent(
         model=llm,
         tools=EDITING_TOOLS,
@@ -3992,6 +5699,19 @@ def react_editor_node(state: AgentState) -> dict[str, Any]:
             )
         _log_react_tool_trace(result_state)
         final_msg = _extract_final_message(result_state)
+        _register_latest_react_video()
+    except SteeringReplanRequested as exc:
+        updated = _state_with_current_guidance(state)
+        return {
+            "phase": {
+                "phase1": "planning",
+                "phase2": "researching",
+                "phase3": "react",
+            }.get(exc.required_phase, "react"),
+            "should_end": False,
+            "user_request": updated.user_request,
+            "guidance_context": updated.guidance_context,
+        }
     except ModelCallError:
         raise
     except Exception as e:
@@ -4023,26 +5743,53 @@ def build_graph() -> Any:
     graph = StateGraph(AgentState)
 
     # 添加节点
+    graph.add_node("steering_entry", steering_entry_node)
+    graph.add_node("steering_after_planner", steering_after_planner_node)
+    graph.add_node("steering_after_phase1", steering_after_phase1_node)
+    graph.add_node("steering_after_material_gap", steering_after_material_gap_node)
+    graph.add_node("steering_after_blueprint", steering_after_blueprint_node)
     graph.add_node("planner", planner_node)              # Phase 1: 规划素材准备
     graph.add_node("phase1_scheduler", phase1_scheduler_node)
     graph.add_node("material_gap_evaluator", material_gap_evaluator_node)
     graph.add_node("editing_research", editing_research_node)  # Phase 2: 深度剪辑研究
+    graph.add_node("generate_editing_plan", generate_editing_plan_node)
+    graph.add_node("validate_editing_plan", validate_editing_plan_node)
+    graph.add_node("plan_review_gate", plan_review_gate_node)
     graph.add_node("react_editor", react_editor_node)    # Phase 3: 自主创作
 
     # Phase 1 边
-    graph.add_edge(START, "planner")          # 入口 → Planner
-    graph.add_edge("planner", "phase1_scheduler")
-    graph.add_edge("phase1_scheduler", "material_gap_evaluator")
+    graph.add_edge(START, "steering_entry")
+    graph.add_conditional_edges("steering_entry", _route_steering_entry)
+    graph.add_edge("planner", "steering_after_planner")
+    graph.add_conditional_edges("steering_after_planner", _route_after_planner_steering)
+    graph.add_edge("phase1_scheduler", "steering_after_phase1")
+    graph.add_conditional_edges("steering_after_phase1", _route_after_phase1_steering)
+    graph.add_edge("material_gap_evaluator", "steering_after_material_gap")
     graph.add_conditional_edges(
-        "material_gap_evaluator",
-        route_after_material_gap,
+        "steering_after_material_gap",
+        _route_after_material_gap_steering,
     )
 
     # Phase 2 → Phase 3
-    graph.add_edge("editing_research", "react_editor")  # 深度研究 → ReAct Editor
+    graph.add_edge("editing_research", "steering_after_blueprint")
+    graph.add_conditional_edges("steering_after_blueprint", _route_after_blueprint_steering)
+    graph.add_edge("generate_editing_plan", "validate_editing_plan")
+    graph.add_edge("validate_editing_plan", "plan_review_gate")
+    graph.add_edge("plan_review_gate", "react_editor")
 
     # Phase 3 边
-    graph.add_edge("react_editor", "__end__")  # ReAct Editor → 结束
+    graph.add_conditional_edges(
+        "react_editor",
+        lambda state: (
+            "__end__"
+            if state.should_end or state.phase == "done"
+            else "planner"
+            if state.phase == "planning"
+            else "editing_research"
+            if state.phase == "researching"
+            else "react_editor"
+        ),
+    )
 
     return graph.compile()
 

@@ -78,12 +78,22 @@ class BackendHandler(BaseHTTPRequestHandler):
                             "GET /jobs/{job_id}/artifacts",
                             "GET /jobs/{job_id}/events",
                             "GET /jobs/{job_id}/events/stream",
+                            "GET /jobs/{job_id}/messages",
+                            "GET /jobs/{job_id}/plans/current",
+                            "GET /jobs/{job_id}/plans/{version}",
+                            "GET /jobs/{job_id}/plans/diff?from=v001&to=v002",
                             "GET /files?path=<absolute-or-project-relative-path>",
                             "GET /uploads",
                             "POST /uploads",
                             "DELETE /uploads?path=user_temp/<file>",
                             "POST /jobs/{job_id}/cancel",
                             "POST /jobs/{job_id}/resume",
+                            "POST /jobs/{job_id}/messages",
+                            "POST /jobs/{job_id}/pause",
+                            "POST /jobs/{job_id}/approve",
+                            "POST /jobs/{job_id}/plans/{version}/feedback",
+                            "POST /jobs/{job_id}/plans/{version}/approve",
+                            "POST /jobs/{job_id}/plans/{version}/reject",
                             "DELETE /jobs/{job_id}",
                         ],
                     },
@@ -135,6 +145,30 @@ class BackendHandler(BaseHTTPRequestHandler):
                 items = SERVICE.runtime_manager.list_events(job_id, after_sequence=after_sequence)
                 self._write_json(HTTPStatus.OK, {"items": items})
                 return
+
+            if path.startswith("/jobs/") and path.endswith("/messages"):
+                job_id = path.split("/")[2]
+                items = SERVICE.runtime_manager.list_messages(job_id)
+                self._write_json(HTTPStatus.OK, {"items": items})
+                return
+
+            if path.startswith("/jobs/") and "/plans/" in path:
+                parts = path.split("/")
+                job_id = parts[2]
+                if len(parts) >= 5 and parts[3] == "plans" and parts[4] == "current":
+                    self._write_json(HTTPStatus.OK, SERVICE.runtime_manager.get_current_plan(job_id))
+                    return
+                if len(parts) >= 5 and parts[3] == "plans" and parts[4] == "diff":
+                    from_version = query.get("from", [""])[0]
+                    to_version = query.get("to", [""])[0]
+                    self._write_json(
+                        HTTPStatus.OK,
+                        SERVICE.runtime_manager.get_plan_diff(job_id, from_version, to_version),
+                    )
+                    return
+                if len(parts) >= 5 and parts[3] == "plans":
+                    self._write_json(HTTPStatus.OK, SERVICE.runtime_manager.get_plan(job_id, parts[4]))
+                    return
 
             if path.startswith("/jobs/"):
                 job_id = path.split("/")[2]
@@ -189,6 +223,59 @@ class BackendHandler(BaseHTTPRequestHandler):
                 result = SERVICE.runtime_manager.resume_job(job_id)
                 self._write_json(HTTPStatus.OK, result)
                 return
+
+            if path.startswith("/jobs/") and path.endswith("/messages"):
+                job_id = path.split("/")[2]
+                payload = self._read_json()
+                result = SERVICE.runtime_manager.add_message(
+                    job_id,
+                    str(payload.get("content") or ""),
+                )
+                self._write_json(HTTPStatus.CREATED, result)
+                return
+
+            if path.startswith("/jobs/") and path.endswith("/pause"):
+                job_id = path.split("/")[2]
+                payload = self._read_json()
+                result = SERVICE.runtime_manager.pause_job(
+                    job_id,
+                    str(payload.get("mode") or "next_safe_point"),
+                )
+                self._write_json(HTTPStatus.OK, result)
+                return
+
+            if path.startswith("/jobs/") and path.endswith("/approve") and "/plans/" not in path:
+                job_id = path.split("/")[2]
+                payload = self._read_json()
+                result = SERVICE.runtime_manager.approve_job(
+                    job_id,
+                    str(payload.get("pause_token") or ""),
+                )
+                self._write_json(HTTPStatus.OK, result)
+                return
+
+            if path.startswith("/jobs/") and "/plans/" in path:
+                parts = path.split("/")
+                job_id = parts[2]
+                version = parts[4] if len(parts) > 4 else ""
+                action = parts[5] if len(parts) > 5 else ""
+                payload = self._read_json()
+                if action == "feedback":
+                    result = SERVICE.runtime_manager.apply_plan_feedback(
+                        job_id,
+                        version,
+                        str(payload.get("feedback") or payload.get("content") or ""),
+                    )
+                    self._write_json(HTTPStatus.CREATED, result)
+                    return
+                if action == "approve":
+                    result = SERVICE.runtime_manager.approve_plan(job_id, version)
+                    self._write_json(HTTPStatus.OK, result)
+                    return
+                if action == "reject":
+                    result = SERVICE.runtime_manager.reject_plan(job_id, version)
+                    self._write_json(HTTPStatus.OK, result)
+                    return
 
             self._write_json(HTTPStatus.NOT_FOUND, {"error": f"Unknown route: {path}"})
         except RuntimeError as exc:

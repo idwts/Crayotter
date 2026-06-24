@@ -117,6 +117,12 @@ def main(argv: list[str] | None = None) -> int:
                 "output_files": agent._list_workspace_mp4_files(),
             }
         )
+        if getattr(agent, "POST_TASK_REVIEW_MODE", "async") == "async":
+            agent.run_post_task_review(
+                task,
+                final_output,
+                event_callback=on_event,
+            )
         return 0
     except Exception as exc:
         emitter.send({"kind": "error", "error": str(exc)})

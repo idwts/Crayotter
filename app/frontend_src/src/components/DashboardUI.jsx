@@ -1,4 +1,5 @@
 import React, { useEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import {
   Activity,
   AlertTriangle,
@@ -18,7 +19,6 @@ import {
   Languages,
   LayoutDashboard,
   Menu,
-  Paperclip,
   Play,
   Plus,
   RefreshCw,
@@ -38,7 +38,6 @@ import {
 import artifactCompactImage from "../assets/artifact-empty-compact.webp";
 import artifactWideImage from "../assets/artifact-empty-wide.webp";
 import brandMascotImage from "../assets/brand-mascot.png";
-import workflowEmptyImage from "../assets/workflow-empty.webp";
 
 export const cx = (...classes) => classes.filter(Boolean).join(" ");
 
@@ -301,9 +300,7 @@ export function WorkbenchView(props) {
     summary,
     currentPhase,
     currentPhaseCode,
-    progressCards,
     primaryArtifacts,
-    uploads,
     activeTab,
     setActiveTab,
     displayTaskTitle,
@@ -314,31 +311,25 @@ export function WorkbenchView(props) {
     artifactLabel,
     fileUrl,
     downloadFileUrl,
-    uploadAnalysisBadgeLabel,
-    uploadAnalysisHint,
-    formatBytes,
     formatDuration,
-    setTaskText,
-    deleteUpload,
-    loadUploads,
+    planInfo,
+    sendPlanFeedback,
+    approvePlan,
+    rejectPlan,
+    notify,
     composerProps,
     copyFullLog,
     downloadFullLog,
-    notify,
     t,
   } = props;
 
-  const latestCards = progressCards.length
-    ? progressCards
-    : selectedMeaningfulEvents.slice(-5).map((event) => ({ event, item: describeEvent(event) }));
+  const visibleActiveTab = ["details", "trace"].includes(activeTab) ? activeTab : "details";
 
   return (
     <div className="workspace-view">
       <OverviewStrip
         selectedJob={selectedJob}
         eventsCount={logEvents.length}
-        uploadsCount={uploads.length}
-        artifactsCount={primaryArtifacts.length}
         currentPhase={currentPhase}
         statusLabel={statusLabel}
         t={t}
@@ -356,16 +347,26 @@ export function WorkbenchView(props) {
             t={t}
           />
           <PhaseTracker selectedJob={selectedJob} currentPhaseCode={currentPhaseCode} t={t} />
-          <EventTimeline
-            events={latestCards}
-            selectedJob={selectedJob}
-            formatDate={formatDate}
+          <EditingPlanPanel
+            planInfo={planInfo}
+            sendPlanFeedback={sendPlanFeedback}
+            approvePlan={approvePlan}
+            rejectPlan={rejectPlan}
+            notify={notify}
+            t={t}
+          />
+          <WorkbenchVideoStage
+            artifacts={primaryArtifacts}
+            artifactLabel={artifactLabel}
+            fileUrl={fileUrl}
+            downloadFileUrl={downloadFileUrl}
+            formatDuration={formatDuration}
             t={t}
           />
         </div>
 
-        <ContextPanel activeTab={activeTab} setActiveTab={setActiveTab} uploadsCount={uploads.length} artifactsCount={primaryArtifacts.length} t={t}>
-          {activeTab === "details" && (
+        <ContextPanel activeTab={visibleActiveTab} setActiveTab={setActiveTab} t={t}>
+          {visibleActiveTab === "details" && (
             <DetailsTab
               selectedJob={selectedJob}
               logEvents={logEvents}
@@ -378,35 +379,7 @@ export function WorkbenchView(props) {
               t={t}
             />
           )}
-          {activeTab === "materials" && (
-            <MaterialsList
-              uploads={uploads}
-              uploadAnalysisBadgeLabel={uploadAnalysisBadgeLabel}
-              uploadAnalysisHint={uploadAnalysisHint}
-              formatBytes={formatBytes}
-              formatDate={formatDate}
-              fileUrl={fileUrl}
-              setTaskText={setTaskText}
-              deleteUpload={deleteUpload}
-              loadUploads={loadUploads}
-              notify={notify}
-              compact
-              t={t}
-            />
-          )}
-          {activeTab === "artifacts" && (
-            <ArtifactsList
-              artifacts={primaryArtifacts}
-              artifactLabel={artifactLabel}
-              fileUrl={fileUrl}
-              downloadFileUrl={downloadFileUrl}
-              formatBytes={formatBytes}
-              formatDuration={formatDuration}
-              compact
-              t={t}
-            />
-          )}
-          {activeTab === "trace" && (
+          {visibleActiveTab === "trace" && (
             <AgentTrace events={selectedMeaningfulEvents} formatDate={formatDate} describeEvent={describeEvent} t={t} />
           )}
         </ContextPanel>
@@ -417,7 +390,7 @@ export function WorkbenchView(props) {
   );
 }
 
-function OverviewStrip({ selectedJob, eventsCount, uploadsCount, artifactsCount, currentPhase, statusLabel, t }) {
+function OverviewStrip({ selectedJob, eventsCount, currentPhase, statusLabel, t }) {
   const stats = [
     {
       icon: Activity,
@@ -427,7 +400,6 @@ function OverviewStrip({ selectedJob, eventsCount, uploadsCount, artifactsCount,
     },
     { icon: Workflow, label: t("overviewPhase"), value: selectedJob ? currentPhase : t("notStarted"), tone: "violet" },
     { icon: ScrollText, label: t("overviewEvents"), value: String(eventsCount), suffix: t("itemsUnit"), tone: "sky" },
-    { icon: FolderOpen, label: t("overviewAssets"), value: String(uploadsCount + artifactsCount), suffix: t("itemsUnit"), tone: "emerald" },
   ];
   return (
     <section className="overview-grid">
@@ -458,9 +430,11 @@ function TaskHero({ selectedJob, summary, displayTaskTitle, statusLabel, modeLab
         <h2 className="mt-3 max-w-3xl break-words text-xl font-bold leading-8 text-slate-900 sm:text-2xl">
           {selectedJob ? displayTaskTitle(selectedJob) : t("readyTitle")}
         </h2>
-        <p className="mt-2 max-w-3xl text-sm leading-6 text-slate-500">
-          {selectedJob ? summary : t("readyBody")}
-        </p>
+        {!selectedJob && (
+          <p className="mt-2 max-w-3xl text-sm leading-6 text-slate-500">
+            {t("readyBody")}
+          </p>
+        )}
         <div className="mt-4 flex flex-wrap items-center gap-2">
           <StatusPill status={selectedJob?.status || "pending"} label={selectedJob ? statusLabel(selectedJob.status) : t("idle")} />
           {selectedJob && <span className="soft-chip">{modeLabel(selectedJob.mode)}</span>}
@@ -532,52 +506,140 @@ function PhaseTracker({ selectedJob, currentPhaseCode, t }) {
   );
 }
 
-function EventTimeline({ events, selectedJob, formatDate, t }) {
+function EditingPlanPanel({ planInfo, sendPlanFeedback, approvePlan, rejectPlan, notify, t }) {
+  const [feedback, setFeedback] = useState("");
+  const [submitting, setSubmitting] = useState(false);
+  const plan = planInfo?.plan;
+  if (!plan) return null;
+  const scenes = Array.isArray(plan.scenes) ? plan.scenes : [];
+  const currentVersion = plan.version || "v001";
+  const diff = planInfo?.diff || plan.diff_from_previous;
+  const canApprove = ["VALIDATED", "WAITING_FOR_USER_REVIEW", "REVISING"].includes(plan.status);
+  const lastScene = scenes.length > 0 ? scenes[scenes.length - 1] : null;
+  const total = Number(plan.target_duration_seconds || lastScene?.end || 0) || 1;
+  const submitFeedback = async () => {
+    const text = feedback.trim();
+    if (!text || submitting) return;
+    setSubmitting(true);
+    try {
+      try {
+        await sendPlanFeedback(currentVersion, text);
+        setFeedback("");
+      } catch (error) {
+        notify("error", t("operationFailed", { message: error.message }));
+      }
+    } finally {
+      setSubmitting(false);
+    }
+  };
   return (
-    <section className="soft-section execution-stream-section motion-enter">
-      <div className="section-heading">
+    <section className="editing-plan-panel motion-enter">
+      <div className="editing-plan-header">
         <div>
-          <div className="eyebrow">{t("executionStream")}</div>
-          <h3>{t("recentActivity")}</h3>
+          <div className="eyebrow">{t("editingPlan")}</div>
+          <h3>{t("editingPlanTitle")}</h3>
         </div>
-        {selectedJob?.status === "running" && <span className="live-label"><span />LIVE</span>}
+        <div className="editing-plan-badges">
+          <span>{currentVersion}</span>
+          <span>{t(`planStatus_${plan.status}`) || plan.status}</span>
+        </div>
       </div>
-      <div className={cx("execution-stream-body", !events.length && "empty")}>
-        {events.length ? (
-          <div className="timeline-list">
-            {events.map(({ event, item }, index) => (
-              <article className="timeline-row" key={event.sequence || `${event.type}-${event.timestamp}`} style={{ animationDelay: `${index * 45}ms` }}>
-                <div className="timeline-marker"><span /></div>
-                <div className="timeline-content min-w-0 flex-1 pb-4">
-                  <div className="timeline-heading flex flex-col gap-1 sm:flex-row sm:items-start sm:justify-between">
-                    <h4 className="timeline-title text-sm font-semibold text-slate-700">{item.title}</h4>
-                    <time className="timeline-time whitespace-nowrap text-[10px] text-slate-400">{formatDate(event.timestamp)}</time>
-                  </div>
-                  <p className="timeline-description mt-1 break-words text-xs leading-5 text-slate-500">{item.body}</p>
-                </div>
-              </article>
-            ))}
-          </div>
-        ) : (
-          <div className="empty-stage">
-            <img src={workflowEmptyImage} alt="" aria-hidden="true" />
-            <div>
-              <h4>{t("readyTitle")}</h4>
-              <p>{t("noEvents")}</p>
+      <div className="editing-plan-summary">
+        <span>{t("duration")} {Math.round(Number(plan.target_duration_seconds || 0))}s</span>
+        <span>{plan.aspect_ratio || "16:9"}</span>
+        <span>{plan.style || t("planStylePending")}</span>
+      </div>
+      <div className="editing-plan-timeline" aria-label={t("planTimeline")}>
+        {scenes.map((scene) => {
+          const width = Math.max(8, ((Number(scene.end || 0) - Number(scene.start || 0)) / total) * 100);
+          return (
+            <div className="editing-plan-block" key={scene.scene_id} style={{ flexBasis: `${width}%` }} title={`${scene.scene_id} ${scene.start}s-${scene.end}s`}>
+              <span>{scene.scene_id}</span>
             </div>
-          </div>
-        )}
+          );
+        })}
+      </div>
+      <div className="editing-scene-list">
+        {scenes.slice(0, 6).map((scene) => (
+          <article className="editing-scene-card" key={scene.scene_id}>
+            <div>
+              <strong>{scene.scene_id}</strong>
+              <span>{Number(scene.start || 0).toFixed(1)}s - {Number(scene.end || 0).toFixed(1)}s</span>
+            </div>
+            <p>{scene.narrative_purpose || t("planScenePurposePending")}</p>
+            <small title={scene.source_path}>{scene.source_path?.split(/[\\/]/).pop() || t("planNoSource")}</small>
+            {(scene.subtitle || scene.narration) && <em>{scene.subtitle || scene.narration}</em>}
+          </article>
+        ))}
+      </div>
+      {diff?.summary?.length > 0 && (
+        <div className="editing-plan-diff">
+          <strong>{t("planDiff")}</strong>
+          <p>{diff.summary.join(" · ")}</p>
+        </div>
+      )}
+      <div className="editing-plan-actions">
+        <textarea
+          value={feedback}
+          onChange={(event) => setFeedback(event.target.value)}
+          placeholder={t("planFeedbackPlaceholder")}
+        />
+        <div>
+          <button className="secondary-button" disabled={!feedback.trim() || submitting} onClick={submitFeedback} type="button">
+            <Send size={15} />{submitting ? t("processing") : t("sendPlanFeedback")}
+          </button>
+          <button className="primary-button" disabled={!canApprove} onClick={() => approvePlan(currentVersion).catch((error) => notify("error", t("operationFailed", { message: error.message })))} type="button">
+            <Check size={15} />{t("approvePlan")}
+          </button>
+          <button className="text-action" onClick={() => rejectPlan(currentVersion).catch((error) => notify("error", t("operationFailed", { message: error.message })))} type="button">
+            {t("rejectPlan")}
+          </button>
+        </div>
       </div>
     </section>
   );
 }
 
-function ContextPanel({ activeTab, setActiveTab, uploadsCount, artifactsCount, children, t }) {
+function WorkbenchVideoStage({ artifacts, fileUrl, downloadFileUrl, t }) {
+  const videoArtifacts = (artifacts || []).filter((artifact) => {
+    const suffix = String(artifact?.suffix || "").toLowerCase();
+    return artifact?.valid !== false
+      && [".mp4", ".webm", ".mov", ".m4v"].includes(suffix)
+      && artifact?.kind !== "source_video";
+  });
+  const [previewArtifact, setPreviewArtifact] = useState(null);
+  const featuredArtifact = videoArtifacts.find((artifact) => artifact.kind === "final_video" && artifact.is_current)
+    || videoArtifacts.at(-1);
+
+  if (!featuredArtifact) return null;
+  return (
+    <section className="soft-section workbench-video-stage motion-enter">
+      <div className="section-heading compact">
+        <div>
+          <div className="eyebrow">{t("workbenchVideoEyebrow")}</div>
+          <h3>{t("workbenchVideoTitle")}</h3>
+        </div>
+        <span className="soft-chip">{videoArtifacts.length} {t("itemsUnit")}</span>
+      </div>
+      <button
+        className="workbench-video-open"
+        onClick={() => setPreviewArtifact(featuredArtifact)}
+        type="button"
+        aria-label={t("preview")}
+      >
+        <span><Play size={26} fill="currentColor" /></span>
+      </button>
+      {previewArtifact && (
+        <VideoPreviewModal artifact={previewArtifact} fileUrl={fileUrl} downloadFileUrl={downloadFileUrl} setArtifact={setPreviewArtifact} t={t} />
+      )}
+    </section>
+  );
+}
+
+function ContextPanel({ activeTab, setActiveTab, children, t }) {
   const tabs = [
     { id: "details", label: t("details") },
     { id: "trace", label: t("agentTrace") },
-    { id: "materials", label: t("navMaterials"), count: uploadsCount },
-    { id: "artifacts", label: t("artifacts"), count: artifactsCount },
   ];
   return (
     <aside className="context-panel">
@@ -662,6 +724,13 @@ function AgentTrace({ events, formatDate, describeEvent, t }) {
     "tool_called",
     "tool_result",
     "blueprint_created",
+    "editing_plan_created",
+    "editing_plan_validated",
+    "plan_review_waiting",
+    "plan_revised",
+    "plan_approved",
+    "editing_plan_frozen",
+    "plan_validation_failed",
     "artifact_created",
     "job_completed",
     "task_completed",
@@ -691,7 +760,7 @@ function AgentTrace({ events, formatDate, describeEvent, t }) {
         return;
       }
     }
-    const category = ["job_failed", "task_failed", "job_stalled", "step_failed"].includes(event.type)
+    const category = ["job_failed", "task_failed", "job_stalled", "step_failed", "plan_validation_failed"].includes(event.type)
       ? "errors"
       : ["phase_started", "phase_state", "plan_created", "plan_summary", "thinking_summary", "blueprint_created"].includes(event.type)
         ? "phases"
@@ -883,7 +952,7 @@ export function JobsView({
                   )}
                   <button
                     className="danger-button"
-                    disabled={selectedJob.status === "running"}
+                    disabled={["queued", "running"].includes(selectedJob.status)}
                     onClick={() => deleteJob(selectedJob.job_id)}
                     type="button"
                   >
@@ -1094,6 +1163,7 @@ function ArtifactsList({
                   <strong>{artifactLabel(artifact)}</strong>
                   <p title={artifact.name}>{artifact.name}</p>
                   <div className="artifact-meta">
+                    {artifact.kind === "final_video" && artifact.revision && <span>{t("revisionLabel", { revision: artifact.revision })}{artifact.is_current ? ` · ${t("currentVersion")}` : ""}</span>}
                     {isVideo && <span>{t("duration")} {formatDuration(artifact.duration_seconds)}</span>}
                     <span>{t("fileSize")} {formatBytes(artifact.size_bytes)}</span>
                   </div>
@@ -1139,6 +1209,29 @@ function ArtifactsList({
 }
 
 function VideoPreviewModal({ artifact, fileUrl, downloadFileUrl, setArtifact, t }) {
+  const videoRef = useRef(null);
+  const [playbackRate, setPlaybackRate] = useState(1);
+  const rates = [0.75, 1, 1.25, 1.5, 2];
+
+  const closePreview = (event) => {
+    event?.preventDefault?.();
+    event?.stopPropagation?.();
+    setArtifact(null);
+  };
+
+  const skipVideo = (seconds) => {
+    const video = videoRef.current;
+    if (!video) return;
+    const duration = Number.isFinite(video.duration) ? video.duration : 0;
+    const nextTime = Math.min(Math.max(video.currentTime + seconds, 0), duration || Number.MAX_SAFE_INTEGER);
+    video.currentTime = nextTime;
+  };
+
+  const changePlaybackRate = (rate) => {
+    setPlaybackRate(rate);
+    if (videoRef.current) videoRef.current.playbackRate = rate;
+  };
+
   useEffect(() => {
     const close = (event) => {
       if (event.key === "Escape") setArtifact(null);
@@ -1146,25 +1239,72 @@ function VideoPreviewModal({ artifact, fileUrl, downloadFileUrl, setArtifact, t 
     document.addEventListener("keydown", close);
     return () => document.removeEventListener("keydown", close);
   }, [setArtifact]);
-  return (
-    <div className="dialog-layer">
-      <button className="dialog-backdrop" onClick={() => setArtifact(null)} type="button" aria-label={t("closePreview")} />
+  return createPortal(
+    <div className="dialog-layer video-preview-layer">
+      <button
+        className="dialog-backdrop video-preview-backdrop"
+        onClick={closePreview}
+        onPointerDown={closePreview}
+        type="button"
+        aria-label={t("closePreview")}
+      />
+      <button
+        className="video-preview-close-float"
+        onClick={closePreview}
+        onPointerDown={closePreview}
+        type="button"
+        aria-label={t("closePreview")}
+      >
+        <X size={20} />
+      </button>
       <section className="video-preview-modal motion-enter" role="dialog" aria-modal="true" aria-label={t("videoPreview")}>
         <header>
           <div className="min-w-0"><h2>{t("videoPreview")}</h2><p>{artifact.name}</p></div>
-          <button className="icon-button" onClick={() => setArtifact(null)} type="button" aria-label={t("closePreview")}><X size={18} /></button>
+          <button
+            className="icon-button modal-close-button"
+            onClick={closePreview}
+            onPointerDown={closePreview}
+            type="button"
+            aria-label={t("closePreview")}
+          >
+            <X size={18} />
+          </button>
         </header>
-        <video src={fileUrl(artifact.path)} controls autoPlay playsInline />
+        <div className="video-preview-frame">
+          <video
+            ref={videoRef}
+            src={fileUrl(artifact.path)}
+            controls
+            autoPlay
+            playsInline
+            onLoadedMetadata={(event) => { event.currentTarget.playbackRate = playbackRate; }}
+          />
+        </div>
         <footer>
+          <div className="video-preview-controls" aria-label={t("previewControls")}>
+            <button className="video-control-button" onClick={() => skipVideo(-10)} type="button">{t("skipBack")}</button>
+            <button className="video-control-button" onClick={() => skipVideo(10)} type="button">{t("skipForward")}</button>
+            <span>{t("playbackSpeed")}</span>
+            {rates.map((rate) => (
+              <button
+                className={cx("video-rate-button", playbackRate === rate && "active")}
+                key={rate}
+                onClick={() => changePlaybackRate(rate)}
+                type="button"
+              >
+                {rate}x
+              </button>
+            ))}
+          </div>
           <a className="primary-button" href={downloadFileUrl(artifact.path)}>
             <Download size={16} />{t("download")}
           </a>
         </footer>
       </section>
-    </div>
+    </div>,
+    document.body
   );
 }
-
 function LibraryShell({ icon: Icon, title, subtitle, count, actions, children, t }) {
   return (
     <div className="library-view motion-enter">
@@ -1207,10 +1347,14 @@ export function Composer({
   selectedJob,
   submitJob,
   stopSelectedJob,
+  messages,
+  sendGuidance,
   enablePhase2Research,
+  enablePlanReview,
   directPhase3Execution,
   preferLocalMaterials,
   setEnablePhase2Research,
+  setEnablePlanReview,
   setDirectPhase3Execution,
   setPreferLocalMaterials,
   syncWorkflowConfig,
@@ -1221,19 +1365,26 @@ export function Composer({
   notify,
   t,
 }) {
+  const guidanceMode = selectedJob
+    && ["queued", "running", "interrupted", "completed"].includes(selectedJob.status);
   const running = selectedJob?.status === "running";
-  const [attachOpen, setAttachOpen] = useState(false);
-  const attachRootRef = useRef(null);
+  const [optionsOpen, setOptionsOpen] = useState(false);
+  const [submitting, setSubmitting] = useState(false);
+  const optionsRootRef = useRef(null);
   const attachInputRef = useRef(null);
   const workflowSaveLockRef = useRef(false);
+  const attachedMaterials = uploads.filter((item) => taskText.includes(item?.display_path || "__missing__"));
+  const latestGuidance = messages?.at(-1);
+  const phase2Active = enablePhase2Research && !directPhase3Execution;
+  const localFirstActive = preferLocalMaterials;
 
   useEffect(() => {
-    if (!attachOpen) return undefined;
+    if (!optionsOpen) return undefined;
     const closeOnPointerDown = (event) => {
-      if (!attachRootRef.current?.contains(event.target)) setAttachOpen(false);
+      if (!optionsRootRef.current?.contains(event.target)) setOptionsOpen(false);
     };
     const closeOnEscape = (event) => {
-      if (event.key === "Escape") setAttachOpen(false);
+      if (event.key === "Escape") setOptionsOpen(false);
     };
     document.addEventListener("pointerdown", closeOnPointerDown);
     document.addEventListener("keydown", closeOnEscape);
@@ -1241,7 +1392,7 @@ export function Composer({
       document.removeEventListener("pointerdown", closeOnPointerDown);
       document.removeEventListener("keydown", closeOnEscape);
     };
-  }, [attachOpen]);
+  }, [optionsOpen]);
 
   const attachMaterial = (item) => {
     const displayPath = item?.display_path || "";
@@ -1251,7 +1402,6 @@ export function Composer({
       const prefix = t("insertUploadPrefix", { path: displayPath });
       return `${current.trim() ? `${current.trim()}\n` : ""}${prefix}`;
     });
-    setAttachOpen(false);
   };
 
   const uploadAndAttach = async (files) => {
@@ -1261,6 +1411,23 @@ export function Composer({
       (items || []).forEach(attachMaterial);
     } catch (_) {
       // Upload errors are reported by the shared toast channel.
+    }
+  };
+
+  const submitContent = async () => {
+    const content = taskText.trim();
+    if (!content || submitting) return;
+    setSubmitting(true);
+    try {
+      if (guidanceMode) {
+        await sendGuidance(content);
+        setTaskText("");
+        notify("success", t("guidanceSent"));
+      } else {
+        await submitJob();
+      }
+    } finally {
+      setSubmitting(false);
     }
   };
 
@@ -1277,11 +1444,60 @@ export function Composer({
       workflowSaveLockRef.current = false;
     }
   };
+
+  const toggleDirectPhase3 = async () => {
+    if (workflowSaveLockRef.current || workflowConfigSaving) return;
+    const previousDirect = directPhase3Execution;
+    const previousPhase2 = enablePhase2Research;
+    const nextDirect = !previousDirect;
+    workflowSaveLockRef.current = true;
+    setDirectPhase3Execution(nextDirect);
+    if (nextDirect) {
+      setEnablePhase2Research(false);
+    }
+    try {
+      await syncWorkflowConfig(nextDirect
+        ? {
+          direct_phase3_execution: true,
+          enable_phase2_research: false,
+        }
+        : { direct_phase3_execution: false });
+    } catch (error) {
+      setDirectPhase3Execution(previousDirect);
+      setEnablePhase2Research(previousPhase2);
+      notify("error", t("operationFailed", { message: error.message }));
+    } finally {
+      workflowSaveLockRef.current = false;
+    }
+  };
   return (
-    <section className="composer-shell">
+    <section className={cx("composer-shell", guidanceMode && "guidance-mode")}>
+      {guidanceMode && (
+        <div className="composer-guidance-header">
+          <div className="composer-guidance-title">
+            <span><Sparkles size={14} /></span>
+            <div>
+              <strong>{selectedJob.status === "completed" ? t("startNextRevision") : t("guideRunningAgent")}</strong>
+              <small>
+                {latestGuidance?.content
+                  ? t("latestGuidance", { content: latestGuidance.content })
+                  : selectedJob.status === "completed"
+                    ? t("completedGuidanceHint")
+                    : t("runningGuidanceHint")}
+              </small>
+            </div>
+          </div>
+          <div className="composer-guidance-badges">
+            <span>{t("revisionLabel", { revision: selectedJob.revision || 1 })}</span>
+            <span className={cx("steering-state", `state-${selectedJob.steering_status || "idle"}`)}>
+              {t(`steering_${selectedJob.steering_status || "idle"}`)}
+            </span>
+          </div>
+        </div>
+      )}
       <form onSubmit={(event) => {
         event.preventDefault();
-        Promise.resolve(running ? stopSelectedJob() : submitJob())
+        Promise.resolve(submitContent())
           .catch((error) => notify("error", t("operationFailed", { message: error.message })));
       }}>
         <textarea
@@ -1290,15 +1506,16 @@ export function Composer({
           onKeyDown={(event) => {
             if (event.key === "Enter" && !event.shiftKey) {
               event.preventDefault();
-              Promise.resolve(running ? stopSelectedJob() : submitJob())
+              Promise.resolve(submitContent())
                 .catch((error) => notify("error", t("operationFailed", { message: error.message })));
             }
           }}
-          placeholder={t("composerPlaceholder")}
+          placeholder={guidanceMode ? t("guidanceComposerPlaceholder") : t("composerPlaceholder")}
         />
         <div className="composer-toolbar">
           <div className="flex min-w-0 flex-1 flex-wrap items-center gap-2">
-            <div className={cx("material-attach", attachOpen && "open")} ref={attachRootRef}>
+            {!guidanceMode && (
+              <div className={cx("composer-options", optionsOpen && "open")} ref={optionsRootRef}>
               <input
                 ref={attachInputRef}
                 type="file"
@@ -1310,78 +1527,81 @@ export function Composer({
                 }}
               />
               <button
-                className="composer-icon"
+                className={cx(
+                  "composer-options-trigger",
+                  (attachedMaterials.length || enablePhase2Research || enablePlanReview || directPhase3Execution || preferLocalMaterials) && "configured"
+                )}
                 type="button"
-                aria-label={t("attachMaterial")}
+                aria-label={t("creationOptions")}
                 aria-haspopup="menu"
-                aria-expanded={attachOpen}
-                onClick={() => setAttachOpen((current) => !current)}
+                aria-expanded={optionsOpen}
+                onClick={() => setOptionsOpen((current) => !current)}
               >
-                <Paperclip size={17} />
+                <Wrench size={16} />
+                <span>{t("creationOptions")}</span>
+                <ChevronDown size={14} />
               </button>
-              {attachOpen && (
-                <div className="material-attach-menu motion-enter" role="menu" aria-label={t("attachMaterial")}>
-                  <div className="material-attach-heading">
-                    <strong>{t("attachMaterialTitle")}</strong>
-                    <span>{t("attachMaterialHint")}</span>
-                  </div>
-                  <div className="material-attach-list">
-                    {uploads.map((item) => (
-                      <button
-                        className="material-attach-row"
-                        key={item.display_path || item.path}
-                        onClick={() => attachMaterial(item)}
-                        type="button"
-                        role="menuitem"
-                      >
-                        <FileVideo2 size={17} />
-                        <span>
-                          <strong>{item.name}</strong>
-                          <small>{item.display_path}</small>
-                        </span>
-                        <Plus size={15} />
+              {optionsOpen && (
+                <div className="composer-options-menu motion-enter" role="menu" aria-label={t("creationOptions")}>
+                      <div className="composer-options-heading">
+                        <strong>{t("creationOptions")}</strong>
+                        <span>{t("creationOptionsHint")}</span>
+                      </div>
+                      <button className="composer-option-row" onClick={() => attachInputRef.current?.click()} disabled={uploading} type="button" role="menuitem">
+                        <Upload size={16} />
+                        <span><strong>{uploading ? t("uploading") : t("uploadNewMaterial")}</strong><small>{t("attachMaterialHint")}</small></span>
+                        {!!attachedMaterials.length && <Check size={15} />}
                       </button>
-                    ))}
-                    {!uploads.length && <p className="material-attach-empty">{t("noUploads")}</p>}
-                  </div>
-                  <button
-                    className="material-upload-action"
-                    onClick={() => attachInputRef.current?.click()}
-                    disabled={uploading}
-                    type="button"
-                  >
-                    <Upload size={16} />
-                    <span>{uploading ? t("uploading") : t("uploadNewMaterial")}</span>
-                  </button>
+                      {!!uploads.length && (
+                        <div className="composer-material-list">
+                          {uploads.map((item) => {
+                            const attached = taskText.includes(item.display_path || "__missing__");
+                            return (
+                              <button className={cx("composer-material-row", attached && "selected")} key={item.display_path || item.path} onClick={() => attachMaterial(item)} type="button" role="menuitem">
+                                <FileVideo2 size={15} />
+                                <span title={item.display_path}>{item.name}</span>
+                                {attached ? <Check size={14} /> : <Plus size={14} />}
+                              </button>
+                            );
+                          })}
+                        </div>
+                      )}
+                      <button className={cx("composer-option-row", phase2Active && "selected")} disabled={workflowConfigSaving || directPhase3Execution} onClick={() => toggle(setEnablePhase2Research, enablePhase2Research, (value) => ({ enable_phase2_research: value }))} type="button" role="menuitemcheckbox" aria-checked={phase2Active}>
+                        <Workflow size={16} />
+                        <span><strong>{t("phase2Setting")}</strong><small>{phase2Active ? t("phase2OnTitle") : t("phase2OffTitle")}</small></span>
+                        {phase2Active && <Check size={15} />}
+                      </button>
+                      <button className={cx("composer-option-row", enablePlanReview && "selected")} disabled={workflowConfigSaving} onClick={() => toggle(setEnablePlanReview, enablePlanReview, (value) => ({ enable_plan_review: value }))} type="button" role="menuitemcheckbox" aria-checked={enablePlanReview}>
+                        <ScrollText size={16} />
+                        <span><strong>{t("planReviewSetting")}</strong><small>{enablePlanReview ? t("planReviewOnTitle") : t("planReviewOffTitle")}</small></span>
+                        {enablePlanReview && <Check size={15} />}
+                      </button>
+                      <button className={cx("composer-option-row", directPhase3Execution && "selected")} disabled={workflowConfigSaving} onClick={toggleDirectPhase3} type="button" role="menuitemcheckbox" aria-checked={directPhase3Execution}>
+                        <Send size={16} />
+                        <span><strong>{t("directP3")}</strong><small>{directPhase3Execution ? t("directP3OnTitle") : t("directP3OffTitle")}</small></span>
+                        {directPhase3Execution && <Check size={15} />}
+                      </button>
+                      <button className={cx("composer-option-row", localFirstActive && "selected")} disabled={workflowConfigSaving} onClick={() => toggle(setPreferLocalMaterials, preferLocalMaterials, (value) => ({ prefer_local_materials: value }))} type="button" role="menuitemcheckbox" aria-checked={localFirstActive}>
+                        <FolderOpen size={16} />
+                        <span><strong>{t("localFirst")}</strong><small>{localFirstActive ? t("localFirstOnTitle") : t("localFirstOffTitle")}</small></span>
+                        {localFirstActive && <Check size={15} />}
+                      </button>
                 </div>
               )}
-            </div>
-            <WorkflowToggle
-              active={enablePhase2Research}
-              label={t("phase2Setting")}
-              busy={workflowConfigSaving}
-              disabled={workflowConfigSaving || directPhase3Execution}
-              onClick={() => toggle(setEnablePhase2Research, enablePhase2Research, (value) => ({ enable_phase2_research: value }))}
-            />
-            <WorkflowToggle
-              active={directPhase3Execution}
-              label={t("directP3")}
-              busy={workflowConfigSaving}
-              disabled={workflowConfigSaving}
-              onClick={() => toggle(setDirectPhase3Execution, directPhase3Execution, (value) => ({ direct_phase3_execution: value }))}
-            />
-            <WorkflowToggle
-              active={preferLocalMaterials}
-              label={t("localFirst")}
-              busy={workflowConfigSaving}
-              disabled={workflowConfigSaving || directPhase3Execution}
-              onClick={() => toggle(setPreferLocalMaterials, preferLocalMaterials, (value) => ({ prefer_local_materials: value }))}
-            />
+              </div>
+            )}
+            {guidanceMode && <span className="composer-guidance-note">{t("enterToGuide")}</span>}
           </div>
           <div className="flex shrink-0 items-center gap-2">
-            <ModeSelector mode={mode} setMode={setMode} t={t} />
-            <button className={cx("send-button", running && "stop")} type="submit" aria-label={running ? t("stopTask") : t("sendTask")}>
-              {running ? <CircleStop size={18} /> : <Send size={18} />}
+            {!guidanceMode && <ModeSelector mode={mode} setMode={setMode} t={t} />}
+            {running && (
+              <button className="composer-stop-button" onClick={() => stopSelectedJob().catch((error) => notify("error", t("operationFailed", { message: error.message })))} type="button" aria-label={t("stopTask")} title={t("stopTask")}>
+                <CircleStop size={18} />
+              </button>
+            )}
+            <button className={cx("send-button", guidanceMode && "guidance-send-button")} disabled={!taskText.trim() || submitting} type="submit" aria-label={guidanceMode ? t("sendGuidance") : t("sendTask")}>
+              <Send size={18} />
+              {guidanceMode && <span>{t("sendGuidance")}</span>}
             </button>
           </div>
         </div>
@@ -1449,21 +1669,6 @@ function ModeSelector({ mode, setMode, t }) {
         </div>
       )}
     </div>
-  );
-}
-
-function WorkflowToggle({ active, label, busy = false, disabled = false, onClick }) {
-  return (
-    <button
-      className={cx("workflow-toggle", active && "active")}
-      disabled={disabled || busy}
-      onClick={onClick}
-      type="button"
-      aria-busy={busy}
-    >
-      <span />
-      <span>{label}</span>
-    </button>
   );
 }
 

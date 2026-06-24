@@ -47,6 +47,7 @@ class AppConfig(BaseModel):
     allow_demo_jobs: bool = True
     workspace_root: str = "app_state"
     enable_phase2_research: bool = True
+    enable_plan_review: bool = True
     direct_phase3_execution: bool = False
     prefer_local_materials: bool = False
     search_pool_size: int = Field(default=4, ge=1)
@@ -57,9 +58,10 @@ class AppConfig(BaseModel):
     tts_pool_size: int = Field(default=2, ge=1)
     export_pool_size: int = Field(default=1, ge=1)
     short_form_optimizations: bool = True
-    short_form_max_sources: int = Field(default=4, ge=3, le=4)
+    short_form_max_sources: int = Field(default=2, ge=1, le=4)
     video_analysis_proxy_max_seconds: int = Field(default=45, ge=15, le=180)
     download_max_height: int = Field(default=720, ge=360, le=2160)
+    post_task_review_mode: Literal["async", "sync", "off"] = "async"
     agent_stall_timeout_seconds: int = Field(default=150, ge=10)
 
     def get_profile(self, profile_name: str | None = None) -> ServiceProfile:
@@ -75,6 +77,7 @@ class JobRequest(BaseModel):
     mode: Literal["agent", "demo"] = "agent"
     profile: str | None = None
     enable_phase2_research: bool | None = None
+    enable_plan_review: bool | None = None
     direct_phase3_execution: bool | None = None
     prefer_local_materials: bool | None = None
 
@@ -93,9 +96,13 @@ class JobRecord(BaseModel):
     title: str = ""
     mode: Literal["agent", "demo"]
     enable_phase2_research: bool = True
+    enable_plan_review: bool = True
     direct_phase3_execution: bool = False
     prefer_local_materials: bool = False
     status: Literal["queued", "running", "interrupted", "completed", "failed", "cancelled"] = "queued"
+    revision: int = Field(default=1, ge=1)
+    steering_status: Literal["idle", "pending", "applying", "replanning", "waiting_user"] = "idle"
+    current_checkpoint: str = ""
     profile: str | None = None
     created_at: str = Field(default_factory=utc_now_iso)
     started_at: str | None = None

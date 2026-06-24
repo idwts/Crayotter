@@ -3,6 +3,60 @@ from __future__ import annotations
 from ._shared import *
 
 
+def _download_via_bilibili_api(url: str, bvid: str, output_path: Path) -> None:
+    """Use Bilibili's public play API when webpage extraction is blocked."""
+    import urllib.request
+
+    if not bvid:
+        raise RuntimeError("Bilibili API fallback requires a BV id")
+
+    headers = {
+        "User-Agent": (
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+            "AppleWebKit/537.36 Chrome/137.0.0.0 Safari/537.36"
+        ),
+        "Referer": url,
+    }
+
+    def read_json(api_url: str) -> dict[str, Any]:
+        request = urllib.request.Request(api_url, headers=headers)
+        with urllib.request.urlopen(request, timeout=30) as response:
+            payload = json.load(response)
+        if payload.get("code") != 0:
+            raise RuntimeError(
+                f"Bilibili API error {payload.get('code')}: {payload.get('message')}"
+            )
+        return payload
+
+    view = read_json(f"https://api.bilibili.com/x/web-interface/view?bvid={bvid}")
+    cid = view.get("data", {}).get("cid")
+    if not cid:
+        raise RuntimeError("Bilibili API did not return a cid")
+    play = read_json(
+        "https://api.bilibili.com/x/player/playurl"
+        f"?bvid={bvid}&cid={cid}&qn=64&fnval=0&fourk=0"
+    )
+    segments = play.get("data", {}).get("durl") or []
+    if len(segments) != 1 or not segments[0].get("url"):
+        raise RuntimeError(
+            f"Bilibili API returned unsupported segment count: {len(segments)}"
+        )
+
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    partial_path = output_path.with_suffix(output_path.suffix + ".part")
+    media_request = urllib.request.Request(segments[0]["url"], headers=headers)
+    try:
+        with urllib.request.urlopen(media_request, timeout=60) as response:
+            with partial_path.open("wb") as output:
+                shutil.copyfileobj(response, output, length=1024 * 1024)
+        if not partial_path.exists() or partial_path.stat().st_size == 0:
+            raise RuntimeError("Bilibili API returned an empty media file")
+        partial_path.replace(output_path)
+    finally:
+        if partial_path.exists():
+            partial_path.unlink()
+
+
 @tool
 def download_bilibili_video(
     url: str,
@@ -90,7 +144,18 @@ def download_bilibili_video(
         if result is not None:
             result = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
             if result.returncode != 0:
-                return f"下载失败: {result.stderr[:500]}"
+                yt_dlp_error = (result.stderr or result.stdout or "").strip()
+                logger.warning(
+                    "⚠️ yt-dlp 下载失败，尝试 Bilibili API 回退: %s",
+                    yt_dlp_error[:500],
+                )
+                try:
+                    _download_via_bilibili_api(url, bvid, output_path)
+                except Exception as fallback_error:
+                    return (
+                        f"下载失败: yt-dlp={yt_dlp_error[:350]}; "
+                        f"api_fallback={fallback_error}"
+                    )
 
         # 获取视频基本信息
         cap = cv2.VideoCapture(str(output_path))

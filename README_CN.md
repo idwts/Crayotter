@@ -35,6 +35,7 @@ Crayotter 工作流由 **规划（planning）**、**深度剪辑研究（deep ed
 
 ## 近期动态
 
+- 2026.6.15：异步调度升级后，视频生成整体流程提速约 1.6 倍。
 - 2026.5.31：我们的论文已上线：[Crayotter: Traceable Multi-Agent Workflows for Long-Form Video Editing](https://arxiv.org/abs/2606.07636)。
 - 2026.5.23：100星达成！
 - 2026.5.11：论文页面已上线，见 [Crayotter Paper Page](https://idwts.github.io/Crayotter/paper/)。
@@ -161,6 +162,9 @@ CRAYOTTER_TTS_MODEL_NAME=qwen-tts-latest
 # 是否开启第二阶段调研（true=开启，false=关闭）
 CRAYOTTER_ENABLE_PHASE2_RESEARCH=true
 
+# 是否开启剪辑计划审阅（true=剪辑前等待确认，false=自动执行）
+CRAYOTTER_ENABLE_PLAN_REVIEW=true
+
 # 是否直接执行第三阶段（true=直接跳过前序步骤，false=按正常流程执行）
 CRAYOTTER_DIRECT_PHASE3_EXECUTION=false
 
@@ -184,6 +188,7 @@ CRAYOTTER_AGENT_STALL_TIMEOUT_SECONDS=150
 说明：
 
 - `CRAYOTTER_DIRECT_PHASE3_EXECUTION=true`：跳过 Phase 2 素材搜索/下载，直接走“现有素材分析 + Phase 3 执行”链路。
+- `CRAYOTTER_ENABLE_PLAN_REVIEW=true`：剪辑前生成可视化 EditingPlan，等待用户确认或自然语言修改后再执行。
 - `CRAYOTTER_PREFER_LOCAL_MATERIALS=true`：先分析本地素材，若当前素材已足够则直接进入后续剪辑，不足时才联网补充。
 - 资源池参数分别控制搜索、下载、视频分析、LLM、FFmpeg、TTS 和最终导出的并发上限。
 - `CRAYOTTER_AGENT_STALL_TIMEOUT_SECONDS`：控制任务“长时间无新进展”判定阈值。

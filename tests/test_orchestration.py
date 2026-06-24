@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import tempfile
 import threading
 import time
@@ -16,6 +17,7 @@ from script.orchestration import (
     TaskExecutionResult,
     TaskSpec,
 )
+from app.backend.models import AppConfig
 
 
 class ResourceSchedulerTests(unittest.TestCase):
@@ -161,6 +163,45 @@ class ResourceSchedulerTests(unittest.TestCase):
         scheduler.run(plan, execute)
         self.assertEqual(calls, 1)
 
+    def test_concurrent_registry_instances_preserve_manifest_entries(self) -> None:
+        file_count = 12
+        barrier = threading.Barrier(file_count)
+        errors: list[BaseException] = []
+
+        def register(index: int) -> None:
+            try:
+                path = self.workspace / f"artifact-{index}.txt"
+                path.write_text(str(index), encoding="utf-8")
+                registry = ArtifactRegistry(self.workspace)
+                barrier.wait(timeout=5)
+                registry.register(
+                    artifact_id=f"artifact-{index}",
+                    kind="text",
+                    producer_task_id=f"task-{index}",
+                    phase="test",
+                    path=path,
+                )
+            except BaseException as exc:
+                errors.append(exc)
+
+        threads = [
+            threading.Thread(target=register, args=(index,))
+            for index in range(file_count)
+        ]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join(timeout=10)
+
+        self.assertFalse(errors)
+        manifest = json.loads(
+            (self.workspace / ".crayotter" / "artifact_manifest.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        ids = {item["id"] for item in manifest["artifacts"]}
+        self.assertTrue({f"artifact-{index}" for index in range(file_count)} <= ids)
+
     def test_missing_artifact_is_reexecuted(self) -> None:
         calls = 0
         output = self.workspace / "result.json"
@@ -272,6 +313,32 @@ class ResourceSchedulerTests(unittest.TestCase):
         self.assertEqual(calls, 2)
         self.assertEqual(states["task"].status, "completed")
 
+    def test_partial_failure_mode_returns_completed_and_failed_states(self) -> None:
+        plan = ExecutionPlan(
+            plan_id="partial-failure",
+            phase="phase1",
+            tasks=[
+                TaskSpec(id="success-a", phase="phase1", kind="video_analysis"),
+                TaskSpec(id="failed", phase="phase1", kind="video_analysis"),
+                TaskSpec(id="success-b", phase="phase1", kind="video_analysis"),
+            ],
+        )
+
+        def execute(task: TaskSpec, dependencies):
+            if task.id == "failed":
+                raise RuntimeError("non-retryable analysis failure")
+            return TaskExecutionResult(data={"ok": True})
+
+        states = self._scheduler().run(
+            plan,
+            execute,
+            allow_partial_failure=True,
+        )
+
+        self.assertEqual(states["success-a"].status, "completed")
+        self.assertEqual(states["success-b"].status, "completed")
+        self.assertEqual(states["failed"].status, "failed")
+
     def test_changed_dependency_invalidates_downstream(self) -> None:
         calls: list[str] = []
 
@@ -335,6 +402,59 @@ class ResourceSchedulerTests(unittest.TestCase):
         self.assertEqual(calls, ["search", "rank"])
         self.assertEqual(first["rank"].result, second["rank"].result)
         self.assertEqual(second["rank"].result["selected"][0]["id"], "candidate-1")
+
+    def test_safe_point_runs_only_without_active_tasks(self) -> None:
+        active = 0
+        calls: list[tuple[int, list[str]]] = []
+        lock = threading.Lock()
+        plan = ExecutionPlan(
+            plan_id="safe-point",
+            phase="test",
+            tasks=[
+                TaskSpec(
+                    id=f"task-{index}",
+                    phase="test",
+                    kind="x",
+                    resources={"download_pool": 1},
+                )
+                for index in range(2)
+            ],
+        )
+
+        def execute(task: TaskSpec, dependencies):
+            nonlocal active
+            with lock:
+                active += 1
+            time.sleep(0.05)
+            with lock:
+                active -= 1
+            return TaskExecutionResult()
+
+        scheduler = ResourceScheduler(
+            pools=ResourcePoolConfig(download_pool=2),
+            workspace=self.workspace,
+            artifact_registry=self.registry,
+            safe_point=lambda context: calls.append(
+                (active, list(context["pending_task_ids"]))
+            ),
+        )
+        scheduler.run(plan, execute)
+
+        self.assertTrue(calls)
+        self.assertTrue(all(active_count == 0 for active_count, _ in calls))
+
+
+class ShortFormConfigTests(unittest.TestCase):
+    def test_short_form_source_limits_accept_1_2_4(self) -> None:
+        for value in (1, 2, 4):
+            config = AppConfig(short_form_max_sources=value)
+            self.assertEqual(config.short_form_max_sources, value)
+
+    def test_short_form_executor_no_longer_has_10s_error(self) -> None:
+        graph_source = Path("script/graph.py").read_text(encoding="utf-8")
+        self.assertNotIn("短片计划总时长不是 10 秒", graph_source)
+        self.assertNotIn("short_merged_10s", graph_source)
+        self.assertNotIn("xinjiang_10s_promo", graph_source)
 
 
 if __name__ == "__main__":

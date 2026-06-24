@@ -32,12 +32,19 @@ MODEL_NAME = os.environ.get("CRAYOTTER_MODEL_NAME", "qwen-plus")
 ENABLE_PHASE2_RESEARCH = str(
     os.environ.get("CRAYOTTER_ENABLE_PHASE2_RESEARCH", "true")
 ).strip().lower() not in {"0", "false", "no", "off"}
+ENABLE_PLAN_REVIEW = str(
+    os.environ.get("CRAYOTTER_ENABLE_PLAN_REVIEW", "true")
+).strip().lower() not in {"0", "false", "no", "off"}
+REVISION = max(1, int(os.environ.get("CRAYOTTER_REVISION", "1") or 1))
 DIRECT_PHASE3_EXECUTION = str(
     os.environ.get("CRAYOTTER_DIRECT_PHASE3_EXECUTION", "false")
 ).strip().lower() not in {"0", "false", "no", "off"}
 PREFER_LOCAL_MATERIALS = str(
     os.environ.get("CRAYOTTER_PREFER_LOCAL_MATERIALS", "false")
 ).strip().lower() not in {"0", "false", "no", "off"}
+POST_TASK_REVIEW_MODE = str(
+    os.environ.get("CRAYOTTER_POST_TASK_REVIEW_MODE", "async")
+).strip().lower() or "async"
 SHORT_FORM_OPTIMIZATIONS = str(
     os.environ.get("CRAYOTTER_SHORT_FORM_OPTIMIZATIONS", "true")
 ).strip().lower() not in {"0", "false", "no", "off"}
@@ -51,7 +58,7 @@ try:
     EXPORT_POOL_SIZE = max(1, int(os.environ.get("CRAYOTTER_EXPORT_POOL_SIZE", "1") or 1))
     SHORT_FORM_MAX_SOURCES = min(
         4,
-        max(3, int(os.environ.get("CRAYOTTER_SHORT_FORM_MAX_SOURCES", "4") or 4)),
+        max(1, int(os.environ.get("CRAYOTTER_SHORT_FORM_MAX_SOURCES", "2") or 2)),
     )
     VIDEO_ANALYSIS_PROXY_MAX_SECONDS = max(
         15,
@@ -69,7 +76,7 @@ except (TypeError, ValueError):
     FFMPEG_POOL_SIZE = 2
     TTS_POOL_SIZE = 2
     EXPORT_POOL_SIZE = 1
-    SHORT_FORM_MAX_SOURCES = 4
+    SHORT_FORM_MAX_SOURCES = 2
     VIDEO_ANALYSIS_PROXY_MAX_SECONDS = 45
     DOWNLOAD_MAX_HEIGHT = 720
 
@@ -202,6 +209,7 @@ def _build_runtime_settings() -> dict[str, Any]:
         "base_url": BASE_URL,
         "model_name": MODEL_NAME,
         "enable_phase2_research": ENABLE_PHASE2_RESEARCH,
+        "enable_plan_review": ENABLE_PLAN_REVIEW,
         "direct_phase3_execution": DIRECT_PHASE3_EXECUTION,
         "prefer_local_materials": PREFER_LOCAL_MATERIALS,
         "search_pool_size": SEARCH_POOL_SIZE,
@@ -215,6 +223,7 @@ def _build_runtime_settings() -> dict[str, Any]:
         "short_form_max_sources": SHORT_FORM_MAX_SOURCES,
         "video_analysis_proxy_max_seconds": VIDEO_ANALYSIS_PROXY_MAX_SECONDS,
         "download_max_height": DOWNLOAD_MAX_HEIGHT,
+        "post_task_review_mode": POST_TASK_REVIEW_MODE,
         "agent_stall_timeout_seconds": AGENT_STALL_TIMEOUT_SECONDS,
         "video_api_key": VIDEO_API_KEY,
         "video_base_url": VIDEO_BASE_URL,
@@ -258,8 +267,10 @@ def _coerce_positive_int(value: Any, default: int) -> int:
 
 
 def apply_runtime_config(config: Mapping[str, Any] | None = None) -> dict[str, Any]:
-    global API_KEY, BASE_URL, MODEL_NAME, ENABLE_PHASE2_RESEARCH
+    global API_KEY, BASE_URL, MODEL_NAME, ENABLE_PHASE2_RESEARCH, ENABLE_PLAN_REVIEW
     global DIRECT_PHASE3_EXECUTION, PREFER_LOCAL_MATERIALS, AGENT_STALL_TIMEOUT_SECONDS
+    global POST_TASK_REVIEW_MODE
+    global REVISION
     global RESUME_EXECUTION
     global SEARCH_POOL_SIZE, DOWNLOAD_POOL_SIZE, VIDEO_ANALYSIS_POOL_SIZE
     global LLM_POOL_SIZE, FFMPEG_POOL_SIZE, TTS_POOL_SIZE, EXPORT_POOL_SIZE
@@ -277,6 +288,10 @@ def apply_runtime_config(config: Mapping[str, Any] | None = None) -> dict[str, A
         config.get("enable_phase2_research"),
         ENABLE_PHASE2_RESEARCH,
     )
+    ENABLE_PLAN_REVIEW = _coerce_bool(
+        config.get("enable_plan_review"),
+        ENABLE_PLAN_REVIEW,
+    )
     DIRECT_PHASE3_EXECUTION = _coerce_bool(
         config.get("direct_phase3_execution"),
         DIRECT_PHASE3_EXECUTION,
@@ -285,6 +300,8 @@ def apply_runtime_config(config: Mapping[str, Any] | None = None) -> dict[str, A
         config.get("prefer_local_materials"),
         PREFER_LOCAL_MATERIALS,
     )
+    mode = str(config.get("post_task_review_mode") or POST_TASK_REVIEW_MODE).strip().lower()
+    POST_TASK_REVIEW_MODE = mode if mode in {"async", "sync", "off"} else "async"
     SEARCH_POOL_SIZE = _coerce_positive_int(config.get("search_pool_size"), SEARCH_POOL_SIZE)
     DOWNLOAD_POOL_SIZE = _coerce_positive_int(config.get("download_pool_size"), DOWNLOAD_POOL_SIZE)
     VIDEO_ANALYSIS_POOL_SIZE = _coerce_positive_int(
@@ -294,6 +311,7 @@ def apply_runtime_config(config: Mapping[str, Any] | None = None) -> dict[str, A
         config.get("resume_execution"),
         RESUME_EXECUTION,
     )
+    REVISION = _coerce_positive_int(config.get("revision"), REVISION)
     LLM_POOL_SIZE = _coerce_positive_int(config.get("llm_pool_size"), LLM_POOL_SIZE)
     FFMPEG_POOL_SIZE = _coerce_positive_int(config.get("ffmpeg_pool_size"), FFMPEG_POOL_SIZE)
     TTS_POOL_SIZE = _coerce_positive_int(config.get("tts_pool_size"), TTS_POOL_SIZE)
@@ -305,7 +323,7 @@ def apply_runtime_config(config: Mapping[str, Any] | None = None) -> dict[str, A
     SHORT_FORM_MAX_SOURCES = min(
         4,
         max(
-            3,
+            1,
             _coerce_positive_int(
                 config.get("short_form_max_sources"),
                 SHORT_FORM_MAX_SOURCES,
@@ -327,6 +345,9 @@ def apply_runtime_config(config: Mapping[str, Any] | None = None) -> dict[str, A
     os.environ["CRAYOTTER_FFMPEG_POOL_SIZE"] = str(FFMPEG_POOL_SIZE)
     os.environ["CRAYOTTER_TTS_POOL_SIZE"] = str(TTS_POOL_SIZE)
     os.environ["CRAYOTTER_EXPORT_POOL_SIZE"] = str(EXPORT_POOL_SIZE)
+    os.environ["CRAYOTTER_ENABLE_PLAN_REVIEW"] = (
+        "true" if ENABLE_PLAN_REVIEW else "false"
+    )
     os.environ["CRAYOTTER_SHORT_FORM_OPTIMIZATIONS"] = (
         "true" if SHORT_FORM_OPTIMIZATIONS else "false"
     )
@@ -335,6 +356,7 @@ def apply_runtime_config(config: Mapping[str, Any] | None = None) -> dict[str, A
         VIDEO_ANALYSIS_PROXY_MAX_SECONDS
     )
     os.environ["CRAYOTTER_DOWNLOAD_MAX_HEIGHT"] = str(DOWNLOAD_MAX_HEIGHT)
+    os.environ["CRAYOTTER_POST_TASK_REVIEW_MODE"] = POST_TASK_REVIEW_MODE
     AGENT_STALL_TIMEOUT_SECONDS = _coerce_positive_int(
         config.get("agent_stall_timeout_seconds"),
         AGENT_STALL_TIMEOUT_SECONDS,
@@ -361,7 +383,9 @@ def apply_runtime_config(config: Mapping[str, Any] | None = None) -> dict[str, A
     graph_module.BASE_URL = BASE_URL
     graph_module.MODEL_NAME = MODEL_NAME
     graph_module.ENABLE_PHASE2_RESEARCH = ENABLE_PHASE2_RESEARCH
+    graph_module.ENABLE_PLAN_REVIEW = ENABLE_PLAN_REVIEW
     graph_module.DIRECT_PHASE3_EXECUTION = DIRECT_PHASE3_EXECUTION
+    graph_module.REVISION = REVISION
     graph_module.PREFER_LOCAL_MATERIALS = PREFER_LOCAL_MATERIALS
     graph_module.SEARCH_POOL_SIZE = SEARCH_POOL_SIZE
     graph_module.DOWNLOAD_POOL_SIZE = DOWNLOAD_POOL_SIZE
@@ -939,6 +963,26 @@ def _update_memory_experience_after_task(user_request: str, final_output: str) -
         return False, str(e)
 
 
+def run_post_task_review(
+    user_request: str,
+    final_output: str,
+    *,
+    event_callback: RuntimeEventCallback | None = None,
+) -> tuple[bool, str]:
+    _emit_runtime_event(
+        event_callback,
+        "post_task_review_started",
+        {"mode": POST_TASK_REVIEW_MODE},
+    )
+    ok, msg = _update_memory_experience_after_task(user_request, final_output)
+    _emit_runtime_event(
+        event_callback,
+        "post_task_review_completed" if ok else "post_task_review_failed",
+        {"message": msg},
+    )
+    return ok, msg
+
+
 def run_task(
     task: str,
     *,
@@ -991,7 +1035,11 @@ def run_task(
             print("=" * 60)
 
         start_time = time.time()
-        initial_state = AgentState(user_request=task)
+        initial_state = AgentState(
+            user_request=task,
+            base_user_request=task,
+            revision=REVISION,
+        )
 
         final_state = None
         for step_output in graph.stream(
@@ -1047,12 +1095,29 @@ def run_task(
             if verbose:
                 print(f"📌 任务后保留文件: {', '.join(kept)}")
 
-        exp_ok, exp_msg = _update_memory_experience_after_task(task, output)
-        if verbose:
-            if exp_ok:
-                print(f"🧠 经验沉淀完成: {exp_msg}")
-            else:
-                print(f"⚠️ 经验沉淀未完成: {exp_msg}")
+        if POST_TASK_REVIEW_MODE == "sync":
+            exp_ok, exp_msg = run_post_task_review(
+                task,
+                output,
+                event_callback=event_callback,
+            )
+            if verbose:
+                if exp_ok:
+                    print(f"🧠 经验沉淀完成: {exp_msg}")
+                else:
+                    print(f"⚠️ 经验沉淀未完成: {exp_msg}")
+        elif POST_TASK_REVIEW_MODE == "off":
+            _emit_runtime_event(
+                event_callback,
+                "post_task_review_skipped",
+                {"mode": POST_TASK_REVIEW_MODE},
+            )
+        else:
+            _emit_runtime_event(
+                event_callback,
+                "post_task_review_queued",
+                {"mode": POST_TASK_REVIEW_MODE},
+            )
 
         _emit_runtime_event(
             event_callback,

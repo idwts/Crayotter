@@ -31,6 +31,7 @@ PROFILE_ENV_VARS = {
 
 APP_ENV_VARS = {
     "enable_phase2_research": "CRAYOTTER_ENABLE_PHASE2_RESEARCH",
+    "enable_plan_review": "CRAYOTTER_ENABLE_PLAN_REVIEW",
     "direct_phase3_execution": "CRAYOTTER_DIRECT_PHASE3_EXECUTION",
     "prefer_local_materials": "CRAYOTTER_PREFER_LOCAL_MATERIALS",
     "search_pool_size": "CRAYOTTER_SEARCH_POOL_SIZE",
@@ -44,14 +45,20 @@ APP_ENV_VARS = {
     "short_form_max_sources": "CRAYOTTER_SHORT_FORM_MAX_SOURCES",
     "video_analysis_proxy_max_seconds": "CRAYOTTER_VIDEO_ANALYSIS_PROXY_MAX_SECONDS",
     "download_max_height": "CRAYOTTER_DOWNLOAD_MAX_HEIGHT",
+    "post_task_review_mode": "CRAYOTTER_POST_TASK_REVIEW_MODE",
     "agent_stall_timeout_seconds": "CRAYOTTER_AGENT_STALL_TIMEOUT_SECONDS",
 }
 
 BOOL_FIELDS = {
     "enable_phase2_research",
+    "enable_plan_review",
     "direct_phase3_execution",
     "prefer_local_materials",
     "short_form_optimizations",
+}
+
+STRING_FIELDS = {
+    "post_task_review_mode",
 }
 
 REMOVED_RESOURCE_ENV_VARS = (
@@ -178,6 +185,8 @@ class ConfigStore:
             default_value = AppConfig.model_fields[field_name].default
             if field_name in BOOL_FIELDS:
                 payload[field_name] = _coerce_env_bool(raw[env_name], default_value)
+            elif field_name in STRING_FIELDS:
+                payload[field_name] = str(raw[env_name] or default_value).strip() or default_value
             else:
                 payload[field_name] = _coerce_env_int(raw[env_name], default_value)
 
