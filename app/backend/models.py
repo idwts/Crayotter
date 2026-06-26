@@ -61,6 +61,8 @@ class AppConfig(BaseModel):
     short_form_max_sources: int = Field(default=2, ge=1, le=4)
     video_analysis_proxy_max_seconds: int = Field(default=45, ge=15, le=180)
     download_max_height: int = Field(default=720, ge=360, le=2160)
+    standardize_target_fps: int = Field(default=30, ge=1, le=120)
+    audio_loudnorm_target: float = Field(default=0.0, ge=-70.0, le=0.0)
     post_task_review_mode: Literal["async", "sync", "off"] = "async"
     agent_stall_timeout_seconds: int = Field(default=150, ge=10)
 

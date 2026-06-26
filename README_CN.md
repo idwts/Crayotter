@@ -35,6 +35,7 @@ Crayotter 工作流由 **规划（planning）**、**深度剪辑研究（deep ed
 
 ## 近期动态
 
+- 2026.6.27：Crayotter 1.0.0 新增多素材源导入、统一下载清洗，并更新 Windows 发布包。
 - 2026.6.15：异步调度升级后，视频生成整体流程提速约 1.6 倍。
 - 2026.5.31：我们的论文已上线：[Crayotter: Traceable Multi-Agent Workflows for Long-Form Video Editing](https://arxiv.org/abs/2606.07636)。
 - 2026.5.23：100星达成！
@@ -71,9 +72,10 @@ Crayotter 工作流分三阶段：
 
 1. **Phase 1 — 素材准备（Planner + Executor）**
    - Planner 输出显式依赖 DAG，调度器通过有界 `Send` fan-out 并发执行当前 ready steps
-   - 搜索候选素材
+   - 通过平台无关的素材源层搜索候选素材
+   - 导入用户提供的 B 站、抖音、小红书/Rednote、快手、YouTube 或 generic URL（实际下载能力取决于 `yt-dlp` 和平台可访问性）
    - 对候选素材进行排序并筛选高质量素材
-   - 下载入选视频
+   - 下载入选视频，并统一清洗为剪辑兼容的 MP4/H.264/AAC 素材
    - 对每个源视频执行多模态分析
 
 2. **Phase 2 — 剪辑研究（Editing Research）**
@@ -179,6 +181,8 @@ CRAYOTTER_LLM_POOL_SIZE=2
 CRAYOTTER_FFMPEG_POOL_SIZE=2
 CRAYOTTER_TTS_POOL_SIZE=2
 CRAYOTTER_EXPORT_POOL_SIZE=1
+CRAYOTTER_STANDARDIZE_TARGET_FPS=30
+CRAYOTTER_AUDIO_LOUDNORM_TARGET=0
 
 # 智能代理超时等待时间（单位：秒，默认150秒，超时会自动结束当前任务）
 CRAYOTTER_AGENT_STALL_TIMEOUT_SECONDS=150
@@ -191,6 +195,8 @@ CRAYOTTER_AGENT_STALL_TIMEOUT_SECONDS=150
 - `CRAYOTTER_ENABLE_PLAN_REVIEW=true`：剪辑前生成可视化 EditingPlan，等待用户确认或自然语言修改后再执行。
 - `CRAYOTTER_PREFER_LOCAL_MATERIALS=true`：先分析本地素材，若当前素材已足够则直接进入后续剪辑，不足时才联网补充。
 - 资源池参数分别控制搜索、下载、视频分析、LLM、FFmpeg、TTS 和最终导出的并发上限。
+- 素材下载统一走 `download_material_video`；B 站仍是默认关键词搜索源，用户提供的第三方平台 URL 会进入同一下载与清洗管线。
+- `CRAYOTTER_STANDARDIZE_TARGET_FPS` 控制下载素材清洗后的目标帧率。`CRAYOTTER_AUDIO_LOUDNORM_TARGET=0` 表示关闭响度归一化；设置为 `-16` 等负 LUFS 值时启用两遍 EBU R128 loudnorm。
 - `CRAYOTTER_AGENT_STALL_TIMEOUT_SECONDS`：控制任务“长时间无新进展”判定阈值。
 - 环境隐式逻辑：图形化工作台中的 API 设置、Phase 2、直达 Phase 3、本地素材优先和超时设置，都会同步写回同一份 `.env`。
 - 成品画幅控制：候选素材排序现在会把目标横竖屏当成评分因子：默认优先横屏；如果用户明确要求竖屏，则优先竖屏。Phase 3 合并/导出也改成“放缩后居中裁切”，不再简单拉伸。

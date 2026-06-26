@@ -45,6 +45,8 @@ APP_ENV_VARS = {
     "short_form_max_sources": "CRAYOTTER_SHORT_FORM_MAX_SOURCES",
     "video_analysis_proxy_max_seconds": "CRAYOTTER_VIDEO_ANALYSIS_PROXY_MAX_SECONDS",
     "download_max_height": "CRAYOTTER_DOWNLOAD_MAX_HEIGHT",
+    "standardize_target_fps": "CRAYOTTER_STANDARDIZE_TARGET_FPS",
+    "audio_loudnorm_target": "CRAYOTTER_AUDIO_LOUDNORM_TARGET",
     "post_task_review_mode": "CRAYOTTER_POST_TASK_REVIEW_MODE",
     "agent_stall_timeout_seconds": "CRAYOTTER_AGENT_STALL_TIMEOUT_SECONDS",
 }
@@ -59,6 +61,10 @@ BOOL_FIELDS = {
 
 STRING_FIELDS = {
     "post_task_review_mode",
+}
+
+FLOAT_FIELDS = {
+    "audio_loudnorm_target",
 }
 
 REMOVED_RESOURCE_ENV_VARS = (
@@ -87,6 +93,16 @@ def _coerce_env_int(value: Any, default: int) -> int:
     except (TypeError, ValueError):
         return default
     return parsed if parsed > 0 else default
+
+
+def _coerce_env_float(value: Any, default: float) -> float:
+    text = str(value or "").strip().lower()
+    if not text or text in {"off", "false", "no", "none", "null"}:
+        return default
+    try:
+        return float(text)
+    except (TypeError, ValueError):
+        return default
 
 
 def _merge_config(current: AppConfig, payload: dict[str, Any]) -> AppConfig:
@@ -187,6 +203,8 @@ class ConfigStore:
                 payload[field_name] = _coerce_env_bool(raw[env_name], default_value)
             elif field_name in STRING_FIELDS:
                 payload[field_name] = str(raw[env_name] or default_value).strip() or default_value
+            elif field_name in FLOAT_FIELDS:
+                payload[field_name] = _coerce_env_float(raw[env_name], default_value)
             else:
                 payload[field_name] = _coerce_env_int(raw[env_name], default_value)
 

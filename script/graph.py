@@ -29,6 +29,7 @@ import os
 import re
 import shutil
 import subprocess
+import sys
 import time
 import threading
 import uuid
@@ -43,6 +44,10 @@ from langgraph.graph import START, StateGraph
 from langgraph.prebuilt import create_react_agent
 from langgraph.types import Send
 from pydantic import BaseModel, Field
+
+SCRIPT_DIR = Path(__file__).resolve().parent
+if str(SCRIPT_DIR) not in sys.path:
+    sys.path.insert(0, str(SCRIPT_DIR))
 
 from app.media_index import build_analysis_index, iter_analysis_files, iter_video_files, match_analysis_files
 from app.steering import SteeringCoordinator, classify_guidance
@@ -363,15 +368,17 @@ _TOOL_NAME_MAP: dict[str, Any] = {
 
 # Phase 1: 素材准备工具
 PREP_TOOL_NAMES = {
-    "search_bilibili_video",
-    "download_bilibili_video",
+    "search_material_sources",
+    "import_material_urls",
+    "download_material_video",
     "rank_video_candidates",
     "analyze_video",
     "inspect_video_duration",
 }
 REMOTE_PREP_TOOL_NAMES = {
-    "search_bilibili_video",
-    "download_bilibili_video",
+    "search_material_sources",
+    "import_material_urls",
+    "download_material_video",
     "rank_video_candidates",
 }
 
@@ -1081,9 +1088,10 @@ def _fallback_prep_plan(
             Step(
                 id=1,
                 description="搜索相关视频素材",
-                tool_hint="search_bilibili_video",
+                tool_hint="search_material_sources",
                 arguments={
                     "query": user_request,
+                    "platforms": ["bilibili"],
                     "max_results": counts["search_per_source"],
                     "pages": counts["search_pages"],
                     "expand_variants": 2 if counts["search_pages"] == 1 else 3,
@@ -1105,7 +1113,7 @@ def _fallback_prep_plan(
             Step(
                 id=3,
                 description="下载最佳素材",
-                tool_hint="download_bilibili_video",
+                tool_hint="download_material_video",
                 depends_on=[2],
                 arguments={},
             ),
@@ -1181,18 +1189,18 @@ def _validate_and_normalize_plan(
             step.id
             for step in [
                 item for item in normalized
-                if item.tool_hint == "search_bilibili_video"
+                if item.tool_hint == "search_material_sources"
             ][:2]
         }
         normalized = [
             step
             for step in normalized
-            if step.tool_hint != "search_bilibili_video" or step.id in kept_search_ids
+            if step.tool_hint != "search_material_sources" or step.id in kept_search_ids
         ]
         kept_ids = {step.id for step in normalized}
         for step in normalized:
             step.depends_on = [dependency for dependency in step.depends_on if dependency in kept_ids]
-            if step.tool_hint == "search_bilibili_video":
+            if step.tool_hint == "search_material_sources":
                 step.arguments["max_results"] = min(
                     int(step.arguments.get("max_results", 8) or 8),
                     8,
@@ -1225,16 +1233,20 @@ def _validate_and_normalize_plan(
         for step in normalized:
             step.depends_on = [item for item in step.depends_on if item in kept_ids]
 
-    search_ids = [step.id for step in normalized if step.tool_hint == "search_bilibili_video"]
+    search_ids = [
+        step.id
+        for step in normalized
+        if step.tool_hint in {"search_material_sources", "import_material_urls"}
+    ]
     rank_ids = [step.id for step in normalized if step.tool_hint == "rank_video_candidates"]
-    download_ids = [step.id for step in normalized if step.tool_hint == "download_bilibili_video"]
+    download_ids = [step.id for step in normalized if step.tool_hint == "download_material_video"]
 
     positions = {step.id: index for index, step in enumerate(normalized)}
     for step in normalized:
         required: set[int] = set(step.depends_on)
         if step.tool_hint == "rank_video_candidates":
             required.update(search_ids)
-        elif step.tool_hint == "download_bilibili_video":
+        elif step.tool_hint == "download_material_video":
             required.update(rank_ids)
         elif step.tool_hint == "analyze_video":
             required.update(
@@ -1417,9 +1429,9 @@ def _build_local_first_plan(user_request: str) -> Plan:
             Step(
                 id=2,
                 description="如本地素材不足，再搜索补充素材",
-                tool_hint="search_bilibili_video",
+                tool_hint="search_material_sources",
                 depends_on=[1],
-                arguments={"query": user_request},
+                arguments={"query": user_request, "platforms": ["bilibili"]},
             ),
             Step(
                 id=3,
@@ -1431,7 +1443,7 @@ def _build_local_first_plan(user_request: str) -> Plan:
             Step(
                 id=4,
                 description="下载补充素材",
-                tool_hint="download_bilibili_video",
+                tool_hint="download_material_video",
                 depends_on=[3],
             ),
             Step(
@@ -1706,9 +1718,9 @@ def _run_deterministic_download_step(
 ) -> tuple[str, dict[str, Any]]:
     """下载步骤的确定性执行，使用排序步骤输出并有界并行下载。"""
     rank_tool = _TOOL_NAME_MAP.get("rank_video_candidates")
-    download_tool = _TOOL_NAME_MAP.get("download_bilibili_video")
+    download_tool = _TOOL_NAME_MAP.get("download_material_video")
     if rank_tool is None or download_tool is None:
-        raise RuntimeError("缺少 rank_video_candidates 或 download_bilibili_video 工具")
+        raise RuntimeError("缺少 rank_video_candidates 或 download_material_video 工具")
 
     top_k = _infer_download_top_k(step.description, counts)
     max_review = int(counts.get("mllm_review", 30))
@@ -1748,6 +1760,7 @@ def _run_deterministic_download_step(
         title = str(video.get("title") or "").strip()
         bvid = str(video.get("bvid") or "").strip()
         url = str(bvid or video.get("url") or "").strip()
+        source = str(video.get("source") or video.get("platform") or "").strip()
         if not url:
             return i, title or "unknown", "", "缺少 url/bvid"
 
@@ -1755,7 +1768,13 @@ def _run_deterministic_download_step(
         filename = f"selected_{i}_{safe_tail}"
         try:
             download_raw = download_tool.invoke(
-                {"url": url, "filename": filename, "prefer_h264": True}
+                {
+                    "url": url,
+                    "source": source,
+                    "filename": filename,
+                    "prefer_h264": True,
+                    "fallback_query": user_request,
+                }
             )
             parsed = json.loads(str(download_raw))
             if parsed.get("status") == "success":
@@ -1813,9 +1832,9 @@ PLANNER_PROMPT = """\
 后续的剪辑/合并/转场/旁白/导出将由另一个创作 AI 自主完成，不需要你规划。
 
 ## 你需要规划的步骤范围
-1. 搜索视频素材（使用 search_bilibili_video，多关键词扩展）
+1. 搜索视频素材（使用 search_material_sources，多关键词扩展；v1 默认 Bilibili 关键词搜索）
 2. 筛选候选视频（rank_video_candidates，从候选池中精选 Top K）
-3. 下载候选中最优的一批视频（download_bilibili_video，在一个步骤里下载）
+3. 下载候选中最优的一批视频（download_material_video，在一个步骤里下载并清洗为剪辑兼容 MP4）
 4. 对所有下载视频进行多模态分析（analyze_video，在一个步骤里一起分析）
 
 ## 可用工具
@@ -1830,13 +1849,14 @@ PLANNER_PROMPT = """\
 - 所有下载的视频都必须分析：每个视频需要调用一次 analyze_video
 - 将互不依赖的搜索拆成多个步骤，并让这些搜索步骤的 `depends_on` 为空，以便并行执行
 - `rank_video_candidates` 必须依赖全部搜索步骤
-- `download_bilibili_video` 必须依赖排序步骤
+- `download_material_video` 必须依赖排序步骤
 - `analyze_video` 必须依赖下载步骤
 - 每个步骤都必须在 `arguments` 中给出完整工具参数；下载步骤的素材列表由调度器从排序结果自动注入
-- 每个步骤的 `tool_hint` 必须且只能填写一个工具名，且从以下四个中选择：
-    - search_bilibili_video
+- 每个步骤的 `tool_hint` 必须且只能填写一个工具名，且从以下工具中选择：
+    - search_material_sources
+    - import_material_urls
     - rank_video_candidates
-    - download_bilibili_video
+    - download_material_video
     - analyze_video
 - **不要包含剪辑、合并、转场、旁白、导出步骤** — 这些全部交给后续创作 AI
 
@@ -1972,9 +1992,10 @@ def planner_node(state: AgentState) -> dict[str, Any]:
 def _normalize_tool_hint(step: Step) -> str:
     """将 tool_hint 规范为 Phase1 的单一合法工具名。"""
     valid = {
-        "search_bilibili_video",
+        "search_material_sources",
+        "import_material_urls",
         "rank_video_candidates",
-        "download_bilibili_video",
+        "download_material_video",
         "analyze_video",
     }
     hint = (step.tool_hint or "").strip()
@@ -1982,15 +2003,17 @@ def _normalize_tool_hint(step: Step) -> str:
         return hint
 
     desc = (step.description or "").lower()
-    if "search_bilibili_video" in hint or "搜索" in desc:
-        return "search_bilibili_video"
+    if "import_material_urls" in hint or "导入" in desc or "链接" in desc or "url" in desc:
+        return "import_material_urls"
+    if "search_material_sources" in hint or "search_bilibili_video" in hint or "搜索" in desc:
+        return "search_material_sources"
     if "rank_video_candidates" in hint or "筛选" in desc or "排序" in desc:
         return "rank_video_candidates"
-    if "download_bilibili_video" in hint or "下载" in desc:
-        return "download_bilibili_video"
+    if "download_material_video" in hint or "download_bilibili_video" in hint or "下载" in desc:
+        return "download_material_video"
     if "analyze_video" in hint or "分析" in desc:
         return "analyze_video"
-    return "search_bilibili_video"
+    return "search_material_sources"
 
 
 def _run_deterministic_analysis_step(
@@ -2095,16 +2118,23 @@ def executor_node(state: AgentState | dict[str, Any]) -> dict[str, Any]:
         result_text = ""
         result_data: dict[str, Any] = {}
 
-        if tool_name == "search_bilibili_video":
+        if tool_name in {"search_material_sources", "import_material_urls"}:
             tool_obj = _TOOL_NAME_MAP.get(tool_name)
             if tool_obj is None:
                 raise RuntimeError(f"{tool_name} 工具未注册")
             arguments.setdefault("query", state.user_request)
-            arguments.setdefault("max_results", counts["search_per_source"])
-            arguments.setdefault("pages", counts["search_pages"])
-            arguments.setdefault("max_total_results", counts["max_candidates"])
+            if tool_name == "search_material_sources":
+                arguments.setdefault("platforms", ["bilibili"])
+                arguments.setdefault("max_results", counts["search_per_source"])
+                arguments.setdefault("pages", counts["search_pages"])
+                arguments.setdefault("max_total_results", counts["max_candidates"])
+            else:
+                arguments.setdefault(
+                    "urls_json",
+                    json.dumps(_extract_material_urls(state.user_request), ensure_ascii=False),
+                )
             raw_result = tool_obj.invoke(arguments)
-            candidates = json.loads(str(raw_result))
+            candidates = _parse_candidate_result(raw_result)
             if not isinstance(candidates, list) or not candidates:
                 raise RuntimeError("搜索未返回有效候选素材")
             result_text = f"搜索完成，获得 {len(candidates)} 个候选素材。"
@@ -2136,7 +2166,7 @@ def executor_node(state: AgentState | dict[str, Any]) -> dict[str, Any]:
                 "ranking": ranking,
             }
 
-        elif tool_name == "download_bilibili_video":
+        elif tool_name == "download_material_video":
             selected_videos = _selected_videos_from_results(state.step_results)
             result_text, result_data = _run_deterministic_download_step(
                 step,
@@ -2260,8 +2290,34 @@ def _phase1_search_steps(state: AgentState) -> list[Step]:
     return [
         step
         for step in state.plan.steps
-        if _normalize_tool_hint(step) == "search_bilibili_video"
+        if _normalize_tool_hint(step) == "search_material_sources"
     ]
+
+
+def _phase1_import_steps(state: AgentState) -> list[Step]:
+    if state.plan is None:
+        return []
+    return [
+        step
+        for step in state.plan.steps
+        if _normalize_tool_hint(step) == "import_material_urls"
+    ]
+
+
+def _extract_material_urls(text: str) -> list[str]:
+    return re.findall(r"https?://[^\s\]\)\"'，。；;]+", str(text or ""))
+
+
+def _parse_candidate_result(raw: Any) -> list[dict[str, Any]]:
+    parsed = json.loads(str(raw))
+    if isinstance(parsed, list):
+        return [item for item in parsed if isinstance(item, dict)]
+    if isinstance(parsed, dict):
+        for key in ("candidates", "videos", "items", "results", "data"):
+            value = parsed.get(key)
+            if isinstance(value, list):
+                return [item for item in value if isinstance(item, dict)]
+    return []
 
 
 def _run_phase1_search_and_rank(
@@ -2269,13 +2325,16 @@ def _run_phase1_search_and_rank(
     scheduler: ResourceScheduler,
 ) -> list[dict[str, Any]]:
     search_steps = _phase1_search_steps(state)
-    if not search_steps:
+    import_steps = _phase1_import_steps(state)
+    material_urls = _extract_material_urls(state.user_request)
+    if not search_steps and not import_steps and not material_urls:
         return []
     counts = _recommend_material_counts(state.target_duration_seconds)
     tasks: list[TaskSpec] = []
     for step in search_steps:
         arguments = dict(step.arguments or {})
         arguments.setdefault("query", state.user_request)
+        arguments.setdefault("platforms", ["bilibili"])
         arguments.setdefault("max_results", counts["search_per_source"])
         arguments.setdefault("pages", counts["search_pages"])
         arguments.setdefault("max_total_results", counts["max_candidates"])
@@ -2285,11 +2344,43 @@ def _run_phase1_search_and_rank(
                 id=f"phase1_r{state.gap_round}_search_{step.id}",
                 phase="phase1",
                 kind="material_search",
-                tool_name="search_bilibili_video",
+                tool_name="search_material_sources",
                 description=step.description,
                 arguments=arguments,
                 resources={"search_pool": 1, "llm_pool": 1},
                 retry=RetryPolicy(max_attempts=2, backoff_seconds=0.5),
+            )
+        )
+    for index, step in enumerate(import_steps, start=1):
+        arguments = dict(step.arguments or {})
+        arguments.setdefault("query", state.user_request)
+        arguments.setdefault("urls_json", json.dumps(material_urls, ensure_ascii=False))
+        tasks.append(
+            TaskSpec(
+                id=f"phase1_r{state.gap_round}_import_{step.id}_{index}",
+                phase="phase1",
+                kind="material_url_import",
+                tool_name="import_material_urls",
+                description=step.description,
+                arguments=arguments,
+                resources={"search_pool": 1},
+                retry=RetryPolicy(max_attempts=1, backoff_seconds=0.5),
+            )
+        )
+    if material_urls and not import_steps:
+        tasks.append(
+            TaskSpec(
+                id=f"phase1_r{state.gap_round}_import_urls",
+                phase="phase1",
+                kind="material_url_import",
+                tool_name="import_material_urls",
+                description="导入用户请求中的素材链接",
+                arguments={
+                    "urls_json": json.dumps(material_urls, ensure_ascii=False),
+                    "query": state.user_request,
+                },
+                resources={"search_pool": 1},
+                retry=RetryPolicy(max_attempts=1, backoff_seconds=0.5),
             )
         )
 
@@ -2324,9 +2415,9 @@ def _run_phase1_search_and_rank(
         tool_obj = _TOOL_NAME_MAP.get(task.tool_name)
         if tool_obj is None:
             raise RuntimeError(f"Phase 1 工具未注册: {task.tool_name}")
-        if task.tool_name == "search_bilibili_video":
+        if task.tool_name in {"search_material_sources", "import_material_urls"}:
             raw = tool_obj.invoke(task.arguments)
-            parsed = json.loads(str(raw))
+            parsed = _parse_candidate_result(raw)
             if not isinstance(parsed, list) or not parsed:
                 raise RuntimeError(f"搜索没有返回候选: {str(raw)[:300]}")
             return TaskExecutionResult(
@@ -2381,21 +2472,30 @@ def _run_phase1_downloads(
         return []
     tasks: list[TaskSpec] = []
     for index, video in enumerate(selected_videos, start=start_index):
+        candidate_id = str(video.get("id") or video.get("bvid") or "").strip()
         bvid = str(video.get("bvid") or "").strip()
         url = str(bvid or video.get("url") or "").strip()
+        source = str(video.get("source") or video.get("platform") or "").strip()
         if not url:
             continue
-        filename = f"selected_r{state.gap_round}_{index}_{(bvid[-6:] if bvid else index)}"
+        tail = (candidate_id or bvid)[-6:] if (candidate_id or bvid) else str(index)
+        filename = f"selected_r{state.gap_round}_{index}_{tail}"
         output_path = WORKSPACE / f"{filename}.mp4"
         tasks.append(
             TaskSpec(
                 id=f"phase1_r{state.gap_round}_download_{index}",
                 phase="phase1",
                 kind="material_download",
-                tool_name="download_bilibili_video",
+                tool_name="download_material_video",
                 description=str(video.get("title") or url),
-                arguments={"url": url, "filename": filename, "prefer_h264": True},
-                resources={"download_pool": 1},
+                arguments={
+                    "url": url,
+                    "source": source,
+                    "filename": filename,
+                    "prefer_h264": True,
+                    "fallback_query": state.user_request,
+                },
+                resources={"download_pool": 1, "ffmpeg_pool": 1},
                 conflict_keys=[f"write:{output_path.resolve(strict=False)}"],
                 output_kinds=["source_video"],
                 retry=RetryPolicy(max_attempts=2, backoff_seconds=1.0),
@@ -2414,7 +2514,7 @@ def _run_phase1_downloads(
     )
 
     def execute(task: TaskSpec, dependencies: dict[str, Any]) -> TaskExecutionResult:
-        raw = _TOOL_NAME_MAP["download_bilibili_video"].invoke(task.arguments)
+        raw = _TOOL_NAME_MAP["download_material_video"].invoke(task.arguments)
         try:
             parsed = json.loads(str(raw))
         except (TypeError, ValueError) as exc:
@@ -2430,7 +2530,18 @@ def _run_phase1_downloads(
                     kind="source_video",
                     path=path,
                     task=task,
-                    metadata={"source": task.description},
+                    metadata={
+                        "source": task.description,
+                        "source_platform": str(task.arguments.get("source") or parsed.get("source") or ""),
+                        "source_url": str(task.arguments.get("url") or parsed.get("original_url") or ""),
+                        "candidate_title": task.description,
+                        "standardized": bool(parsed.get("standardized")),
+                        "target_fps": parsed.get("target_fps"),
+                        "pixel_format": str(parsed.get("pixel_format") or ""),
+                        "loudnorm_applied": bool(parsed.get("loudnorm_applied")),
+                        "loudnorm_target": parsed.get("loudnorm_target"),
+                        "fallback_used": bool(parsed.get("fallback_used") or parsed.get("fallback")),
+                    },
                 )
             ],
         )
@@ -2867,7 +2978,7 @@ def prep_router_node(state: AgentState) -> dict[str, Any]:
             result
             for result in result_map.values()
             if result.status == "failed"
-            and result.tool_name != "search_bilibili_video"
+            and result.tool_name not in {"search_material_sources", "import_material_urls"}
         ]
         if blocking_failures:
             detail = "; ".join(
@@ -2895,13 +3006,13 @@ def prep_router_node(state: AgentState) -> dict[str, Any]:
         successful_searches = [
             result
             for result in result_map.values()
-            if result.tool_name == "search_bilibili_video"
+            if result.tool_name in {"search_material_sources", "import_material_urls"}
             and result.status == "done"
         ]
         failed_searches = [
             result
             for result in result_map.values()
-            if result.tool_name == "search_bilibili_video"
+            if result.tool_name in {"search_material_sources", "import_material_urls"}
             and result.status == "failed"
         ]
         if failed_searches and not successful_searches:
@@ -3051,7 +3162,7 @@ def _ready_prep_steps(state: AgentState) -> list[Send]:
         tool_name = _normalize_tool_hint(step)
         if tool_name in {
             "rank_video_candidates",
-            "download_bilibili_video",
+            "download_material_video",
             "analyze_video",
         }:
             if tool_name in selected_resource_tools:

@@ -22,6 +22,9 @@ from .export_video import export_video
 from .search_bilibili_video import search_bilibili_video
 from .download_bilibili_video import download_bilibili_video
 from .rank_video_candidates import rank_video_candidates
+from .search_material_sources import search_material_sources
+from .import_material_urls import import_material_urls
+from .download_material_video import download_material_video
 
 
 def configure(*, api_key=None, base_url=None, model_name=None, video_api_key=None, video_base_url=None, video_model_name=None, tts_api_key=None, tts_base_url=None, tts_model_name=None) -> None:
@@ -54,6 +57,9 @@ def __getattr__(name: str):
 
 
 ALL_TOOLS = [
+    search_material_sources,
+    import_material_urls,
+    download_material_video,
     search_bilibili_video,
     download_bilibili_video,
     rank_video_candidates,
@@ -115,6 +121,9 @@ __all__ = [
     'export_video',
     'search_bilibili_video',
     'download_bilibili_video',
+    'search_material_sources',
+    'import_material_urls',
+    'download_material_video',
     'rank_video_candidates',
     'API_KEY',
     'BASE_URL',
