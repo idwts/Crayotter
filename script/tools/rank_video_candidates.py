@@ -12,7 +12,7 @@ def rank_video_candidates(
     selection_goal: str = "",
 ) -> str:
     """使用 AI 模型对候选视频进行评分排序，选出最适合剪辑的 Top K 个视频。
-    会自动聚合之前 search_bilibili_video / search_youtobe_video 写入的候选池。
+    会自动聚合之前 search_material_sources / import_material_urls 等工具写入的候选池。
     排序结果中的 selected_videos 字段包含推荐下载的视频列表。
 
     Args:
@@ -46,11 +46,24 @@ def rank_video_candidates(
         incoming_candidates = _parse_candidate_payload(candidates_json)
         pooled_candidates = _load_candidates_from_pool()
         candidates = _merge_candidates([*pooled_candidates, *incoming_candidates])
+        candidates_before_duration_filter = list(candidates)
         candidates, dropped_long, dropped_unknown = _filter_candidates_by_max_duration(
             candidates,
             max_seconds=MAX_DOWNLOAD_DURATION_SECONDS,
             keep_unknown=False,
         )
+        kept_unknown_imports: list[dict[str, Any]] = []
+        for item in candidates_before_duration_filter:
+            if not item.get("allow_unknown_duration"):
+                continue
+            duration_seconds = _parse_duration_to_seconds(
+                item.get("duration_seconds", item.get("duration", None))
+            )
+            if duration_seconds is None:
+                kept_unknown_imports.append(item)
+        if kept_unknown_imports:
+            candidates = _merge_candidates([*candidates, *kept_unknown_imports])
+            dropped_unknown = max(0, dropped_unknown - len(kept_unknown_imports))
 
         if not candidates:
             return (

@@ -614,6 +614,8 @@ class RuntimeManager:
         runtime_config["short_form_max_sources"] = config.short_form_max_sources
         runtime_config["video_analysis_proxy_max_seconds"] = config.video_analysis_proxy_max_seconds
         runtime_config["download_max_height"] = config.download_max_height
+        runtime_config["standardize_target_fps"] = config.standardize_target_fps
+        runtime_config["audio_loudnorm_target"] = config.audio_loudnorm_target
         runtime_config["post_task_review_mode"] = config.post_task_review_mode
         runtime_config["agent_stall_timeout_seconds"] = job.stall_timeout_seconds
         runtime_config["resume_execution"] = resume

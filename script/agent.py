@@ -68,6 +68,16 @@ try:
         360,
         int(os.environ.get("CRAYOTTER_DOWNLOAD_MAX_HEIGHT", "720") or 720),
     )
+    STANDARDIZE_TARGET_FPS = max(
+        1,
+        int(os.environ.get("CRAYOTTER_STANDARDIZE_TARGET_FPS", "30") or 30),
+    )
+    _audio_loudnorm_raw = str(os.environ.get("CRAYOTTER_AUDIO_LOUDNORM_TARGET", "0") or "0").strip().lower()
+    AUDIO_LOUDNORM_TARGET = (
+        0.0
+        if _audio_loudnorm_raw in {"", "0", "off", "false", "no", "none", "null"}
+        else float(_audio_loudnorm_raw)
+    )
 except (TypeError, ValueError):
     SEARCH_POOL_SIZE = 4
     DOWNLOAD_POOL_SIZE = 2
@@ -79,6 +89,8 @@ except (TypeError, ValueError):
     SHORT_FORM_MAX_SOURCES = 2
     VIDEO_ANALYSIS_PROXY_MAX_SECONDS = 45
     DOWNLOAD_MAX_HEIGHT = 720
+    STANDARDIZE_TARGET_FPS = 30
+    AUDIO_LOUDNORM_TARGET = 0.0
 
 VIDEO_API_KEY = os.environ.get("CRAYOTTER_VIDEO_API_KEY") or API_KEY
 VIDEO_BASE_URL = os.environ.get("CRAYOTTER_VIDEO_BASE_URL", BASE_URL)
@@ -223,6 +235,8 @@ def _build_runtime_settings() -> dict[str, Any]:
         "short_form_max_sources": SHORT_FORM_MAX_SOURCES,
         "video_analysis_proxy_max_seconds": VIDEO_ANALYSIS_PROXY_MAX_SECONDS,
         "download_max_height": DOWNLOAD_MAX_HEIGHT,
+        "standardize_target_fps": STANDARDIZE_TARGET_FPS,
+        "audio_loudnorm_target": AUDIO_LOUDNORM_TARGET,
         "post_task_review_mode": POST_TASK_REVIEW_MODE,
         "agent_stall_timeout_seconds": AGENT_STALL_TIMEOUT_SECONDS,
         "video_api_key": VIDEO_API_KEY,
@@ -266,6 +280,16 @@ def _coerce_positive_int(value: Any, default: int) -> int:
     return parsed if parsed > 0 else default
 
 
+def _coerce_runtime_float(value: Any, default: float) -> float:
+    text = str(value or "").strip().lower()
+    if not text or text in {"off", "false", "no", "none", "null"}:
+        return default
+    try:
+        return float(text)
+    except (TypeError, ValueError):
+        return default
+
+
 def apply_runtime_config(config: Mapping[str, Any] | None = None) -> dict[str, Any]:
     global API_KEY, BASE_URL, MODEL_NAME, ENABLE_PHASE2_RESEARCH, ENABLE_PLAN_REVIEW
     global DIRECT_PHASE3_EXECUTION, PREFER_LOCAL_MATERIALS, AGENT_STALL_TIMEOUT_SECONDS
@@ -275,7 +299,7 @@ def apply_runtime_config(config: Mapping[str, Any] | None = None) -> dict[str, A
     global SEARCH_POOL_SIZE, DOWNLOAD_POOL_SIZE, VIDEO_ANALYSIS_POOL_SIZE
     global LLM_POOL_SIZE, FFMPEG_POOL_SIZE, TTS_POOL_SIZE, EXPORT_POOL_SIZE
     global SHORT_FORM_OPTIMIZATIONS, SHORT_FORM_MAX_SOURCES
-    global VIDEO_ANALYSIS_PROXY_MAX_SECONDS, DOWNLOAD_MAX_HEIGHT
+    global VIDEO_ANALYSIS_PROXY_MAX_SECONDS, DOWNLOAD_MAX_HEIGHT, STANDARDIZE_TARGET_FPS, AUDIO_LOUDNORM_TARGET
     global VIDEO_API_KEY, VIDEO_BASE_URL, VIDEO_MODEL_NAME
     global TTS_API_KEY, TTS_BASE_URL, TTS_MODEL_NAME
 
@@ -338,6 +362,14 @@ def apply_runtime_config(config: Mapping[str, Any] | None = None) -> dict[str, A
         config.get("download_max_height"),
         DOWNLOAD_MAX_HEIGHT,
     )
+    STANDARDIZE_TARGET_FPS = _coerce_positive_int(
+        config.get("standardize_target_fps"),
+        STANDARDIZE_TARGET_FPS,
+    )
+    AUDIO_LOUDNORM_TARGET = _coerce_runtime_float(
+        config.get("audio_loudnorm_target"),
+        AUDIO_LOUDNORM_TARGET,
+    )
     os.environ["CRAYOTTER_SEARCH_POOL_SIZE"] = str(SEARCH_POOL_SIZE)
     os.environ["CRAYOTTER_DOWNLOAD_POOL_SIZE"] = str(DOWNLOAD_POOL_SIZE)
     os.environ["CRAYOTTER_VIDEO_ANALYSIS_POOL_SIZE"] = str(VIDEO_ANALYSIS_POOL_SIZE)
@@ -356,6 +388,8 @@ def apply_runtime_config(config: Mapping[str, Any] | None = None) -> dict[str, A
         VIDEO_ANALYSIS_PROXY_MAX_SECONDS
     )
     os.environ["CRAYOTTER_DOWNLOAD_MAX_HEIGHT"] = str(DOWNLOAD_MAX_HEIGHT)
+    os.environ["CRAYOTTER_STANDARDIZE_TARGET_FPS"] = str(STANDARDIZE_TARGET_FPS)
+    os.environ["CRAYOTTER_AUDIO_LOUDNORM_TARGET"] = str(AUDIO_LOUDNORM_TARGET)
     os.environ["CRAYOTTER_POST_TASK_REVIEW_MODE"] = POST_TASK_REVIEW_MODE
     AGENT_STALL_TIMEOUT_SECONDS = _coerce_positive_int(
         config.get("agent_stall_timeout_seconds"),

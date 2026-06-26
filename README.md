@@ -36,6 +36,7 @@ It combines **planning**, **deep editing research**, and **tool-based execution*
 
 ## NEWS
 
+- 2026.6.27: Crayotter 1.0.0 adds multi-source material import, unified download cleanup, and refreshed Windows release packaging.
 - 2026.6.15: The asynchronous scheduling upgrade accelerated the overall video generation workflow by approximately 1.6x.
 - 2026.5.31: Our paper is now available: [Crayotter: Traceable Multi-Agent Workflows for Long-Form Video Editing](https://arxiv.org/abs/2606.07636).
 - 2026.5.23: 100 Stars achieved!
@@ -75,9 +76,10 @@ Crayotter uses a three-phase architecture:
    - A deterministic scheduler validates dependencies, resource pools, retries, and write conflicts
    - Search, per-video download, and per-video analysis tasks execute concurrently when resources are available
    - A Material Gap Evaluator decides whether to proceed or run an incremental sourcing round
-   - Search candidate videos
+   - Search candidate videos through the platform-agnostic material-source layer
+   - Import user-provided material URLs from Bilibili, Douyin, Xiaohongshu/Rednote, Kuaishou, YouTube, or generic URLs when supported by `yt-dlp`
    - Rank/select high-quality candidates
-   - Download selected videos
+   - Download selected videos and standardize them into editing-compatible MP4/H.264/AAC assets
    - Analyze each source video multimodally
 
 2. **Phase 2 — Editing Research**
@@ -165,6 +167,8 @@ CRAYOTTER_LLM_POOL_SIZE=2
 CRAYOTTER_FFMPEG_POOL_SIZE=2
 CRAYOTTER_TTS_POOL_SIZE=2
 CRAYOTTER_EXPORT_POOL_SIZE=1
+CRAYOTTER_STANDARDIZE_TARGET_FPS=30
+CRAYOTTER_AUDIO_LOUDNORM_TARGET=0
 CRAYOTTER_AGENT_STALL_TIMEOUT_SECONDS=150
 ```
 
@@ -174,6 +178,8 @@ Notes:
 - `CRAYOTTER_ENABLE_PLAN_REVIEW=true` generates a visual EditingPlan before editing and waits for user approval or natural-language revisions before Phase 3.
 - `CRAYOTTER_PREFER_LOCAL_MATERIALS=true` analyzes local materials first and only searches online when the current materials are not enough.
 - Resource-pool variables bound search, download, video analysis, LLM, FFmpeg, TTS, and final export work.
+- Material downloads are routed through `download_material_video`; Bilibili remains the default keyword-search source, while supported third-party URLs can be imported and cleaned through the same pipeline.
+- `CRAYOTTER_STANDARDIZE_TARGET_FPS` controls download cleanup frame rate. `CRAYOTTER_AUDIO_LOUDNORM_TARGET=0` disables loudness normalization; set a negative LUFS value such as `-16` to enable two-pass EBU R128 loudnorm.
 - `CRAYOTTER_AGENT_STALL_TIMEOUT_SECONDS` controls the “no new progress” watchdog threshold for running jobs.
 - The workbench UI writes API settings, Phase 2, direct Phase 3, local-first mode, and timeout changes back to the same `.env`.
 - Candidate ranking now treats target orientation as a scoring factor: landscape by default, portrait when the user explicitly asks for it. Merge/export also use scale-to-cover plus centered crop instead of direct stretching.
