@@ -19,7 +19,7 @@ import {
   mergeRuntimeEvents,
   normalizeRuntimeEvent,
 } from "./eventState";
-import { downloadTextFile } from "./logDownload";
+import { jobEventsDownloadUrl } from "./logDownload";
 
 const STORAGE_KEYS = {
   language: "crayotter.language",
@@ -630,13 +630,7 @@ function App() {
     notify("success", t("copiedLog"));
   };
 
-  const downloadFullLog = () => {
-    const text = buildLogPlainText(getVisibleLogEvents(selectedEvents));
-    downloadTextFile({
-      text,
-      filename: `${selectedJob?.job_id || "job"}-events.log`,
-    });
-  };
+  const downloadFullLogUrl = selectedJob ? jobEventsDownloadUrl(selectedJob.job_id) : "";
 
   const submitConfig = async (event) => {
     event.preventDefault();
@@ -990,7 +984,7 @@ function App() {
               rejectPlan={rejectPlan}
               composerProps={composerProps}
               copyFullLog={copyFullLog}
-              downloadFullLog={downloadFullLog}
+              downloadFullLogUrl={downloadFullLogUrl}
               notify={notify}
               t={t}
             />

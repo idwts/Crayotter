@@ -319,7 +319,7 @@ export function WorkbenchView(props) {
     notify,
     composerProps,
     copyFullLog,
-    downloadFullLog,
+    downloadFullLogUrl,
     t,
   } = props;
 
@@ -375,7 +375,7 @@ export function WorkbenchView(props) {
               formatDate={formatDate}
               describeEvent={describeEvent}
               copyFullLog={copyFullLog}
-              downloadFullLog={downloadFullLog}
+              downloadFullLogUrl={downloadFullLogUrl}
               t={t}
             />
           )}
@@ -658,7 +658,7 @@ function ContextPanel({ activeTab, setActiveTab, children, t }) {
   );
 }
 
-function DetailsTab({ selectedJob, logEvents, modeLabel, statusLabel, formatDate, describeEvent, copyFullLog, downloadFullLog, t }) {
+function DetailsTab({ selectedJob, logEvents, modeLabel, statusLabel, formatDate, describeEvent, copyFullLog, downloadFullLogUrl, t }) {
   if (!selectedJob) {
     return (
       <div className="context-start-state">
@@ -700,7 +700,7 @@ function DetailsTab({ selectedJob, logEvents, modeLabel, statusLabel, formatDate
         </div>
         <div className="mt-3 flex gap-2">
           <button className="text-action" onClick={copyFullLog} type="button">{t("copyFullLog")}</button>
-          <button className="text-action" onClick={downloadFullLog} type="button">{t("downloadLog")}</button>
+          <a className="text-action" href={downloadFullLogUrl}>{t("downloadLog")}</a>
         </div>
       </div>
     </div>

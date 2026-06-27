@@ -4,11 +4,12 @@ import json
 import os
 import shutil
 import threading
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 
 PlanStatus = Literal[
@@ -40,6 +41,31 @@ class EditingScene(BaseModel):
     narration: str = ""
     alternatives: list[str] = Field(default_factory=list)
     locked: bool = False
+
+    @field_validator(
+        "scene_id",
+        "narrative_purpose",
+        "source_path",
+        "crop",
+        "transition",
+        "subtitle",
+        "narration",
+        mode="before",
+    )
+    @classmethod
+    def _coerce_optional_text(cls, value: Any) -> str:
+        if value is None:
+            return ""
+        return str(value)
+
+    @field_validator("alternatives", mode="before")
+    @classmethod
+    def _coerce_alternatives(cls, value: Any) -> list[str]:
+        if value is None:
+            return []
+        if isinstance(value, list):
+            return [str(item) for item in value if item is not None]
+        return [str(value)]
 
 
 class EditingPlan(BaseModel):
@@ -407,7 +433,19 @@ class EditingPlanStore:
         path.parent.mkdir(parents=True, exist_ok=True)
         temp_path = path.with_name(f".{path.name}.{os.getpid()}.{threading.get_ident()}.tmp")
         temp_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
-        os.replace(temp_path, path)
+        attempts = 8 if os.name == "nt" else 1
+        try:
+            for attempt in range(attempts):
+                try:
+                    os.replace(temp_path, path)
+                    return
+                except PermissionError:
+                    if attempt + 1 >= attempts:
+                        raise
+                    time.sleep(0.05 * (attempt + 1))
+        finally:
+            if temp_path.exists():
+                temp_path.unlink(missing_ok=True)
 
 
 def copy_plan_artifact(store: EditingPlanStore, plan: EditingPlan) -> Path:

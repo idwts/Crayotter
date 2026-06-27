@@ -27,6 +27,20 @@ from script.editing_plan import (
 )
 
 
+def format_events_as_log(events: list[dict[str, Any]]) -> str:
+    lines: list[str] = []
+    for event in events:
+        timestamp = str(event.get("timestamp") or "")
+        event_type = str(event.get("type") or "event")
+        payload = event.get("payload") or {}
+        if isinstance(payload, dict) and "message" in payload:
+            body = str(payload.get("message") or "")
+        else:
+            body = json.dumps(payload, ensure_ascii=False, indent=2)
+        lines.append(f"{timestamp}\n{event_type}\n{body}".strip())
+    return "\n\n".join(lines) + ("\n" if lines else "")
+
+
 class ManagedJob:
     def __init__(self, record: JobRecord, job_dir: Path, stall_timeout_seconds: int = 150) -> None:
         self.record = record
@@ -370,6 +384,9 @@ class RuntimeManager:
         if job is None:
             raise KeyError(job_id)
         return job.bus.list_from(after_sequence=after_sequence)
+
+    def events_log_text(self, job_id: str) -> str:
+        return format_events_as_log(self.list_events(job_id))
 
     def list_messages(self, job_id: str) -> list[dict[str, Any]]:
         job = self.get_job(job_id)

@@ -77,6 +77,7 @@ class BackendHandler(BaseHTTPRequestHandler):
                             "GET /jobs/{job_id}",
                             "GET /jobs/{job_id}/artifacts",
                             "GET /jobs/{job_id}/events",
+                            "GET /jobs/{job_id}/events.log",
                             "GET /jobs/{job_id}/events/stream",
                             "GET /jobs/{job_id}/messages",
                             "GET /jobs/{job_id}/plans/current",
@@ -144,6 +145,15 @@ class BackendHandler(BaseHTTPRequestHandler):
                 after_sequence = int(query.get("after", ["0"])[0] or 0)
                 items = SERVICE.runtime_manager.list_events(job_id, after_sequence=after_sequence)
                 self._write_json(HTTPStatus.OK, {"items": items})
+                return
+
+            if path.startswith("/jobs/") and path.endswith("/events.log"):
+                job_id = path.split("/")[2]
+                self._write_text_attachment(
+                    HTTPStatus.OK,
+                    SERVICE.runtime_manager.events_log_text(job_id),
+                    filename=f"{job_id}-events.log",
+                )
                 return
 
             if path.startswith("/jobs/") and path.endswith("/messages"):
@@ -336,6 +346,17 @@ class BackendHandler(BaseHTTPRequestHandler):
         self.send_header("Content-Type", "application/json; charset=utf-8")
         self.send_header("Content-Length", str(len(body)))
         self.send_header("Cache-Control", "no-store")
+        self.end_headers()
+        self.wfile.write(body)
+
+    def _write_text_attachment(self, status: HTTPStatus, text: str, *, filename: str) -> None:
+        body = text.encode("utf-8")
+        self.send_response(status)
+        self.send_header("Content-Type", "text/plain; charset=utf-8")
+        self.send_header("Content-Length", str(len(body)))
+        self.send_header("Cache-Control", "no-store")
+        encoded_name = quote(filename)
+        self.send_header("Content-Disposition", f"attachment; filename*=UTF-8''{encoded_name}")
         self.end_headers()
         self.wfile.write(body)
 
