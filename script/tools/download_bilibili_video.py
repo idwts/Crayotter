@@ -142,7 +142,7 @@ def download_bilibili_video(
             url,
         ]
         if result is not None:
-            result = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
+            result = run_subprocess(cmd, capture_output=True, text=True, timeout=300)
             if result.returncode != 0:
                 yt_dlp_error = (result.stderr or result.stdout or "").strip()
                 logger.warning(

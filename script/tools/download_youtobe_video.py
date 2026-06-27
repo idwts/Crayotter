@@ -23,7 +23,7 @@ def download_youtobe_video(url: str, filename: str = "downloaded") -> str:
             "-o", str(output_path),
             url,
         ]
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
+        result = run_subprocess(cmd, capture_output=True, text=True, timeout=300)
         if result.returncode != 0:
             return f"下载失败: {result.stderr[:500]}"
 

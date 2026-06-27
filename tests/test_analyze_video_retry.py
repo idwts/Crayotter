@@ -77,6 +77,24 @@ class DashScopeVideoAnalysisRetryTests(unittest.TestCase):
         self.assertEqual(attempts, 1)
         sleep.assert_not_called()
 
+    def test_denied_latest_model_fallback_is_reused_for_later_calls(self) -> None:
+        analyze_video_module.reset_analysis_model_fallbacks()
+
+        self.assertEqual(
+            analyze_video_module._dashscope_model_candidates("qwen-vl-max-latest"),
+            ["qwen-vl-max-latest", "qwen-vl-max"],
+        )
+
+        analyze_video_module._remember_dashscope_model_fallback(
+            "qwen-vl-max-latest",
+            "qwen-vl-max",
+        )
+
+        self.assertEqual(
+            analyze_video_module._dashscope_model_candidates("qwen-vl-max-latest"),
+            ["qwen-vl-max"],
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

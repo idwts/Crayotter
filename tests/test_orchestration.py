@@ -450,6 +450,14 @@ class ShortFormConfigTests(unittest.TestCase):
             config = AppConfig(short_form_max_sources=value)
             self.assertEqual(config.short_form_max_sources, value)
 
+    def test_30_second_tasks_use_lightweight_material_collection(self) -> None:
+        from script import graph
+
+        counts = graph._recommend_material_counts(30)
+
+        self.assertLessEqual(counts["top_k_max"], 4)
+        self.assertLessEqual(counts["mllm_review"], 60)
+
     def test_short_form_executor_no_longer_has_10s_error(self) -> None:
         graph_source = Path("script/graph.py").read_text(encoding="utf-8")
         self.assertNotIn("短片计划总时长不是 10 秒", graph_source)

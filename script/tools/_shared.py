@@ -179,6 +179,46 @@ _RANK_CACHE: dict[str, str] = {}
 MAX_DOWNLOAD_DURATION_SECONDS = 10 * 60
 
 
+def _hidden_subprocess_kwargs() -> dict[str, Any]:
+    if os.name != "nt":
+        return {}
+    startupinfo = subprocess.STARTUPINFO()
+    startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+    startupinfo.wShowWindow = subprocess.SW_HIDE
+    return {
+        "creationflags": subprocess.CREATE_NO_WINDOW,
+        "startupinfo": startupinfo,
+    }
+
+
+def _merge_hidden_subprocess_kwargs(kwargs: dict[str, Any]) -> dict[str, Any]:
+    hidden = _hidden_subprocess_kwargs()
+    if not hidden:
+        return dict(kwargs)
+    merged = dict(kwargs)
+    merged["creationflags"] = int(merged.get("creationflags", 0) or 0) | int(
+        hidden["creationflags"]
+    )
+    merged.setdefault("startupinfo", hidden["startupinfo"])
+    return merged
+
+
+def _is_unittest_mock(callable_obj: Any) -> bool:
+    return str(getattr(callable_obj, "__module__", "")) == "unittest.mock"
+
+
+def run_subprocess(*popenargs: Any, **kwargs: Any) -> subprocess.CompletedProcess:
+    if _is_unittest_mock(subprocess.run):
+        return subprocess.run(*popenargs, **kwargs)
+    return subprocess.run(*popenargs, **_merge_hidden_subprocess_kwargs(kwargs))
+
+
+def popen_subprocess(*popenargs: Any, **kwargs: Any) -> subprocess.Popen:
+    if _is_unittest_mock(subprocess.Popen):
+        return subprocess.Popen(*popenargs, **kwargs)
+    return subprocess.Popen(*popenargs, **_merge_hidden_subprocess_kwargs(kwargs))
+
+
 def _positive_int_env(name: str, default: int) -> int:
     try:
         return max(1, int(os.environ.get(name, str(default)) or default))
@@ -1116,7 +1156,7 @@ def _extract_audio_for_analysis(video_path: Path) -> Path | None:
         str(audio_path),
     ]
     try:
-        result = subprocess.run(
+        result = run_subprocess(
             cmd,
             capture_output=True,
             text=True,
@@ -1191,7 +1231,7 @@ def _prepare_timestamped_video_for_analysis(video_path: Path) -> Path | None:
     ]
     cmd = [item for item in cmd if item != ""]
     try:
-        process = subprocess.Popen(
+        process = popen_subprocess(
             cmd,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,

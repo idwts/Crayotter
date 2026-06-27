@@ -60,7 +60,7 @@ from editing_plan import (
 )
 from memory_reference import INJECTION_MEMORY_CHAR_LIMIT, load_memory_reference
 from tools import ALL_TOOLS, MEMORY_EXPERIENCE_DIR, USER_WORKSPACE, WORKSPACE
-from tools._shared import _tts_generate
+from tools._shared import _tts_generate, run_subprocess
 from tools.narration_pipeline import compose_prepared_narration, narration_audio_path
 from model_runtime import (
     ModelCallError,
@@ -1010,6 +1010,15 @@ def _recommend_material_counts(target_duration_seconds: float) -> dict[str, int]
             "mllm_review": 24,
             "top_k_min": 1,
             "top_k_max": SHORT_FORM_MAX_SOURCES,
+        }
+    if SHORT_FORM_OPTIMIZATIONS and 0 < target_duration_seconds <= 45:
+        return {
+            "search_per_source": 16,
+            "search_pages": 1,
+            "max_candidates": 60,
+            "mllm_review": 60,
+            "top_k_min": 3,
+            "top_k_max": 4,
         }
     if target_duration_seconds <= 0:
         return {
@@ -5483,7 +5492,7 @@ def _run_short_form_visual_compose_ffmpeg(
     )
     started = time.perf_counter()
     try:
-        completed = subprocess.run(
+        completed = run_subprocess(
             cmd,
             capture_output=True,
             text=True,
