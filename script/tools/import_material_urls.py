@@ -53,7 +53,7 @@ def _parse_urls(payload: str) -> list[str]:
 def _probe_url_metadata(url: str) -> dict[str, Any] | None:
     cmd = ["yt-dlp", "-J", "--no-playlist", "--skip-download", url]
     try:
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=45)
+        result = run_subprocess(cmd, capture_output=True, text=True, timeout=45)
     except Exception:
         return None
     if result.returncode != 0:

@@ -52,7 +52,7 @@ def _ffmpeg_binary() -> str:
 
 def _ffmpeg_run(cmd: list[str], timeout: int = 900) -> tuple[bool, str]:
     try:
-        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
+        proc = run_subprocess(cmd, capture_output=True, text=True, timeout=timeout)
         if proc.returncode == 0:
             # ffmpeg/ffprobe 在不同平台可能将有效输出写入 stdout 或 stderr。
             return True, (proc.stdout or proc.stderr or "")

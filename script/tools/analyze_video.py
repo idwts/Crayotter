@@ -30,6 +30,8 @@ from ._shared import (
 
 _FATAL_ANALYSIS_ERROR = ""
 _FATAL_ANALYSIS_ERROR_LOCK = threading.Lock()
+_DASHSCOPE_MODEL_FALLBACKS: dict[str, str] = {}
+_DASHSCOPE_MODEL_FALLBACKS_LOCK = threading.Lock()
 _DASHSCOPE_RETRY_DELAYS_SECONDS = (5.0, 15.0, 30.0)
 
 
@@ -140,6 +142,34 @@ def reset_analysis_failure_circuit() -> None:
     global _FATAL_ANALYSIS_ERROR
     with _FATAL_ANALYSIS_ERROR_LOCK:
         _FATAL_ANALYSIS_ERROR = ""
+
+
+def reset_analysis_model_fallbacks() -> None:
+    with _DASHSCOPE_MODEL_FALLBACKS_LOCK:
+        _DASHSCOPE_MODEL_FALLBACKS.clear()
+
+
+def _remember_dashscope_model_fallback(configured_model: str, fallback_model: str) -> None:
+    configured = str(configured_model or "").strip()
+    fallback = str(fallback_model or "").strip()
+    if not configured or not fallback or configured == fallback:
+        return
+    with _DASHSCOPE_MODEL_FALLBACKS_LOCK:
+        _DASHSCOPE_MODEL_FALLBACKS[configured] = fallback
+
+
+def _dashscope_model_candidates(configured_model: str) -> list[str]:
+    configured = str(configured_model or "").strip()
+    if not configured:
+        return [configured]
+    with _DASHSCOPE_MODEL_FALLBACKS_LOCK:
+        cached = _DASHSCOPE_MODEL_FALLBACKS.get(configured)
+    if cached:
+        return [cached]
+    candidates = [configured]
+    if configured.endswith("-latest"):
+        candidates.append(configured[:-7])
+    return candidates
 
 
 def _to_dashscope_file_url(path: Path) -> str:
@@ -365,9 +395,7 @@ def analyze_video(
             dashscope.api_key = _shared.VIDEO_API_KEY
             dashscope.base_http_api_url = _normalize_dashscope_api_url(_shared.VIDEO_BASE_URL)
 
-            model_candidates = [_shared.VIDEO_MODEL_NAME]
-            if _shared.VIDEO_MODEL_NAME.endswith("-latest"):
-                model_candidates.append(_shared.VIDEO_MODEL_NAME[:-7])
+            model_candidates = _dashscope_model_candidates(_shared.VIDEO_MODEL_NAME)
 
             for model_index, model_name in enumerate(model_candidates):
                 has_model_fallback = model_index + 1 < len(model_candidates)
@@ -466,6 +494,10 @@ def analyze_video(
                             )
                         if _is_fatal_access_error(status_code, message):
                             if has_model_fallback:
+                                _remember_dashscope_model_fallback(
+                                    _shared.VIDEO_MODEL_NAME,
+                                    model_candidates[model_index + 1],
+                                )
                                 logger.warning(
                                     "⚠️ 模型 %s 无访问权限，降级到 %s",
                                     model_name,
@@ -506,6 +538,10 @@ def analyze_video(
                             last_error,
                         ):
                             if has_model_fallback:
+                                _remember_dashscope_model_fallback(
+                                    _shared.VIDEO_MODEL_NAME,
+                                    model_candidates[model_index + 1],
+                                )
                                 logger.warning(
                                     "⚠️ 模型 %s 无访问权限，降级到 %s",
                                     model_name,

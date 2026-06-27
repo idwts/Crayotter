@@ -174,7 +174,7 @@ def _run_yt_dlp_download(url: str, output_path: Path, *, max_height: int, prefer
         str(output_path),
         url,
     ]
-    return subprocess.run(cmd, capture_output=True, text=True, timeout=300)
+    return run_subprocess(cmd, capture_output=True, text=True, timeout=300)
 
 
 def _download_bilibili_fallback(
@@ -254,7 +254,7 @@ def _probe_video(path: Path) -> dict[str, Any]:
 
 def _ffprobe_stream_codec(path: Path, stream: str) -> str:
     try:
-        result = subprocess.run(
+        result = run_subprocess(
             [
                 "ffprobe",
                 "-v",
@@ -406,7 +406,7 @@ def _run_loudnorm_analysis(input_path: Path, *, target_lufs: float) -> dict[str,
         "null",
         "-",
     ]
-    result = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
+    result = run_subprocess(cmd, capture_output=True, text=True, timeout=300)
     if result.returncode != 0:
         raise RuntimeError((result.stderr or result.stdout or "ffmpeg loudnorm analysis failed")[:500])
     return _parse_loudnorm_json(result.stderr or result.stdout or "")
@@ -464,7 +464,7 @@ def _parse_loudnorm_json(text: str) -> dict[str, str]:
 
 
 def _run_ffmpeg_checked(cmd: list[str], *, timeout: int, error_label: str) -> None:
-    result = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
+    result = run_subprocess(cmd, capture_output=True, text=True, timeout=timeout)
     if result.returncode != 0:
         raise RuntimeError((result.stderr or result.stdout or error_label)[:500])
 

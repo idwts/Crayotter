@@ -41,7 +41,7 @@ def search_youtobe_video(
                 "--no-download",
             ]
             try:
-                result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+                result = run_subprocess(cmd, capture_output=True, text=True, timeout=30)
             except subprocess.TimeoutExpired:
                 logger.warning("⚠️ YouTube搜索超时: query='%s'", q)
                 continue

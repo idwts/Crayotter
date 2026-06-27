@@ -1,11 +1,11 @@
 from __future__ import annotations
 
-from ._shared import Path, json, subprocess, tool, _resolve_workspace_input_path, _safe_output_video_path
+from ._shared import Path, json, tool, run_subprocess, _resolve_workspace_input_path, _safe_output_video_path
 
 
 def _run_ffmpeg(cmd: list[str], timeout: int = 900) -> tuple[bool, str]:
     try:
-        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
+        proc = run_subprocess(cmd, capture_output=True, text=True, timeout=timeout)
         if proc.returncode == 0:
             return True, ""
         return False, (proc.stderr or proc.stdout or "")[-1200:]
