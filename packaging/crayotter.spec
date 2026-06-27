@@ -7,6 +7,7 @@ ROOT = Path(SPECPATH).resolve().parent
 ICON_PATH = ROOT / "packaging" / "generated" / "Crayotter.ico"
 
 webview_datas, webview_binaries, webview_hiddenimports = collect_all("webview")
+bilibili_datas, bilibili_binaries, bilibili_hiddenimports = collect_all("bilibili_api")
 
 datas = [
     (str(ROOT / "app" / "frontend"), "app/frontend"),
@@ -28,13 +29,14 @@ hiddenimports = [
     "webview.platforms.edgechromium",
     "webview.platforms.winforms",
     *webview_hiddenimports,
+    *bilibili_hiddenimports,
 ]
 
 a = Analysis(
     [str(ROOT / "script" / "run_desktop.py")],
     pathex=[str(ROOT), str(ROOT / "script")],
-    binaries=[*binaries, *webview_binaries],
-    datas=[*datas, *webview_datas],
+    binaries=[*binaries, *webview_binaries, *bilibili_binaries],
+    datas=[*datas, *webview_datas, *bilibili_datas],
     hiddenimports=hiddenimports,
     hookspath=[],
     hooksconfig={},
