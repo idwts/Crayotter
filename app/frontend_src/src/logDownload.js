@@ -15,3 +15,7 @@ export function downloadTextFile({
   anchor.remove();
   scheduler(() => urlApi.revokeObjectURL(objectUrl), 0);
 }
+
+export function jobEventsDownloadUrl(jobId) {
+  return `/jobs/${encodeURIComponent(jobId || "job")}/events.log`;
+}

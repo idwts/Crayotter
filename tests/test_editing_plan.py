@@ -3,6 +3,7 @@ from __future__ import annotations
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from script.editing_plan import (
     EditingPlan,
@@ -85,6 +86,56 @@ class EditingPlanTests(unittest.TestCase):
             self.assertEqual(approved.status, "FROZEN")
             self.assertIsNotNone(store.approved())
             self.assertTrue((Path(tmp) / "workspace" / "plans" / "approved_editing_plan.json").exists())
+
+    def test_generated_plan_accepts_common_llm_scene_coercions(self) -> None:
+        plan = EditingPlan.model_validate(
+            {
+                "version": "v001",
+                "target_duration_seconds": 3,
+                "scenes": [
+                    {
+                        "scene_id": 1,
+                        "start": 0,
+                        "end": 3,
+                        "source_start": 0,
+                        "source_end": 3,
+                        "crop": None,
+                        "transition": None,
+                        "subtitle": None,
+                        "narration": None,
+                        "alternatives": None,
+                    }
+                ],
+            }
+        )
+
+        self.assertEqual(plan.scenes[0].scene_id, "1")
+        self.assertEqual(plan.scenes[0].crop, "")
+        self.assertEqual(plan.scenes[0].alternatives, [])
+
+    def test_store_retries_current_plan_replace_when_windows_locks_target(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            source = Path(tmp) / "source.mp4"
+            source.write_bytes(b"video")
+            store = EditingPlanStore(Path(tmp) / "workspace")
+            plan = self._sample_plan(source)
+            original_replace = __import__("os").replace
+            calls = 0
+
+            def flaky_replace(src, dst):
+                nonlocal calls
+                calls += 1
+                if Path(dst).name == "current_plan.json" and calls <= 3:
+                    raise PermissionError(5, "Access denied", str(dst))
+                return original_replace(src, dst)
+
+            with patch("script.editing_plan.os.replace", side_effect=flaky_replace), patch(
+                "script.editing_plan.time.sleep"
+            ):
+                store.save_plan(plan)
+
+            self.assertTrue(store.current_path.exists())
+            self.assertIsNotNone(store.current())
 
 
 if __name__ == "__main__":
