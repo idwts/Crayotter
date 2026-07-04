@@ -1,0 +1,89 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Crayotter Demo Video</title>
+  <meta name="description" content="Watch the Crayotter demo video online.">
+  <style>
+    :root {
+      color-scheme: dark;
+      font-family: Inter, "Segoe UI", Arial, sans-serif;
+      background: #101216;
+      color: #f4f1ea;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      min-height: 100vh;
+      background:
+        linear-gradient(135deg, rgba(43, 57, 78, 0.76), rgba(16, 18, 22, 0.95)),
+        #101216;
+    }
+
+    main {
+      width: min(1120px, calc(100% - 32px));
+      margin: 0 auto;
+      padding: 32px 0 56px;
+    }
+
+    .back-link {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      margin-bottom: 28px;
+      color: #c8d7ff;
+      font-size: 0.95rem;
+      text-decoration: none;
+    }
+
+    .back-link:focus,
+    .back-link:hover {
+      color: #ffffff;
+      text-decoration: underline;
+    }
+
+    h1 {
+      margin: 0 0 10px;
+      font-size: clamp(2rem, 5vw, 4.25rem);
+      line-height: 1;
+      font-weight: 760;
+    }
+
+    p {
+      max-width: 720px;
+      margin: 0 0 26px;
+      color: #cfc8ba;
+      font-size: clamp(1rem, 2vw, 1.2rem);
+      line-height: 1.55;
+    }
+
+    video {
+      display: block;
+      width: 100%;
+      aspect-ratio: 16 / 9;
+      background: #050609;
+      border: 1px solid rgba(255, 255, 255, 0.14);
+      border-radius: 8px;
+      box-shadow: 0 24px 80px rgba(0, 0, 0, 0.38);
+    }
+
+  </style>
+</head>
+<body>
+  <main>
+    <a class="back-link" href="./" aria-label="Back to the Crayotter website">&larr; Crayotter</a>
+    <h1>Crayotter Demo Video</h1>
+    <p>Watch the end-to-end workbench demo directly in the browser.</p>
+
+    <video controls playsinline preload="metadata" poster="./assets/showcase-poster.jpg">
+      <source src="./assets/videos/showcase.mp4" type="video/mp4">
+      Your browser does not support HTML5 video.
+    </video>
+  </main>
+</body>
+</html>
