@@ -34,13 +34,13 @@ Crayotter 是一个多模态、Agent 驱动的视频自动编辑系统，可以�
 ## 📽️ 演示视频
 
 <p align="center">
-  <a href="https://idwts.github.io/Crayotter/showcase.html">
+  <a href="https://github.com/idwts/Crayotter/blob/main/demo/showcase.mp4">
     <img src="./demo/showcase-poster.jpg" alt="Crayotter 演示视频预览" width="100%" />
   </a>
 </p>
 
 <p align="center">
-  <a href="https://idwts.github.io/Crayotter/showcase.html">在线播放演示视频</a>
+  <a href="https://github.com/idwts/Crayotter/blob/main/demo/showcase.mp4">在 GitHub 上播放演示视频</a>
 </p>
 
 一次完整的端到端运行：从一句文本需求出发，Crayotter 自动准备素材、研究剪辑蓝图，最终产出成片。
