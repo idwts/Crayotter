@@ -73,6 +73,28 @@ class EditingPlanTests(unittest.TestCase):
             self.assertEqual(updated.scenes[0].subtitle, "穿越辽阔新疆")
             self.assertEqual(diff.changed_scenes[0]["scene_id"], "scene_01")
 
+    def test_apply_patch_ignores_incomplete_added_scene(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            source = Path(tmp) / "source.mp4"
+            source.write_bytes(b"video")
+            plan = self._sample_plan(source)
+            patch = PlanPatch(
+                base_version="v001",
+                feedback="增加一个结尾镜头",
+                operations=[
+                    PlanPatchOperation(
+                        op="add_scene",
+                        value={},
+                    )
+                ],
+            )
+
+            updated, diff = apply_plan_patch(plan, patch)
+
+            self.assertEqual(updated.version, "v002")
+            self.assertEqual(len(updated.scenes), 1)
+            self.assertEqual(diff.summary, ["计划内容未发生结构化变化"])
+
     def test_store_approve_freezes_current_plan(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             source = Path(tmp) / "source.mp4"

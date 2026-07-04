@@ -151,6 +151,40 @@ class SteeringCoordinatorTests(unittest.TestCase):
             else:
                 os.environ["CRAYOTTER_STEERING_DIR"] = original_env
 
+    def test_duration_guidance_updates_effective_target_duration(self) -> None:
+        self.store.append_message("要求这个宣传片的时长在40s，且全程都有旁白", revision=1)
+        import os
+        import sys
+        from unittest.mock import patch
+
+        script_dir = Path(__file__).resolve().parents[1] / "script"
+        if str(script_dir) not in sys.path:
+            sys.path.insert(0, str(script_dir))
+        import script.graph as graph_module
+
+        original_env = os.environ.get("CRAYOTTER_STEERING_DIR")
+        original_coordinator = graph_module._STEERING_COORDINATOR
+        try:
+            os.environ["CRAYOTTER_STEERING_DIR"] = str(self.root / "steering")
+            graph_module._STEERING_COORDINATOR = self.coordinator
+            state = graph_module.AgentState(
+                base_user_request="请做一个北京城市的宣传片，要求突出北京的人文和风景，且旁白正式",
+                user_request="请做一个北京城市的宣传片，要求突出北京的人文和风景，且旁白正式",
+                target_duration_seconds=300,
+            )
+
+            with patch.object(graph_module, "_get_llm", side_effect=RuntimeError("no llm")):
+                updated = graph_module._apply_steering_checkpoint(state, "phase1_search_rank_round_0:idle", "phase1")
+
+            self.assertEqual(updated["target_duration_seconds"], 40.0)
+            self.assertIn("40s", updated["user_request"])
+        finally:
+            graph_module._STEERING_COORDINATOR = original_coordinator
+            if original_env is None:
+                os.environ.pop("CRAYOTTER_STEERING_DIR", None)
+            else:
+                os.environ["CRAYOTTER_STEERING_DIR"] = original_env
+
 
 class RuntimeManagerRevisionTests(unittest.TestCase):
     def test_guidance_message_does_not_create_pause_request(self) -> None:

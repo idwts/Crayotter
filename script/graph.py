@@ -94,12 +94,16 @@ REVISION: int = max(1, int(os.environ.get("CRAYOTTER_REVISION", "1") or 1))
 DIRECT_PHASE3_EXECUTION: bool = False
 PREFER_LOCAL_MATERIALS: bool = False
 SEARCH_POOL_SIZE: int = 4
-DOWNLOAD_POOL_SIZE: int = 2
-VIDEO_ANALYSIS_POOL_SIZE: int = 2
-LLM_POOL_SIZE: int = 2
-FFMPEG_POOL_SIZE: int = 2
-TTS_POOL_SIZE: int = 2
+DOWNLOAD_POOL_SIZE: int = 3
+VIDEO_ANALYSIS_POOL_SIZE: int = 3
+LLM_POOL_SIZE: int = 4
+FFMPEG_POOL_SIZE: int = 3
+TTS_POOL_SIZE: int = 3
 EXPORT_POOL_SIZE: int = 1
+REACT_MAX_MERGE_VIDEO_CALLS: int = max(
+    1,
+    int(os.environ.get("CRAYOTTER_REACT_MAX_MERGE_VIDEO_CALLS", "4") or 4),
+)
 SHORT_FORM_OPTIMIZATIONS: bool = str(
     os.environ.get("CRAYOTTER_SHORT_FORM_OPTIMIZATIONS", "true")
 ).strip().lower() not in {"0", "false", "no", "off"}
@@ -118,6 +122,7 @@ class _RealtimeToolTraceHandler(BaseCallbackHandler):
         self.raise_error = True
         self._started: dict[str, tuple[str, float]] = {}
         self._model_started: dict[str, float] = {}
+        self._tool_counts: dict[str, int] = {}
         self._lock = threading.RLock()
 
     def on_tool_start(
@@ -131,6 +136,22 @@ class _RealtimeToolTraceHandler(BaseCallbackHandler):
         name = str(serialized.get("name") or kwargs.get("name") or "unknown_tool")
         key = str(run_id)
         with self._lock:
+            self._tool_counts[name] = self._tool_counts.get(name, 0) + 1
+            if name == "merge_videos" and self._tool_counts[name] > REACT_MAX_MERGE_VIDEO_CALLS:
+                message = (
+                    "Phase 3 ReAct fallback exceeded merge_videos call limit "
+                    f"({REACT_MAX_MERGE_VIDEO_CALLS}); aborting to avoid repeated expensive merges."
+                )
+                graph_logger.error(message)
+                emit_benchmark_event(
+                    "phase3_react_loop_guard",
+                    {
+                        "tool_name": name,
+                        "limit": REACT_MAX_MERGE_VIDEO_CALLS,
+                        "attempted_count": self._tool_counts[name],
+                    },
+                )
+                raise RuntimeError(message)
             self._started[key] = (name, time.perf_counter())
         graph_logger.info("🛠️ Phase3 工具开始: %s run_id=%s", name, key)
         emit_benchmark_event(
@@ -452,10 +473,10 @@ def _classify_guidance_with_llm(content: str) -> dict[str, Any]:
     prompt = (
         "你是视频编辑工作流指导分类器。只返回 JSON，字段为 "
         "category、required_phase、impact、normalized_guidance。"
-        "category 只能是 material/style/narrative/narration/subtitle/general/global；"
+        "category 只能是 material/style/narrative/narration/subtitle/duration/general/global；"
         "required_phase 只能是 phase1/phase2/phase3；"
         "impact 只能是 local/phase。"
-        "需要新素材或主题完全改变归 phase1；叙事结构和整体风格归 phase2；"
+        "需要新素材、主题完全改变或目标时长改变归 phase1；叙事结构和整体风格归 phase2；"
         "旁白、字幕和局部剪辑归 phase3。"
     )
     try:
@@ -475,6 +496,7 @@ def _classify_guidance_with_llm(content: str) -> dict[str, Any]:
             "narrative",
             "narration",
             "subtitle",
+            "duration",
             "general",
             "global",
         }:
@@ -513,8 +535,10 @@ def _apply_steering_checkpoint(
 ) -> dict[str, Any]:
     coordinator = _steering_coordinator()
     base_request = state.base_user_request or state.user_request
+    explicit_base_duration = _extract_explicit_duration_seconds(base_request)
     target_duration = (
-        state.target_duration_seconds
+        explicit_base_duration
+        or state.target_duration_seconds
         or _extract_target_duration_seconds(base_request)
     )
     existing_blueprint = state.editing_blueprint
@@ -536,6 +560,12 @@ def _apply_steering_checkpoint(
         }
     result = coordinator.apply_pending(checkpoint, current_phase)
     guidance_context = coordinator.guidance_text()
+    effective_request = _effective_user_request(base_request, guidance_context)
+    explicit_guidance_duration = _extract_explicit_duration_seconds(guidance_context)
+    if explicit_guidance_duration is not None:
+        target_duration = explicit_guidance_duration
+    elif explicit_base_duration is None and state.target_duration_seconds <= 0:
+        target_duration = _extract_target_duration_seconds(effective_request)
     target_phase = str(result.get("required_phase") or "")
     if target_phase:
         _emit_orchestration_event(
@@ -564,7 +594,7 @@ def _apply_steering_checkpoint(
         )
     return {
         "base_user_request": base_request,
-        "user_request": _effective_user_request(base_request, guidance_context),
+        "user_request": effective_request,
         "guidance_context": guidance_context,
         "steering_target_phase": target_phase,
         "current_checkpoint": checkpoint,
@@ -959,8 +989,63 @@ def _invoke_llm(llm: Any, messages: list[Any], stage: str) -> Any:
 # ═══════════════════════════════════════════════════════════════════════════
 # 辅助函数
 # ═══════════════════════════════════════════════════════════════════════════
+def _extract_explicit_duration_seconds(user_request: str) -> float | None:
+    """Return an explicitly stated duration in seconds, without model calls."""
+    text = str(user_request or "").strip()
+    if not text:
+        return None
+    normalized = text.lower().replace("ｍ", "m").replace("ｓ", "s")
+
+    def valid(value: float) -> float | None:
+        if 0 < value <= 7200:
+            return round(value, 3)
+        return None
+
+    combined_patterns = [
+        r"(\d+(?:\.\d+)?)\s*(?:分钟|分)\s*(\d+(?:\.\d+)?)\s*秒",
+        r"(\d+(?:\.\d+)?)\s*(?:min(?:ute)?s?)\s*(\d+(?:\.\d+)?)\s*(?:s|sec(?:ond)?s?)\b",
+        r"(\d+(?:\.\d+)?)\s*(?:min(?:ute)?s?)\s*(\d+(?:\.\d+)?)\s*(?:sec(?:ond)?s?|s)\b",
+    ]
+    for pattern in combined_patterns:
+        match = re.search(pattern, normalized, re.I)
+        if match:
+            minutes = float(match.group(1))
+            seconds = float(match.group(2))
+            parsed = valid(minutes * 60 + seconds)
+            if parsed is not None:
+                return parsed
+
+    minute_patterns = [
+        r"(\d+(?:\.\d+)?)\s*(?:分钟|分)",
+        r"(\d+(?:\.\d+)?)\s*(?:min(?:ute)?s?)\b",
+    ]
+    for pattern in minute_patterns:
+        match = re.search(pattern, normalized, re.I)
+        if match:
+            parsed = valid(float(match.group(1)) * 60)
+            if parsed is not None:
+                return parsed
+
+    second_patterns = [
+        r"(\d+(?:\.\d+)?)\s*秒",
+        r"(\d+(?:\.\d+)?)\s*(?:s|sec(?:ond)?s?)\b",
+    ]
+    for pattern in second_patterns:
+        match = re.search(pattern, normalized, re.I)
+        if match:
+            parsed = valid(float(match.group(1)))
+            if parsed is not None:
+                return parsed
+
+    return None
+
+
 def _extract_target_duration_seconds(user_request: str) -> float:
     """从用户需求中推断目标时长（秒）。"""
+    explicit = _extract_explicit_duration_seconds(user_request)
+    if explicit is not None:
+        return explicit
+
     llm = _get_llm(temperature=0.0).bind(max_tokens=160)
     prompt = (
         "请根据用户需求推断成片目标时长（单位秒）。\n"
@@ -1013,10 +1098,10 @@ def _recommend_material_counts(target_duration_seconds: float) -> dict[str, int]
         }
     if SHORT_FORM_OPTIMIZATIONS and 0 < target_duration_seconds <= 45:
         return {
-            "search_per_source": 16,
+            "search_per_source": 8,
             "search_pages": 1,
-            "max_candidates": 60,
-            "mllm_review": 60,
+            "max_candidates": 32,
+            "mllm_review": 32,
             "top_k_min": 3,
             "top_k_max": 4,
         }
@@ -1137,6 +1222,20 @@ def _fallback_prep_plan(
     )
 
 
+def _lightweight_material_collection(counts: dict[str, int]) -> bool:
+    return (
+        SHORT_FORM_OPTIMIZATIONS
+        and counts.get("search_pages") == 1
+        and counts.get("max_candidates", 0) <= 32
+    )
+
+
+def _lightweight_search_step_limit(counts: dict[str, int]) -> int:
+    if not _lightweight_material_collection(counts):
+        return 0
+    return 2 if counts.get("max_candidates", 0) <= 24 else 3
+
+
 def _plan_has_cycle(steps: list[Step]) -> bool:
     ids = {step.id for step in steps}
     indegree = {step.id: 0 for step in steps}
@@ -1188,18 +1287,14 @@ def _validate_and_normalize_plan(
         step.arguments = dict(step.arguments or {})
         normalized.append(step)
 
-    short_form = (
-        SHORT_FORM_OPTIMIZATIONS
-        and counts.get("search_pages") == 1
-        and counts.get("max_candidates") <= 24
-    )
-    if short_form:
+    search_step_limit = _lightweight_search_step_limit(counts)
+    if search_step_limit:
         kept_search_ids = {
             step.id
             for step in [
                 item for item in normalized
                 if item.tool_hint == "search_material_sources"
-            ][:2]
+            ][:search_step_limit]
         }
         normalized = [
             step
@@ -1211,8 +1306,8 @@ def _validate_and_normalize_plan(
             step.depends_on = [dependency for dependency in step.depends_on if dependency in kept_ids]
             if step.tool_hint == "search_material_sources":
                 step.arguments["max_results"] = min(
-                    int(step.arguments.get("max_results", 8) or 8),
-                    8,
+                    int(step.arguments.get("max_results", counts["search_per_source"]) or counts["search_per_source"]),
+                    counts["search_per_source"],
                 )
                 step.arguments["pages"] = 1
                 step.arguments["expand_variants"] = min(
@@ -1220,17 +1315,17 @@ def _validate_and_normalize_plan(
                     2,
                 )
                 step.arguments["max_total_results"] = min(
-                    int(step.arguments.get("max_total_results", 24) or 24),
-                    24,
+                    int(step.arguments.get("max_total_results", counts["max_candidates"]) or counts["max_candidates"]),
+                    counts["max_candidates"],
                 )
             elif step.tool_hint == "rank_video_candidates":
                 step.arguments["top_k"] = min(
-                    int(step.arguments.get("top_k", SHORT_FORM_MAX_SOURCES) or SHORT_FORM_MAX_SOURCES),
-                    SHORT_FORM_MAX_SOURCES,
+                    int(step.arguments.get("top_k", counts["top_k_max"]) or counts["top_k_max"]),
+                    counts["top_k_max"],
                 )
                 step.arguments["max_review"] = min(
-                    int(step.arguments.get("max_review", 24) or 24),
-                    24,
+                    int(step.arguments.get("max_review", counts["mllm_review"]) or counts["mllm_review"]),
+                    counts["mllm_review"],
                 )
 
     if DIRECT_PHASE3_EXECUTION:
@@ -2339,6 +2434,25 @@ def _run_phase1_search_and_rank(
     if not search_steps and not import_steps and not material_urls:
         return []
     counts = _recommend_material_counts(state.target_duration_seconds)
+    search_step_limit = _lightweight_search_step_limit(counts)
+    if search_step_limit:
+        if len(search_steps) > search_step_limit:
+            graph_logger.info(
+                "✂️ Phase 1 轻量搜索预算裁剪搜索任务: %d -> %d, target=%.1fs",
+                len(search_steps),
+                search_step_limit,
+                state.target_duration_seconds,
+            )
+            _emit_orchestration_event(
+                "phase1_search_budget_trimmed",
+                {
+                    "from_count": len(search_steps),
+                    "to_count": search_step_limit,
+                    "target_duration_seconds": state.target_duration_seconds,
+                    "max_candidates": counts["max_candidates"],
+                },
+            )
+        search_steps = search_steps[:search_step_limit]
     tasks: list[TaskSpec] = []
     for step in search_steps:
         arguments = dict(step.arguments or {})
@@ -2347,6 +2461,23 @@ def _run_phase1_search_and_rank(
         arguments.setdefault("max_results", counts["search_per_source"])
         arguments.setdefault("pages", counts["search_pages"])
         arguments.setdefault("max_total_results", counts["max_candidates"])
+        arguments["max_results"] = min(
+            int(arguments.get("max_results") or counts["search_per_source"]),
+            counts["search_per_source"],
+        )
+        arguments["pages"] = min(
+            int(arguments.get("pages") or counts["search_pages"]),
+            counts["search_pages"],
+        )
+        arguments["max_total_results"] = min(
+            int(arguments.get("max_total_results") or counts["max_candidates"]),
+            counts["max_candidates"],
+        )
+        if _lightweight_material_collection(counts):
+            arguments["expand_variants"] = min(
+                int(arguments.get("expand_variants", 2) or 2),
+                2,
+            )
         arguments["request_concurrency"] = 1
         tasks.append(
             TaskSpec(
@@ -2413,6 +2544,16 @@ def _run_phase1_search_and_rank(
             retry=RetryPolicy(max_attempts=2, backoff_seconds=0.5),
         )
     )
+    rank_arguments = dict(tasks[-1].arguments)
+    rank_arguments["top_k"] = min(
+        int(rank_arguments.get("top_k") or counts["top_k_max"]),
+        counts["top_k_max"],
+    )
+    rank_arguments["max_review"] = min(
+        int(rank_arguments.get("max_review") or counts["mllm_review"]),
+        counts["mllm_review"],
+    )
+    tasks[-1] = tasks[-1].model_copy(update={"arguments": rank_arguments})
     plan = ExecutionPlan(
         plan_id=f"phase1_search_rank_round_{state.gap_round}",
         phase="phase1",
@@ -2672,6 +2813,27 @@ def _run_phase1_analyses(
     return completed_paths
 
 
+def _apply_phase1_scheduler_guidance(
+    state: AgentState,
+    checkpoint: str,
+) -> AgentState:
+    coordinator = _steering_coordinator()
+    if coordinator is None:
+        return state
+    result = coordinator.apply_pending(checkpoint, "phase1")
+    updated = _state_with_current_guidance(state)
+    if result.get("applied"):
+        _emit_orchestration_event(
+            "phase1_guidance_applied",
+            {
+                "checkpoint": checkpoint,
+                "categories": result.get("categories", []),
+                "target_duration_seconds": updated.target_duration_seconds,
+            },
+        )
+    return updated
+
+
 def phase1_scheduler_node(state: AgentState) -> dict[str, Any]:
     """将 Planner DAG 转换为资源感知任务，并完成素材准备。"""
     graph_logger.info("⚙️ Phase 1 — Resource Scheduler 开始")
@@ -2688,6 +2850,30 @@ def phase1_scheduler_node(state: AgentState) -> dict[str, Any]:
     downloaded: list[str] = []
     if not DIRECT_PHASE3_EXECUTION and not local_only:
         selected = _run_phase1_search_and_rank(state, scheduler)
+        refreshed_state = _apply_phase1_scheduler_guidance(
+            state,
+            f"phase1_search_rank_round_{state.gap_round}:idle",
+        )
+        if refreshed_state.target_duration_seconds != state.target_duration_seconds:
+            counts = _recommend_material_counts(refreshed_state.target_duration_seconds)
+            max_selected = max(1, min(_infer_download_top_k("", counts), len(selected)))
+            if len(selected) > max_selected:
+                graph_logger.info(
+                    "✂️ Phase 1 指导更新目标时长，裁剪下载素材: %d -> %d, target=%.1fs",
+                    len(selected),
+                    max_selected,
+                    refreshed_state.target_duration_seconds,
+                )
+                _emit_orchestration_event(
+                    "phase1_selection_trimmed",
+                    {
+                        "from_count": len(selected),
+                        "to_count": max_selected,
+                        "target_duration_seconds": refreshed_state.target_duration_seconds,
+                    },
+                )
+                selected = selected[:max_selected]
+        state = refreshed_state
         if SHORT_FORM_OPTIMIZATIONS and 0 < state.target_duration_seconds <= 20:
             max_sources = max(1, min(SHORT_FORM_MAX_SOURCES, len(selected)))
             analyses: list[str] = []
@@ -2736,6 +2922,9 @@ def phase1_scheduler_node(state: AgentState) -> dict[str, Any]:
     graph_logger.info("✅ %s", summary)
     return {
         "phase": "material_gap",
+        "user_request": state.user_request,
+        "guidance_context": state.guidance_context,
+        "target_duration_seconds": state.target_duration_seconds,
         "step_results": [
             StepResult(
                 step_id=10000 + state.gap_round,
@@ -4158,11 +4347,20 @@ def _state_with_current_guidance(state: AgentState) -> AgentState:
         return state
     base_request = state.base_user_request or state.user_request
     guidance = coordinator.guidance_text()
+    effective_request = _effective_user_request(base_request, guidance)
+    explicit_guidance_duration = _extract_explicit_duration_seconds(guidance)
+    target_duration = (
+        explicit_guidance_duration
+        if explicit_guidance_duration is not None
+        else state.target_duration_seconds
+        or _extract_target_duration_seconds(effective_request)
+    )
     return state.model_copy(
         update={
             "base_user_request": base_request,
             "guidance_context": guidance,
-            "user_request": _effective_user_request(base_request, guidance),
+            "user_request": effective_request,
+            "target_duration_seconds": target_duration,
             "revision": REVISION,
         }
     )
@@ -4281,6 +4479,83 @@ def _subtitle_segments(
     if any(marker in lowered for marker in ("字幕不要太多", "减少字幕", "字幕简洁", "少字幕")):
         segments = segments[::2] or segments[:1]
     return segments
+
+
+def _parse_tool_json(tool_name: str, raw: Any) -> dict[str, Any]:
+    text = str(raw or "").strip()
+    try:
+        parsed = json.loads(text)
+    except json.JSONDecodeError as exc:
+        raise RuntimeError(f"{tool_name} returned non-JSON output: {text[:500]}") from exc
+    if not isinstance(parsed, dict):
+        raise RuntimeError(f"{tool_name} returned unexpected JSON payload: {text[:500]}")
+    return parsed
+
+
+def _try_parse_tool_json(tool_name: str, raw: Any) -> dict[str, Any] | None:
+    try:
+        return _parse_tool_json(tool_name, raw)
+    except RuntimeError as exc:
+        graph_logger.warning("%s", exc)
+        return None
+
+
+def _merge_timeline_with_transition_fallback(
+    paths: list[str],
+    target_duration_seconds: float,
+    output_name: str = "phase3_assembled",
+) -> dict[str, Any]:
+    if not paths:
+        raise RuntimeError("主时间线合并失败: 没有可用片段")
+
+    transition_duration = 0.3 if target_duration_seconds <= 30 else 0.6
+    transition_plan: list[dict[str, Any]] = []
+    if len(paths) > 1:
+        transition_raw = _TOOL_NAME_MAP["plan_transition_timeline"].invoke(
+            {
+                "video_paths": paths,
+                "style": "cinematic",
+                "base_duration": transition_duration,
+            }
+        )
+        transition_data = _try_parse_tool_json("plan_transition_timeline", transition_raw)
+        if transition_data and transition_data.get("status") == "success":
+            transition_plan = list(transition_data.get("transition_plan", []))
+
+    transition_raw = _TOOL_NAME_MAP["add_transition"].invoke(
+        {
+            "video_paths": paths,
+            "transition_type": "crossfade",
+            "duration": transition_duration,
+            "transition_plan": transition_plan,
+            "output_name": output_name,
+        }
+    )
+    transition_data = _try_parse_tool_json("add_transition", transition_raw)
+    if transition_data and transition_data.get("status") == "success" and transition_data.get("path"):
+        return transition_data
+
+    graph_logger.warning(
+        "Phase 3 转场合并失败，退化为普通顺序合并: %s",
+        str(transition_raw)[:500],
+    )
+    _emit_orchestration_event(
+        "phase3_transition_fallback",
+        {"reason": str(transition_raw)[:500], "clip_count": len(paths)},
+    )
+    merge_raw = _TOOL_NAME_MAP["merge_videos"].invoke(
+        {
+            "video_paths": paths,
+            "output_name": output_name,
+            "target_duration": target_duration_seconds,
+            "tolerance": 0.08,
+        }
+    )
+    merge_data = _parse_tool_json("merge_videos", merge_raw)
+    if merge_data.get("status") != "success" or not merge_data.get("path"):
+        raise RuntimeError(f"主时间线普通合并失败: {str(merge_raw)[:500]}")
+    merge_data["transition_fallback"] = True
+    return merge_data
 
 
 def _run_controlled_editor_legacy(state: AgentState) -> str:
@@ -4434,32 +4709,14 @@ def _run_controlled_editor_legacy(state: AgentState) -> str:
 
         if task.kind == "timeline_merge":
             paths = [str(dependencies[task_id].result["path"]) for task_id in cut_ids]
-            transition_plan: list[dict[str, Any]] = []
-            if len(paths) > 1:
-                plan_raw = _TOOL_NAME_MAP["plan_transition_timeline"].invoke(
-                    {
-                        "video_paths": paths,
-                        "style": "cinematic",
-                        "base_duration": 0.3
-                        if state.target_duration_seconds <= 30
-                        else 0.6,
-                    }
-                )
-                plan_data = json.loads(str(plan_raw))
-                transition_plan = list(plan_data.get("transition_plan", []))
-            raw = _TOOL_NAME_MAP["add_transition"].invoke(
-                {
-                    "video_paths": paths,
-                    "transition_type": "crossfade",
-                    "duration": 0.3 if state.target_duration_seconds <= 30 else 0.6,
-                    "transition_plan": transition_plan,
-                    "output_name": "phase3_assembled",
-                }
+            parsed = _merge_timeline_with_transition_fallback(
+                paths,
+                state.target_duration_seconds,
+                output_name="phase3_assembled",
             )
-            parsed = json.loads(str(raw))
             path = str(parsed.get("path") or "")
             if parsed.get("status") != "success" or not path:
-                raise RuntimeError(f"主时间线合并失败: {str(raw)[:300]}")
+                raise RuntimeError(f"主时间线合并失败: {parsed}")
             return TaskExecutionResult(
                 data={"path": path},
                 artifacts=[
@@ -4808,33 +5065,14 @@ def _run_controlled_editor(state: AgentState) -> str:
 
         if task.kind == "timeline_merge":
             paths = [str(dependencies[task_id].result["path"]) for task_id in cut_ids]
-            transition_plan: list[dict[str, Any]] = []
-            if len(paths) > 1:
-                transition_raw = _TOOL_NAME_MAP["plan_transition_timeline"].invoke(
-                    {
-                        "video_paths": paths,
-                        "style": "cinematic",
-                        "base_duration": 0.3
-                        if state.target_duration_seconds <= 30
-                        else 0.6,
-                    }
-                )
-                transition_plan = list(
-                    json.loads(str(transition_raw)).get("transition_plan", [])
-                )
-            raw = _TOOL_NAME_MAP["add_transition"].invoke(
-                {
-                    "video_paths": paths,
-                    "transition_type": "crossfade",
-                    "duration": 0.3 if state.target_duration_seconds <= 30 else 0.6,
-                    "transition_plan": transition_plan,
-                    "output_name": "phase3_assembled",
-                }
+            parsed = _merge_timeline_with_transition_fallback(
+                paths,
+                state.target_duration_seconds,
+                output_name="phase3_assembled",
             )
-            parsed = json.loads(str(raw))
             path = str(parsed.get("path") or "")
             if parsed.get("status") != "success" or not path:
-                raise RuntimeError(f"主时间线合并失败: {str(raw)[:300]}")
+                raise RuntimeError(f"主时间线合并失败: {parsed}")
             return TaskExecutionResult(
                 data={"path": path},
                 artifacts=[

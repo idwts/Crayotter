@@ -1,5 +1,6 @@
 import React, { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
+import { getComposerMode, getInspectorPanelMode, getPlanReviewDisplay, getTaskHeroVariant, shouldShowInlineLogs } from "../workbenchFlow";
 import {
   Activity,
   AlertTriangle,
@@ -128,14 +129,17 @@ export function AppSidebar({
               {jobs.slice(0, 8).map((job) => (
                 <button
                   key={job.job_id}
-                  className={cx("sidebar-job", selectedJobId === job.job_id && "sidebar-job-active")}
+                  className={cx("sidebar-job", "sidebar-job-catalog", selectedJobId === job.job_id && "sidebar-job-active")}
                   onClick={() => selectJob(job.job_id).catch((error) => notify("error", t("operationFailed", { message: error.message })))}
                   type="button"
                 >
                   <span className={cx("status-dot", `status-${job.status}`)} />
                   <span className="min-w-0 flex-1">
                     <span className="block truncate text-xs font-medium text-slate-700">{displayTaskTitle(job)}</span>
-                    <span className="mt-0.5 block truncate text-[10px] text-slate-400">{statusLabel(job.status)}</span>
+                    <span className="sidebar-job-meta">
+                      <span>{statusLabel(job.status)}</span>
+                      <span>{job.current_checkpoint || job.steering_status || t("currentTask")}</span>
+                    </span>
                   </span>
                 </button>
               ))}
@@ -324,68 +328,120 @@ export function WorkbenchView(props) {
   } = props;
 
   const visibleActiveTab = ["details", "trace"].includes(activeTab) ? activeTab : "details";
+  const currentPlanVersion = planInfo?.plan?.version || "";
+  const currentPlanStatus = String(planInfo?.plan?.status || "").toUpperCase();
+  const [planAnimation, setPlanAnimation] = useState({ dismissedVersion: "", exitingVersion: "" });
+  const previousPlanRef = useRef({ version: "", status: "" });
+
+  useEffect(() => {
+    const previousPlan = previousPlanRef.current;
+    previousPlanRef.current = { version: currentPlanVersion, status: currentPlanStatus };
+    if (!currentPlanVersion) {
+      setPlanAnimation({ dismissedVersion: "", exitingVersion: "" });
+      return undefined;
+    }
+    if (["APPROVED", "FROZEN"].includes(currentPlanStatus)) {
+      const enteredApprovedState = (
+        previousPlan.version === currentPlanVersion
+        && previousPlan.status
+        && !["APPROVED", "FROZEN"].includes(previousPlan.status)
+      );
+      if (enteredApprovedState) {
+        setPlanAnimation({ dismissedVersion: "", exitingVersion: currentPlanVersion });
+        const timer = window.setTimeout(() => {
+          setPlanAnimation({ dismissedVersion: currentPlanVersion, exitingVersion: "" });
+        }, 980);
+        return () => window.clearTimeout(timer);
+      }
+      setPlanAnimation({ dismissedVersion: currentPlanVersion, exitingVersion: "" });
+      return undefined;
+    }
+    setPlanAnimation((current) => (
+      current.dismissedVersion === currentPlanVersion || current.exitingVersion === currentPlanVersion
+        ? { dismissedVersion: "", exitingVersion: "" }
+        : current
+    ));
+    return undefined;
+  }, [currentPlanStatus, currentPlanVersion]);
+
+  const planDisplay = getPlanReviewDisplay(planInfo, planAnimation);
+  const showInlineLogs = shouldShowInlineLogs(selectedJob, planDisplay);
+  const inspectorPanelMode = getInspectorPanelMode(selectedJob);
 
   return (
     <div className="workspace-view">
-      <OverviewStrip
-        selectedJob={selectedJob}
-        eventsCount={logEvents.length}
-        currentPhase={currentPhase}
-        statusLabel={statusLabel}
-        t={t}
-      />
-
       <section className="workspace-grid">
         <div className="execution-column">
-          <TaskHero
-            selectedJob={selectedJob}
-            summary={summary}
-            displayTaskTitle={displayTaskTitle}
-            statusLabel={statusLabel}
-            modeLabel={modeLabel}
-            formatDate={formatDate}
-            t={t}
-          />
-          <PhaseTracker selectedJob={selectedJob} currentPhaseCode={currentPhaseCode} t={t} />
-          <EditingPlanPanel
+          <div className="execution-main-flow">
+            <TaskHero
+              selectedJob={selectedJob}
+              summary={summary}
+              displayTaskTitle={displayTaskTitle}
+              statusLabel={statusLabel}
+              modeLabel={modeLabel}
+              formatDate={formatDate}
+              t={t}
+            />
+            <PhaseTracker selectedJob={selectedJob} currentPhaseCode={currentPhaseCode} t={t} />
+            {planDisplay.visible && (
+              <div className={cx("plan-review-slot", `plan-review-${planDisplay.phase}`)}>
+                <EditingPlanPanel
+                  planInfo={planInfo}
+                  displayPhase={planDisplay.phase}
+                  sendPlanFeedback={sendPlanFeedback}
+                  approvePlan={approvePlan}
+                  rejectPlan={rejectPlan}
+                  notify={notify}
+                  t={t}
+                />
+              </div>
+            )}
+            {!planDisplay.visible && (
+              <WorkbenchVideoStage
+                artifacts={primaryArtifacts}
+                artifactLabel={artifactLabel}
+                fileUrl={fileUrl}
+                downloadFileUrl={downloadFileUrl}
+                formatDuration={formatDuration}
+                t={t}
+              />
+            )}
+            {showInlineLogs && (
+              <InlineLogStream
+                logEvents={logEvents}
+                formatDate={formatDate}
+                describeEvent={describeEvent}
+                copyFullLog={copyFullLog}
+                downloadFullLogUrl={downloadFullLogUrl}
+                t={t}
+              />
+            )}
+          </div>
+          <Composer
+            {...composerProps}
             planInfo={planInfo}
             sendPlanFeedback={sendPlanFeedback}
             approvePlan={approvePlan}
             rejectPlan={rejectPlan}
-            notify={notify}
-            t={t}
-          />
-          <WorkbenchVideoStage
-            artifacts={primaryArtifacts}
-            artifactLabel={artifactLabel}
-            fileUrl={fileUrl}
-            downloadFileUrl={downloadFileUrl}
-            formatDuration={formatDuration}
             t={t}
           />
         </div>
 
-        <ContextPanel activeTab={visibleActiveTab} setActiveTab={setActiveTab} t={t}>
-          {visibleActiveTab === "details" && (
-            <DetailsTab
-              selectedJob={selectedJob}
-              logEvents={logEvents}
-              modeLabel={modeLabel}
-              statusLabel={statusLabel}
-              formatDate={formatDate}
-              describeEvent={describeEvent}
-              copyFullLog={copyFullLog}
-              downloadFullLogUrl={downloadFullLogUrl}
-              t={t}
-            />
+        <aside className="inspector-column">
+          <OverviewStrip
+            selectedJob={selectedJob}
+            eventsCount={logEvents.length}
+            currentPhase={currentPhase}
+            statusLabel={statusLabel}
+            t={t}
+          />
+          {inspectorPanelMode === "trace" && (
+            <ContextPanel activeTab="trace" setActiveTab={() => {}} tabs={[{ id: "trace", label: t("agentTrace") }]} t={t}>
+              <AgentTrace events={selectedMeaningfulEvents} formatDate={formatDate} describeEvent={describeEvent} t={t} />
+            </ContextPanel>
           )}
-          {visibleActiveTab === "trace" && (
-            <AgentTrace events={selectedMeaningfulEvents} formatDate={formatDate} describeEvent={describeEvent} t={t} />
-          )}
-        </ContextPanel>
+        </aside>
       </section>
-
-      <Composer {...composerProps} t={t} />
     </div>
   );
 }
@@ -420,6 +476,9 @@ function OverviewStrip({ selectedJob, eventsCount, currentPhase, statusLabel, t 
 }
 
 function TaskHero({ selectedJob, summary, displayTaskTitle, statusLabel, modeLabel, formatDate, t }) {
+  const variant = getTaskHeroVariant(selectedJob);
+  if (variant === "sidebar") return null;
+
   return (
     <section className="task-hero motion-enter">
       <div className="task-hero-content relative z-10 min-w-0">
@@ -506,51 +565,62 @@ function PhaseTracker({ selectedJob, currentPhaseCode, t }) {
   );
 }
 
-function EditingPlanPanel({ planInfo, sendPlanFeedback, approvePlan, rejectPlan, notify, t }) {
-  const [feedback, setFeedback] = useState("");
-  const [submitting, setSubmitting] = useState(false);
+function EditingPlanPanel({ planInfo, displayPhase = "review", t }) {
   const plan = planInfo?.plan;
   if (!plan) return null;
   const scenes = Array.isArray(plan.scenes) ? plan.scenes : [];
   const currentVersion = plan.version || "v001";
   const diff = planInfo?.diff || plan.diff_from_previous;
-  const canApprove = ["VALIDATED", "WAITING_FOR_USER_REVIEW", "REVISING"].includes(plan.status);
+  const exiting = displayPhase === "approved-exit";
+  const revising = displayPhase === "revising";
   const lastScene = scenes.length > 0 ? scenes[scenes.length - 1] : null;
   const total = Number(plan.target_duration_seconds || lastScene?.end || 0) || 1;
-  const submitFeedback = async () => {
-    const text = feedback.trim();
-    if (!text || submitting) return;
-    setSubmitting(true);
-    try {
-      try {
-        await sendPlanFeedback(currentVersion, text);
-        setFeedback("");
-      } catch (error) {
-        notify("error", t("operationFailed", { message: error.message }));
-      }
-    } finally {
-      setSubmitting(false);
-    }
-  };
+  const activeScenes = scenes.filter((scene) => {
+    const purpose = String(scene.narrative_purpose || "").toLowerCase();
+    return !purpose.includes("omitted per blueprint");
+  });
+  const displayScenes = activeScenes.length ? activeScenes : scenes;
+  const strategyItems = [
+    [t("planPacing"), plan.pacing],
+    [t("planNarration"), plan.narration_strategy],
+    [t("planSubtitles"), plan.subtitle_strategy],
+    [t("planBgm"), plan.bgm_strategy],
+  ].filter(([, value]) => value);
   return (
-    <section className="editing-plan-panel motion-enter">
+    <section className={cx("editing-plan-panel motion-enter", `editing-plan-${displayPhase}`)}>
       <div className="editing-plan-header">
         <div>
           <div className="eyebrow">{t("editingPlan")}</div>
-          <h3>{t("editingPlanTitle")}</h3>
+          <h3>{exiting ? t("planApproved") : revising ? t("planRevisingTitle") : t("editingPlanTitle")}</h3>
         </div>
         <div className="editing-plan-badges">
           <span>{currentVersion}</span>
           <span>{t(`planStatus_${plan.status}`) || plan.status}</span>
         </div>
       </div>
+      {exiting ? (
+        <div className="editing-plan-status-line">
+          <Check size={15} />
+          <span>{t("planApproved")}</span>
+        </div>
+      ) : null}
       <div className="editing-plan-summary">
         <span>{t("duration")} {Math.round(Number(plan.target_duration_seconds || 0))}s</span>
         <span>{plan.aspect_ratio || "16:9"}</span>
         <span>{plan.style || t("planStylePending")}</span>
       </div>
+      {strategyItems.length > 0 && (
+        <div className="editing-plan-story">
+          {strategyItems.slice(0, 3).map(([label, value]) => (
+            <div key={label}>
+              <strong>{label}</strong>
+              <p>{value}</p>
+            </div>
+          ))}
+        </div>
+      )}
       <div className="editing-plan-timeline" aria-label={t("planTimeline")}>
-        {scenes.map((scene) => {
+        {displayScenes.map((scene) => {
           const width = Math.max(8, ((Number(scene.end || 0) - Number(scene.start || 0)) / total) * 100);
           return (
             <div className="editing-plan-block" key={scene.scene_id} style={{ flexBasis: `${width}%` }} title={`${scene.scene_id} ${scene.start}s-${scene.end}s`}>
@@ -560,14 +630,14 @@ function EditingPlanPanel({ planInfo, sendPlanFeedback, approvePlan, rejectPlan,
         })}
       </div>
       <div className="editing-scene-list">
-        {scenes.slice(0, 6).map((scene) => (
+        {displayScenes.slice(0, 8).map((scene) => (
           <article className="editing-scene-card" key={scene.scene_id}>
             <div>
-              <strong>{scene.scene_id}</strong>
+              <strong>{t("planSceneLabel", { id: scene.scene_id })}</strong>
               <span>{Number(scene.start || 0).toFixed(1)}s - {Number(scene.end || 0).toFixed(1)}s</span>
             </div>
             <p>{scene.narrative_purpose || t("planScenePurposePending")}</p>
-            <small title={scene.source_path}>{scene.source_path?.split(/[\\/]/).pop() || t("planNoSource")}</small>
+            <small title={scene.source_path}>{scene.transition ? `${t("planTransition")}: ${scene.transition}` : (scene.source_path?.split(/[\\/]/).pop() || t("planNoSource"))}</small>
             {(scene.subtitle || scene.narration) && <em>{scene.subtitle || scene.narration}</em>}
           </article>
         ))}
@@ -578,24 +648,6 @@ function EditingPlanPanel({ planInfo, sendPlanFeedback, approvePlan, rejectPlan,
           <p>{diff.summary.join(" · ")}</p>
         </div>
       )}
-      <div className="editing-plan-actions">
-        <textarea
-          value={feedback}
-          onChange={(event) => setFeedback(event.target.value)}
-          placeholder={t("planFeedbackPlaceholder")}
-        />
-        <div>
-          <button className="secondary-button" disabled={!feedback.trim() || submitting} onClick={submitFeedback} type="button">
-            <Send size={15} />{submitting ? t("processing") : t("sendPlanFeedback")}
-          </button>
-          <button className="primary-button" disabled={!canApprove} onClick={() => approvePlan(currentVersion).catch((error) => notify("error", t("operationFailed", { message: error.message })))} type="button">
-            <Check size={15} />{t("approvePlan")}
-          </button>
-          <button className="text-action" onClick={() => rejectPlan(currentVersion).catch((error) => notify("error", t("operationFailed", { message: error.message })))} type="button">
-            {t("rejectPlan")}
-          </button>
-        </div>
-      </div>
     </section>
   );
 }
@@ -636,8 +688,8 @@ function WorkbenchVideoStage({ artifacts, fileUrl, downloadFileUrl, t }) {
   );
 }
 
-function ContextPanel({ activeTab, setActiveTab, children, t }) {
-  const tabs = [
+function ContextPanel({ activeTab, setActiveTab, children, t, tabs: suppliedTabs }) {
+  const tabs = suppliedTabs || [
     { id: "details", label: t("details") },
     { id: "trace", label: t("agentTrace") },
   ];
@@ -655,6 +707,41 @@ function ContextPanel({ activeTab, setActiveTab, children, t }) {
         {children}
       </div>
     </aside>
+  );
+}
+
+function InlineLogStream({ logEvents, formatDate, describeEvent, copyFullLog, downloadFullLogUrl, t }) {
+  const visibleLogs = logEvents.slice(-6).reverse();
+  return (
+    <section className="inline-log-stream motion-enter">
+      <div className="inline-log-header">
+        <div>
+          <div className="eyebrow">{t("recentActivity")}</div>
+          <h3>{t("liveLogStream")}</h3>
+        </div>
+        <div className="inline-log-toolbar">
+          <span>{logEvents.length} {t("itemsUnit")}</span>
+          <button className="text-action" onClick={copyFullLog} type="button">{t("copyFullLog")}</button>
+          <a className="text-action" href={downloadFullLogUrl}>{t("downloadLog")}</a>
+        </div>
+      </div>
+      <div className="inline-log-list">
+        {visibleLogs.map((event, index) => {
+          const described = describeEvent(event);
+          return (
+            <article className="inline-log-item" key={event.sequence || `${event.type}-${event.timestamp}`} style={{ animationDelay: `${index * 45}ms` }}>
+              <i />
+              <div>
+                <strong>{described.title}</strong>
+                <p>{described.body}</p>
+              </div>
+              <time>{formatDate(event.timestamp)}</time>
+            </article>
+          );
+        })}
+        {!logEvents.length && <p className="inline-log-empty">{t("noEvents")}</p>}
+      </div>
+    </section>
   );
 }
 
@@ -677,32 +764,60 @@ function DetailsTab({ selectedJob, logEvents, modeLabel, statusLabel, formatDate
     [t("mode"), modeLabel(selectedJob.mode)],
     [t("createdAt"), formatDate(selectedJob.created_at)],
   ];
+  const activeCheckpoint = selectedJob.current_checkpoint || selectedJob.steering_status || "--";
+  const visibleLogs = logEvents.slice(-5).reverse();
   return (
-    <div className="grid gap-4">
-      <div className="detail-list">
-        {rows.map(([label, value]) => (
+    <div className="inspector-details">
+      <div className="inspector-status-card">
+        <div>
+          <span>{t("status")}</span>
+          <strong>{statusLabel(selectedJob.status)}</strong>
+        </div>
+        <StatusPill status={selectedJob.status} label={statusLabel(selectedJob.status)} />
+      </div>
+
+      <div className="inspector-facts">
+        {rows.slice(1).map(([label, value]) => (
           <div key={label}>
             <span>{label}</span>
             <strong title={String(value)}>{value}</strong>
           </div>
         ))}
+        <div>
+          <span>{t("currentCheckpoint")}</span>
+          <strong title={activeCheckpoint}>{activeCheckpoint}</strong>
+        </div>
       </div>
-      <div className="mini-section">
-        <h4>{t("logTitle")}</h4>
-        <div className="mt-3 max-h-48 space-y-2 overflow-y-auto">
-          {logEvents.slice(-6).map((event) => (
-            <div className="log-preview-row" key={event.sequence || `${event.type}-${event.timestamp}`}>
+
+      <section className="inspector-log-card">
+        <div className="inspector-section-title">
+          <div>
+            <span>{t("recentActivity")}</span>
+            <strong>{t("logTitle")}</strong>
+          </div>
+          <small>{logEvents.length} {t("itemsUnit")}</small>
+        </div>
+        <div className="inspector-log-list">
+          {visibleLogs.map((event) => {
+            const described = describeEvent(event);
+            return (
+              <article className="inspector-log-item" key={event.sequence || `${event.type}-${event.timestamp}`}>
+                <i />
+                <div>
+                  <strong>{described.title}</strong>
+                  <p>{described.body}</p>
+                </div>
               <span>{formatDate(event.timestamp)}</span>
-              <p>{describeEvent(event).body}</p>
-            </div>
-          ))}
+              </article>
+            );
+          })}
           {!logEvents.length && <p className="text-xs leading-5 text-slate-400">{t("noEvents")}</p>}
         </div>
-        <div className="mt-3 flex gap-2">
+        <div className="inspector-log-actions">
           <button className="text-action" onClick={copyFullLog} type="button">{t("copyFullLog")}</button>
           <a className="text-action" href={downloadFullLogUrl}>{t("downloadLog")}</a>
         </div>
-      </div>
+      </section>
     </div>
   );
 }
@@ -1087,8 +1202,36 @@ export function ArtifactsView({
   backToWorkbench,
   t,
 }) {
+  const downloadAll = () => {
+    artifacts.forEach((artifact, index) => {
+      window.setTimeout(() => {
+        const anchor = document.createElement("a");
+        anchor.href = downloadFileUrl(artifact.path);
+        anchor.download = artifact.name || "";
+        document.body.appendChild(anchor);
+        anchor.click();
+        anchor.remove();
+      }, index * 120);
+    });
+  };
   return (
-    <LibraryShell icon={Archive} title={t("navArtifacts")} subtitle={t("artifactsLibrarySubtitle")} count={artifacts.length} t={t}>
+    <LibraryShell
+      icon={Archive}
+      title={t("navArtifacts")}
+      subtitle={t("artifactsLibrarySubtitle")}
+      count={artifacts.length}
+      actions={selectedJob && artifacts.length ? (
+        <>
+          <button className="secondary-button" onClick={backToWorkbench} type="button">
+            <LayoutDashboard size={15} />{t("viewWorkbench")}
+          </button>
+          <button className="primary-button" onClick={downloadAll} type="button">
+            <Download size={15} />{t("download")}
+          </button>
+        </>
+      ) : undefined}
+      t={t}
+    >
       {!selectedJob ? (
         <ContextEmpty
           icon={Archive}
@@ -1127,7 +1270,43 @@ function ArtifactsList({
   t,
 }) {
   const [previewArtifact, setPreviewArtifact] = useState(null);
+  const [activeArtifactTab, setActiveArtifactTab] = useState("all");
+  const isVideoArtifact = (artifact) => {
+    const suffix = String(artifact?.suffix || "").toLowerCase();
+    return artifact?.kind === "video"
+      || artifact?.kind === "final_video"
+      || [".mp4", ".webm", ".mov", ".m4v"].includes(suffix);
+  };
+  const videos = artifacts.filter(isVideoArtifact);
+  const documents = artifacts.filter((artifact) => !isVideoArtifact(artifact));
+  const visibleVideos = activeArtifactTab === "documents" ? [] : videos;
+  const visibleDocuments = activeArtifactTab === "videos" ? [] : documents;
   if (!artifacts.length) {
+    if (!compact) {
+      return (
+        <>
+          <OutputCenterTabs
+            activeTab={activeArtifactTab}
+            setActiveTab={setActiveArtifactTab}
+            videoCount={0}
+            documentCount={0}
+            t={t}
+          />
+          <div className="artifact-empty">
+            <img src={artifactWideImage} alt="" aria-hidden="true" />
+            <div>
+              <h4>{t("noArtifactsTitle")}</h4>
+              <p>{t("noArtifacts")}</p>
+              {emptyAction && (
+                <button className="primary-button mt-4" onClick={emptyAction} type="button">
+                  <LayoutDashboard size={16} />{emptyActionLabel}
+                </button>
+              )}
+            </div>
+          </div>
+        </>
+      );
+    }
     return (
       <div className={cx("artifact-empty", compact && "compact")}>
         <img src={compact ? artifactCompactImage : artifactWideImage} alt="" aria-hidden="true" />
@@ -1146,48 +1325,86 @@ function ArtifactsList({
   if (!compact) {
     return (
       <>
-        <div className="artifact-grid">
-          {artifacts.map((artifact) => {
-            const isVideo = artifact.kind === "video" || [".mp4", ".webm", ".mov"].includes(String(artifact.suffix || "").toLowerCase());
-            return (
-              <article className={cx("artifact-card", isVideo && "video")} key={artifact.path}>
-                {isVideo ? (
+        <OutputCenterTabs
+          activeTab={activeArtifactTab}
+          setActiveTab={setActiveArtifactTab}
+          videoCount={videos.length}
+          documentCount={documents.length}
+          t={t}
+        />
+        {!!visibleVideos.length && (
+          <section className="output-section">
+            <div className="output-section-title">
+              <h3>{t("videos")}</h3>
+              <span>{visibleVideos.length} {t("itemsUnit")}</span>
+            </div>
+            <div className="artifact-grid artifact-video-grid">
+              {visibleVideos.map((artifact) => (
+                <article className="artifact-card video" key={artifact.path}>
                   <button className="artifact-video-thumb" onClick={() => setPreviewArtifact(artifact)} type="button" aria-label={t("preview")}>
                     <video src={fileUrl(artifact.path)} muted playsInline preload="metadata" />
                     <span><Play size={20} fill="currentColor" /></span>
+                    <small>{formatDuration(artifact.duration_seconds)} · 1080p</small>
                   </button>
-                ) : (
-                  <span className="artifact-file-thumb"><ScrollText size={28} /></span>
-                )}
-                <div className="artifact-card-body">
-                  <strong>{artifactLabel(artifact)}</strong>
-                  <p title={artifact.name}>{artifact.name}</p>
-                  <div className="artifact-meta">
-                    {artifact.kind === "final_video" && artifact.revision && <span>{t("revisionLabel", { revision: artifact.revision })}{artifact.is_current ? ` · ${t("currentVersion")}` : ""}</span>}
-                    {isVideo && <span>{t("duration")} {formatDuration(artifact.duration_seconds)}</span>}
-                    <span>{t("fileSize")} {formatBytes(artifact.size_bytes)}</span>
-                  </div>
-                  <div className="artifact-actions">
-                    {isVideo ? (
+                  <div className="artifact-card-body">
+                    <strong>{artifactLabel(artifact)}</strong>
+                    <p title={artifact.name}>{artifact.name}</p>
+                    <div className="artifact-meta">
+                      {artifact.kind === "final_video" && artifact.revision && (
+                        <span>{t("revisionLabel", { revision: artifact.revision })}{artifact.is_current ? ` · ${t("currentVersion")}` : ""}</span>
+                      )}
+                      <span>{t("fileSize")} {formatBytes(artifact.size_bytes)}</span>
+                    </div>
+                    <div className="artifact-actions">
                       <button className="secondary-button" onClick={() => setPreviewArtifact(artifact)} type="button">
                         <Play size={15} />{t("preview")}
                       </button>
-                    ) : (
-                      <a className="secondary-button" href={fileUrl(artifact.path)} target="_blank" rel="noreferrer">
-                        <ChevronRight size={15} />{t("open")}
+                      <a className="primary-button" href={downloadFileUrl(artifact.path)}>
+                        <Download size={15} />{t("download")}
                       </a>
-                    )}
+                    </div>
+                  </div>
+                </article>
+              ))}
+            </div>
+          </section>
+        )}
+        {!!visibleDocuments.length && (
+          <section className="output-section">
+            <div className="output-section-title">
+              <h3>{t("documents")}</h3>
+              <span>{visibleDocuments.length} {t("itemsUnit")}</span>
+            </div>
+            <div className="document-grid">
+              {visibleDocuments.map((artifact) => (
+                <article className="document-card" key={artifact.path}>
+                  <span className={cx("document-file-type", `type-${String(artifact.suffix || "").replace(".", "") || "file"}`)}>
+                    {String(artifact.suffix || "FILE").replace(".", "").slice(0, 4).toUpperCase()}
+                  </span>
+                  <strong title={artifact.name}>{artifact.name}</strong>
+                  <p>{artifactLabel(artifact)} · {formatBytes(artifact.size_bytes)}</p>
+                  <div className="artifact-actions">
+                    <a className="secondary-button" href={fileUrl(artifact.path)} target="_blank" rel="noreferrer">
+                      <ChevronRight size={15} />{t("open")}
+                    </a>
                     <a className="primary-button" href={downloadFileUrl(artifact.path)}>
                       <Download size={15} />{t("download")}
                     </a>
                   </div>
-                </div>
-              </article>
-            );
-          })}
-        </div>
+                </article>
+              ))}
+            </div>
+          </section>
+        )}
         {previewArtifact && (
-          <VideoPreviewModal artifact={previewArtifact} fileUrl={fileUrl} downloadFileUrl={downloadFileUrl} setArtifact={setPreviewArtifact} t={t} />
+          <VideoPreviewModal
+            artifact={previewArtifact}
+            artifacts={artifacts}
+            fileUrl={fileUrl}
+            downloadFileUrl={downloadFileUrl}
+            setArtifact={setPreviewArtifact}
+            t={t}
+          />
         )}
       </>
     );
@@ -1208,10 +1425,40 @@ function ArtifactsList({
   );
 }
 
-function VideoPreviewModal({ artifact, fileUrl, downloadFileUrl, setArtifact, t }) {
+function OutputCenterTabs({ activeTab, setActiveTab, videoCount, documentCount, t }) {
+  const tabs = [
+    { id: "all", label: t("allArtifacts"), count: videoCount + documentCount },
+    { id: "videos", label: t("videos"), count: videoCount },
+    { id: "documents", label: t("documents"), count: documentCount },
+  ];
+  return (
+    <div className="output-tabs" role="tablist" aria-label={t("navArtifacts")}>
+      {tabs.map((tab) => (
+        <button
+          aria-selected={activeTab === tab.id}
+          className={activeTab === tab.id ? "active" : ""}
+          key={tab.id}
+          onClick={() => setActiveTab(tab.id)}
+          role="tab"
+          type="button"
+        >
+          <span>{tab.label}</span>
+          <small>{tab.count}</small>
+        </button>
+      ))}
+    </div>
+  );
+}
+
+function VideoPreviewModal({ artifact, artifacts = [], fileUrl, downloadFileUrl, setArtifact, t }) {
   const videoRef = useRef(null);
   const [playbackRate, setPlaybackRate] = useState(1);
   const rates = [0.75, 1, 1.25, 1.5, 2];
+  const videoArtifacts = artifacts.filter((item) => {
+    const suffix = String(item?.suffix || "").toLowerCase();
+    return item?.kind === "video" || item?.kind === "final_video" || [".mp4", ".webm", ".mov", ".m4v"].includes(suffix);
+  });
+  const versions = videoArtifacts.length ? videoArtifacts : [artifact];
 
   const closePreview = (event) => {
     event?.preventDefault?.();
@@ -1259,7 +1506,7 @@ function VideoPreviewModal({ artifact, fileUrl, downloadFileUrl, setArtifact, t 
       </button>
       <section className="video-preview-modal motion-enter" role="dialog" aria-modal="true" aria-label={t("videoPreview")}>
         <header>
-          <div className="min-w-0"><h2>{t("videoPreview")}</h2><p>{artifact.name}</p></div>
+          <div className="min-w-0"><h2>Pro {t("videoPreview")}</h2><p>{artifact.name}</p></div>
           <button
             className="icon-button modal-close-button"
             onClick={closePreview}
@@ -1270,15 +1517,39 @@ function VideoPreviewModal({ artifact, fileUrl, downloadFileUrl, setArtifact, t 
             <X size={18} />
           </button>
         </header>
-        <div className="video-preview-frame">
-          <video
-            ref={videoRef}
-            src={fileUrl(artifact.path)}
-            controls
-            autoPlay
-            playsInline
-            onLoadedMetadata={(event) => { event.currentTarget.playbackRate = playbackRate; }}
-          />
+        <div className="video-preview-body">
+          <div className="video-preview-frame">
+            <video
+              ref={videoRef}
+              src={fileUrl(artifact.path)}
+              controls
+              autoPlay
+              playsInline
+              onLoadedMetadata={(event) => { event.currentTarget.playbackRate = playbackRate; }}
+            />
+          </div>
+          <aside className="video-version-panel">
+            <h3>{t("versionHistory")}</h3>
+            {versions.map((item, index) => (
+              <button
+                className={cx("version-row", item.path === artifact.path && "active")}
+                key={`${item.path}-${index}`}
+                onClick={() => setArtifact(item)}
+                type="button"
+              >
+                <span className="version-thumb">
+                  <video src={fileUrl(item.path)} muted playsInline preload="metadata" />
+                </span>
+                <span>
+                  <strong>{item.name}</strong>
+                  <small>
+                    {item.revision ? t("revisionLabel", { revision: item.revision }) : t("videoPreview")}
+                    {item.path === artifact.path ? ` · ${t("currentVersion")}` : ""}
+                  </small>
+                </span>
+              </button>
+            ))}
+          </aside>
         </div>
         <footer>
           <div className="video-preview-controls" aria-label={t("previewControls")}>
@@ -1345,10 +1616,14 @@ export function Composer({
   mode,
   setMode,
   selectedJob,
+  planInfo,
   submitJob,
   stopSelectedJob,
   messages,
   sendGuidance,
+  sendPlanFeedback,
+  approvePlan,
+  rejectPlan,
   enablePhase2Research,
   enablePlanReview,
   directPhase3Execution,
@@ -1365,11 +1640,14 @@ export function Composer({
   notify,
   t,
 }) {
-  const guidanceMode = selectedJob
-    && ["queued", "running", "interrupted", "completed"].includes(selectedJob.status);
+  const composerState = getComposerMode(selectedJob, planInfo);
+  const guidanceMode = composerState.guidance;
+  const planReviewMode = composerState.planReview;
   const running = selectedJob?.status === "running";
+  const currentPlanVersion = planInfo?.plan?.version || "";
   const [optionsOpen, setOptionsOpen] = useState(false);
   const [submitting, setSubmitting] = useState(false);
+  const [sentPulse, setSentPulse] = useState(null);
   const optionsRootRef = useRef(null);
   const attachInputRef = useRef(null);
   const workflowSaveLockRef = useRef(false);
@@ -1377,6 +1655,12 @@ export function Composer({
   const latestGuidance = messages?.at(-1);
   const phase2Active = enablePhase2Research && !directPhase3Execution;
   const localFirstActive = preferLocalMaterials;
+
+  useEffect(() => {
+    if (!sentPulse) return undefined;
+    const timer = window.setTimeout(() => setSentPulse(null), 1400);
+    return () => window.clearTimeout(timer);
+  }, [sentPulse]);
 
   useEffect(() => {
     if (!optionsOpen) return undefined;
@@ -1416,10 +1700,22 @@ export function Composer({
 
   const submitContent = async () => {
     const content = taskText.trim();
-    if (!content || submitting) return;
+    if (submitting) return;
+    if (!planReviewMode && !content) return;
+    if (planReviewMode && !currentPlanVersion) return;
+    setSentPulse({ content: content || t("approvePlan"), guidance: guidanceMode });
     setSubmitting(true);
     try {
-      if (guidanceMode) {
+      if (planReviewMode) {
+        if (content) {
+          await sendPlanFeedback(currentPlanVersion, content);
+          setTaskText("");
+          notify("success", t("planFeedbackApplied"));
+        } else {
+          await approvePlan(currentPlanVersion);
+          notify("success", t("planApproved"));
+        }
+      } else if (guidanceMode) {
         await sendGuidance(content);
         setTaskText("");
         notify("success", t("guidanceSent"));
@@ -1471,15 +1767,24 @@ export function Composer({
     }
   };
   return (
-    <section className={cx("composer-shell", guidanceMode && "guidance-mode")}>
+    <section className={cx("composer-shell", guidanceMode && "guidance-mode", `composer-${composerState.mode}`, sentPulse && "composer-sent-pulse")}>
+      {sentPulse && (
+        <div className="composer-sent-capsule" aria-live="polite">
+          <Send size={13} />
+          <span>{sentPulse.guidance ? t("guidanceSent") : t("taskSent")}</span>
+          <strong>{sentPulse.content}</strong>
+        </div>
+      )}
       {guidanceMode && (
         <div className="composer-guidance-header">
           <div className="composer-guidance-title">
             <span><Sparkles size={14} /></span>
             <div>
-              <strong>{selectedJob.status === "completed" ? t("startNextRevision") : t("guideRunningAgent")}</strong>
+              <strong>{planReviewMode ? t("reviewPlanComposerTitle") : selectedJob.status === "completed" ? t("startNextRevision") : t("guideRunningAgent")}</strong>
               <small>
-                {latestGuidance?.content
+                {planReviewMode
+                  ? t("reviewPlanComposerHint")
+                  : latestGuidance?.content
                   ? t("latestGuidance", { content: latestGuidance.content })
                   : selectedJob.status === "completed"
                     ? t("completedGuidanceHint")
@@ -1510,7 +1815,7 @@ export function Composer({
                 .catch((error) => notify("error", t("operationFailed", { message: error.message })));
             }
           }}
-          placeholder={guidanceMode ? t("guidanceComposerPlaceholder") : t("composerPlaceholder")}
+          placeholder={planReviewMode ? t("planFeedbackPlaceholder") : guidanceMode ? t("guidanceComposerPlaceholder") : t("composerPlaceholder")}
         />
         <div className="composer-toolbar">
           <div className="flex min-w-0 flex-1 flex-wrap items-center gap-2">
@@ -1590,18 +1895,28 @@ export function Composer({
               )}
               </div>
             )}
-            {guidanceMode && <span className="composer-guidance-note">{t("enterToGuide")}</span>}
+            {guidanceMode && <span className="composer-guidance-note">{planReviewMode ? t("enterToReviewPlan") : t("enterToGuide")}</span>}
           </div>
           <div className="flex shrink-0 items-center gap-2">
             {!guidanceMode && <ModeSelector mode={mode} setMode={setMode} t={t} />}
+            {planReviewMode && (
+              <button
+                className="composer-reject-button"
+                disabled={submitting}
+                onClick={() => rejectPlan(currentPlanVersion).catch((error) => notify("error", t("operationFailed", { message: error.message })))}
+                type="button"
+              >
+                {t("rejectPlan")}
+              </button>
+            )}
             {running && (
               <button className="composer-stop-button" onClick={() => stopSelectedJob().catch((error) => notify("error", t("operationFailed", { message: error.message })))} type="button" aria-label={t("stopTask")} title={t("stopTask")}>
                 <CircleStop size={18} />
               </button>
             )}
-            <button className={cx("send-button", guidanceMode && "guidance-send-button")} disabled={!taskText.trim() || submitting} type="submit" aria-label={guidanceMode ? t("sendGuidance") : t("sendTask")}>
-              <Send size={18} />
-              {guidanceMode && <span>{t("sendGuidance")}</span>}
+            <button className={cx("send-button", guidanceMode && "guidance-send-button", planReviewMode && "plan-review-send-button")} disabled={(!planReviewMode && !taskText.trim()) || submitting || (planReviewMode && !currentPlanVersion)} type="submit" aria-label={planReviewMode ? (taskText.trim() ? t("sendPlanFeedback") : t("approvePlan")) : guidanceMode ? t("sendGuidance") : t("sendTask")}>
+              {planReviewMode && !taskText.trim() ? <Check size={18} /> : <Send size={18} />}
+              {guidanceMode && <span>{planReviewMode ? (taskText.trim() ? t("sendPlanFeedback") : t("approvePlan")) : t("sendGuidance")}</span>}
             </button>
           </div>
         </div>

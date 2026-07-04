@@ -148,6 +148,20 @@ class RuntimeManager:
         if patch.base_version != base.version:
             patch.base_version = base.version
         updated, plan_diff = apply_plan_patch(base, patch)
+        if (
+            text
+            and not plan_diff.changed_globals
+            and not plan_diff.added_scenes
+            and not plan_diff.removed_scenes
+            and not plan_diff.changed_scenes
+        ):
+            self._publish(
+                job,
+                "plan_patch_fallback",
+                {"version": base.version, "reason": "generated patch made no structural changes"},
+            )
+            patch = heuristic_patch_from_feedback(base, text)
+            updated, plan_diff = apply_plan_patch(base, patch)
         report = validate_editing_plan(updated, allowed_source_paths=updated.source_video_paths)
         if not report.ok:
             self._publish(
