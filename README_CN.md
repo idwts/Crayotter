@@ -27,42 +27,85 @@
   如果这个项目能切实帮助到您，欢迎在 GitHub 上给 Crayotter 点一个 Star。
 </p>
 
-Crayotter 是一个多模态、Agent 驱动的视频自动编辑系统，可以把一条文本需求转化为完整成片。
+Crayotter 是一个多模态、Agent 驱动的视频自动编辑系统，可以把一条文本需求转化为完整成片。Crayotter 工作流由 **规划（planning）**、**深度剪辑研究（deep editing research）** 和 **工具执行（tool-based execution）** 三阶段组成，同时支持基于完整日志与可视化轨迹的调试与迭代功能。
 
-Crayotter 工作流由 **规划（planning）**、**深度剪辑研究（deep editing research）** 和 **工具执行（tool-based execution）** 三阶段组成，同时支持基于完整日志与可视化轨迹的调试与迭代功能。
+---
+
+## 📽️ 演示视频
+
+<p align="center">
+  <video src="./demo/showcase.mp4" controls width="100%" alt="Crayotter 演示视频"></video>
+</p>
+
+一次完整的端到端运行：从一句文本需求出发，Crayotter 自动准备素材、研究剪辑蓝图，最终产出成片。
+
+---
+
+## 目录
+
+- [近期动态](#近期动态)
+- [核心特性](#核心特性)
+- [项目概览](#项目概览)
+- [工作流](#工作流)
+- [快速开始](#快速开始)
+  - [Windows 免安装版本](#windows-免安装版本)
+  - [前置准备](#前置准备)
+  - [1) 环境准备](#1-环境准备)
+  - [2) 安装依赖](#2-安装依赖)
+  - [3) API 配置与运行参数设置](#3-api-配置与运行参数设置)
+  - [4) 运行 Agent](#4-运行-agent)
+  - [5) 运行图形化工作台](#5-运行图形化工作台)
+- [日志轨迹可视化](#日志轨迹可视化)
+- [引用](#引用)
+- [仓库结构](#仓库结构)
 
 ---
 
 ## 近期动态
 
-- 2026.6.27：Crayotter 1.0.0 新增多素材源导入、统一下载清洗，并更新 Windows 发布包。
-- 2026.6.15：异步调度升级后，视频生成整体流程提速约 1.6 倍。
-- 2026.5.31：我们的论文已上线：[Crayotter: Traceable Multi-Agent Workflows for Long-Form Video Editing](https://arxiv.org/abs/2606.07636)。
-- 2026.5.23：100星达成！
-- 2026.5.11：论文页面已上线，见 [Crayotter Paper Page](https://idwts.github.io/Crayotter/paper/)。
-- 2026.4.10：优化后的 release 版本已更新。
-- 2026.3.30：第一款 release 版本已发布，见[v0.1.0-demo](https://github.com/idwts/Crayotter/releases/tag/v0.1.0-demo)。
+- **2026.6.27** — Crayotter 1.0.0 新增多素材源导入、统一下载清洗，并更新 Windows 发布包。
+- **2026.6.15** — 异步调度升级后，视频生成整体流程提速约 1.6 倍。
+- **2026.5.31** — 我们的论文已上线：[Crayotter: Traceable Multi-Agent Workflows for Long-Form Video Editing](https://arxiv.org/abs/2606.07636)。
+- **2026.5.23** — 100 星达成！
+- **2026.5.11** — 论文页面已上线，见 [Crayotter Paper Page](https://idwts.github.io/Crayotter/paper/)。
+- **2026.4.10** — 优化后的 release 版本已更新。
+- **2026.3.30** — 第一款 release 版本已发布，见 [v0.1.0-demo](https://github.com/idwts/Crayotter/releases/tag/v0.1.0-demo)。
+
+---
+
+## 核心特性
+
+- **一句话出一条片** — 一句自然语言需求驱动从素材采集到导出的完整流水线。
+- **三阶段、可追溯工作流** — 显式规划、纯推理的剪辑研究、受控工具执行，全程留痕可复盘。
+- **多模态素材理解** — 每个源视频由多模态模型分析，支撑叙事与节奏决策。
+- **资源感知 DAG 调度** — 搜索、下载、分析、LLM、FFmpeg、TTS、导出均按资源池限流，支持重试、冲突键、断点续跑。
+- **多源素材导入** — B 站、抖音、小红书/Rednote、快手、YouTube 或 generic URL（经 `yt-dlp`）。
+- **内置配音、字幕与音频混合** — 分段 TTS、响度归一化、背景音闪避、字幕烧录。
+- **本地工作台 + 桌面模式** — Web 界面负责任务管理、`.env` 双向同步、结构化日志、产物预览与中断任务续跑。
+- **可视化轨迹分析** — 本地服务 + 静态 HTML 导出，用于查看阶段进度与工具调用轨迹。
 
 ---
 
 ## 项目概览
 
-<img src="crayottor_framework.jpg">
+<p align="center">
+  <img src="./crayottor_framework.jpg" alt="Crayotter 框架总览">
+</p>
 
 本仓库主要由四个核心组件构成：
 
-- **`script\agent.py`**：主入口。负责初始化运行环境、执行任务（根据启动方式不同分交互式或单次请求）、清理工作目录，并写入日志与经验记忆。
-- **`script\graph.py`**：编排层（Orchestration Layer，implemented by LangGraph StateGraph）。定义三阶段工作流与状态路由。
-- **`script\tools\`**：模块化工具集，覆盖 1.素材的搜索、下载和分析 和 2.基于素材集的剪辑、转场、配音 以及 3.最终成品的字幕与导出。
-- **`script\visualize.py`**：基于日志解析的本地可视化服务，用于查看阶段进度和工具调用轨迹。
+- **`script/agent.py`** — 主入口。负责初始化运行环境、执行任务（根据启动方式不同分交互式或单次请求）、清理工作目录，并写入日志与经验记忆。
+- **`script/graph.py`** — 编排层（Orchestration Layer，implemented by LangGraph StateGraph）。定义三阶段工作流与状态路由。
+- **`script/tools/`** — 模块化工具集，覆盖 1.素材的搜索、下载和分析 和 2.基于素材集的剪辑、转场、配音 以及 3.最终成品的字幕与导出。
+- **`script/visualize.py`** — 基于日志解析的本地可视化服务，用于查看阶段进度和工具调用轨迹。
 
 配套目录：
 
-- **`temp\`**：存储执行过程中的中间文件（如搜索并下载的素材文件）与输出最终剪辑成品文件。
-- **`user_temp\`**：存储用户提供的本地素材。
-- **`logs\`**：存储运行日志（`video_agent_*.log`）。
-- **`memory_experience\`**：存储单次任务后沉淀的历史案例参考文档，仅供方法参考，不能覆盖当前任务目标。
-- **`website\`**：静态官网与 GitHub Pages 资源。
+- **`temp/`** — 存储执行过程中的中间文件（如搜索并下载的素材文件）与输出最终剪辑成品文件。
+- **`user_temp/`** — 存储用户提供的本地素材。
+- **`logs/`** — 存储运行日志（`video_agent_*.log`）。
+- **`memory_experience/`** — 存储单次任务后沉淀的历史案例参考文档，仅供方法参考，不能覆盖当前任务目标。
+- **`website/`** — 静态官网与 GitHub Pages 资源。
 
 ---
 
@@ -70,25 +113,35 @@ Crayotter 工作流由 **规划（planning）**、**深度剪辑研究（deep ed
 
 Crayotter 工作流分三阶段：
 
+```text
+START -> planner -> phase1_scheduler -> material_gap_evaluator
+material_gap_evaluator -> planner (supplement) | editing_research | react_editor
+editing_research -> react_editor -> END
+```
+
 1. **Phase 1 — 素材准备（Planner + Executor）**
-   - Planner 输出显式依赖 DAG，调度器通过有界 `Send` fan-out 并发执行当前 ready steps
-   - 通过平台无关的素材源层搜索候选素材
-   - 导入用户提供的 B 站、抖音、小红书/Rednote、快手、YouTube 或 generic URL（实际下载能力取决于 `yt-dlp` 和平台可访问性）
-   - 对候选素材进行排序并筛选高质量素材
-   - 下载入选视频，并统一清洗为剪辑兼容的 MP4/H.264/AAC 素材
-   - 对每个源视频执行多模态分析
+   - Planner 输出显式依赖 DAG，调度器验证依赖、资源池、重试与写冲突。
+   - 搜索、逐视频下载、逐视频分析任务在资源允许时并发执行。
+   - Material Gap Evaluator 判定继续推进或增量补充（最多两轮补充，复用已成功的任务）。
+   - 通过平台无关的素材源层搜索候选素材。
+   - 导入用户提供的 B 站、抖音、小红书/Rednote、快手、YouTube 或 generic URL（实际下载能力取决于 `yt-dlp` 和平台可访问性）。
+   - 对候选素材进行排序并筛选高质量素材（目标横竖屏作为评分因子：默认横屏，用户明确要求时优先竖屏）。
+   - 下载入选视频，并统一清洗为剪辑兼容的 MP4/H.264/AAC 素材。
+   - 对每个源视频执行多模态分析。
 
 2. **Phase 2 — 剪辑研究（Editing Research）**
-   - 对入选素材读取并分析结果
-   - 根据入选素材的分析结果生成结构化剪辑蓝图（叙事、节奏、转场、配音策略）
-   - 本阶段不调用剪辑工具
+   - 对入选素材读取并分析结果。
+   - 并发生成叙事、画面、节奏、配音策略。
+   - 整合为一份结构化剪辑蓝图（JSON + 兼容 Markdown）。
+   - 本阶段不调用剪辑工具，纯推理。
 
-   温馨提示：该阶段可通过运行根目录 `.env` 中的 `CRAYOTTER_ENABLE_PHASE2_RESEARCH=false` 关闭，以节省 token。
-   关闭后流程变为：Phase 1 → Phase 3。但剪辑效果可能会有偏差。
+   温馨提示：该阶段可通过运行根目录 `.env` 中的 `CRAYOTTER_ENABLE_PHASE2_RESEARCH=false` 关闭，以节省 token。关闭后流程变为：Phase 1 → Phase 3。但剪辑效果可能会有偏差。
 
 3. **Phase 3 — ReAct 自动执行（ReAct Editing Execution）**
-   - 对素材执行裁剪、合并、转场、配音/字幕、最终导出
-   - 记录完整的工具调用轨迹，用于后续的可视化复盘
+   - 优先走受控剪辑 DAG，并发裁剪素材与分段 TTS。
+   - 时间线合并、混音、字幕、质量评估、导出保持串行。
+   - 结构化规划或校验失败时回退到 ReAct 编辑器。
+   - 记录完整的工具调用轨迹，用于后续的可视化复盘。
 
 ---
 
@@ -117,11 +170,11 @@ powershell -ExecutionPolicy Bypass -File packaging\build_windows.ps1
 - `dist\Crayotter\`
 - `Crayotter-Windows-x64.zip`
 
-### 0）剪辑工具
-确保系统的 `PATH` 环境变量中已包含 `ffmpeg` 二进制可执行文件，使其能够在终端中被直接调用。  
-可前往 `https://ffmpeg.org/download.html` 下载对应平台的安装包。安装完成后，可在终端执行 `ffmpeg -version`，若能正常输出版本信息，则说明配置成功。
+### 前置准备
 
-### 1）环境准备
+确保系统的 `PATH` 环境变量中已包含 `ffmpeg` 二进制可执行文件，使其能够在终端中被直接调用。可前往 <https://ffmpeg.org/download.html> 下载对应平台的安装包。安装完成后，可在终端执行 `ffmpeg -version`，若能正常输出版本信息，则说明配置成功。Windows 下 `script/dep/windows` 中的打包二进制（`ffmpeg.exe`、`ffprobe.cmd`、`yt-dlp.exe`）也会被自动加入 `PATH`。
+
+### 1) 环境准备
 
 建议 Python 3.10+。
 
@@ -130,21 +183,22 @@ python -m venv .venv
 .venv\Scripts\activate
 ```
 
-### 2）安装依赖
+### 2) 安装依赖
 
 ```bash
 pip install -r requirements.txt
 ```
 
-### 3）API 配置与运行参数设置
-#### 第一步：生成配置文件
+### 3) API 配置与运行参数设置
+
 首先把模板配置文件复制一份，生成专属的自定义配置文件 `.env`，直接在终端执行这条命令即可：
+
 ```bash
 copy .env.example .env
 ```
 
-#### 第二步：填写核心配置
 打开刚生成的 `.env` 文件，填写/修改以下常用配置，每一项都标注了用途，新手直接按说明填就行：
+
 ```env
 # 【必填】你的阿里云通义千问API密钥
 CRAYOTTER_API_KEY=your-key
@@ -186,7 +240,6 @@ CRAYOTTER_AUDIO_LOUDNORM_TARGET=0
 
 # 智能代理超时等待时间（单位：秒，默认150秒，超时会自动结束当前任务）
 CRAYOTTER_AGENT_STALL_TIMEOUT_SECONDS=150
-
 ```
 
 说明：
@@ -205,7 +258,7 @@ CRAYOTTER_AGENT_STALL_TIMEOUT_SECONDS=150
 
 > 安全提醒：不要把真实 API Key 提交到版本控制。
 
-### 4）运行 Agent
+### 4) 运行 Agent
 
 交互模式：
 
@@ -220,7 +273,7 @@ python script\agent.py
 python script\agent.py "制作一个1分钟校园主题宣传片"
 ```
 
-### 5）运行图形化工作台
+### 5) 运行图形化工作台
 
 图形化工作台提供了一个直观的 Web 界面，用于管理任务、配置环境以及监控 Agent 的实时状态。
 
@@ -239,7 +292,6 @@ python script\run_backend.py --host 127.0.0.1 --port 8765
 
 然后在浏览器打开：
 
-如果在第一步使用 8765 端口：
 ```text
 http://127.0.0.1:8765/ui/
 ```
@@ -251,6 +303,7 @@ http://127.0.0.1:8765/ui/
 - 历史任务查看
 - 结构化日志与事件查看
 - 产物预览与打开
+- 中断任务从最近调度检查点续跑
 
 后端同时暴露这些本地接口：
 
@@ -281,7 +334,8 @@ python script\visualize.py
 ```bash
 python script\visualize.py logs\<video_agent_YYYYMMDD_HHMMSS>.log
 ```
-请将 `<video_agent_YYYYMMDD_HHMMSS>.log`文件名替换为您在 `logs` 目录下实际生成的日志名称
+
+请将 `<video_agent_YYYYMMDD_HHMMSS>.log` 文件名替换为您在 `logs` 目录下实际生成的日志名称。
 
 3. 网络配置：可视化界面默认运行在 8080 端口。如果该端口被占用或有特定需求，可使用 `--port` 参数自定义：
 
@@ -290,7 +344,7 @@ python script\visualize.py logs\<video_agent_YYYYMMDD_HHMMSS>.log
 python script/visualize.py --port 9000
 ```
 
-4. 隐式导出静态HTML：`script\visualize.py` 还会在日志同目录导出静态 HTML 轨迹文件（例如 `*_trace.html`）。
+4. 隐式导出静态 HTML：`script\visualize.py` 还会在日志同目录导出静态 HTML 轨迹文件（例如 `*_trace.html`）。
 
 ---
 
@@ -315,17 +369,22 @@ python script/visualize.py --port 9000
 ## 仓库结构
 
 ```text
-Crayotter\
-├─ script\
+Crayotter/
+├─ script/
 │  ├─ agent.py
 │  ├─ graph.py
 │  ├─ visualize.py
-│  └─ tools\
-├─ logs\
-├─ temp\
-├─ user_temp\
-├─ memory_experience\
-├─ website\
+│  └─ tools/
+├─ app/                # 后端服务、前端、运行时路径
+├─ packaging/          # Windows 发布构建脚本
+├─ phase3_rl/          # 实验性 RL 冒烟流水线（非主运行时）
+├─ demo/               # 演示素材
+├─ logs/
+├─ temp/
+├─ user_temp/
+├─ memory_experience/
+├─ website/            # 静态官网 + GitHub Pages 资源
 ├─ logo.png
+├─ crayottor_framework.jpg
 └─ requirements.txt
 ```

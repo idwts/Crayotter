@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import threading
 import time
 import uuid
@@ -51,6 +52,14 @@ def classify_guidance(content: str) -> dict[str, Any]:
         "竖屏",
         "画幅",
     )
+    duration_requested = (
+        any(marker in lowered for marker in ("时长", "多久", "分半"))
+        or re.search(
+            r"\d+(?:\.\d+)?\s*(?:秒|分钟|分|s\b|sec(?:ond)?s?\b|min(?:ute)?s?\b)",
+            lowered,
+        )
+        is not None
+    )
     narrative_markers = (
         "叙事",
         "结构",
@@ -69,6 +78,8 @@ def classify_guidance(content: str) -> dict[str, Any]:
 
     if any(marker in lowered for marker in global_markers):
         category, phase, impact = "global", "phase1", "phase"
+    elif duration_requested:
+        category, phase, impact = "duration", "phase1", "phase"
     elif any(marker in lowered for marker in material_markers):
         category, phase, impact = "material", "phase1", "phase"
     elif any(marker in lowered for marker in narration_markers):

@@ -458,6 +458,70 @@ class ShortFormConfigTests(unittest.TestCase):
         self.assertLessEqual(counts["top_k_max"], 4)
         self.assertLessEqual(counts["mllm_review"], 60)
 
+    def test_40_second_tasks_keep_search_budget_small(self) -> None:
+        from script import graph
+
+        counts = graph._recommend_material_counts(40)
+
+        self.assertLessEqual(counts["search_per_source"], 8)
+        self.assertLessEqual(counts["max_candidates"], 32)
+        self.assertLessEqual(counts["mllm_review"], 32)
+        self.assertLessEqual(counts["top_k_max"], 4)
+
+    def test_short_task_plan_arguments_are_clamped_to_budget(self) -> None:
+        from script import graph
+
+        counts = graph._recommend_material_counts(40)
+        plan = graph.Plan(
+            goal="40 second promo",
+            analysis="test",
+            steps=[
+                graph.Step(
+                    id=1,
+                    description="search 1",
+                    tool_hint="search_material_sources",
+                    arguments={"max_results": 16, "pages": 3, "max_total_results": 80},
+                ),
+                graph.Step(
+                    id=2,
+                    description="search 2",
+                    tool_hint="search_material_sources",
+                    arguments={"max_results": 16, "pages": 3, "max_total_results": 80},
+                ),
+                graph.Step(
+                    id=3,
+                    description="search 3",
+                    tool_hint="search_material_sources",
+                    arguments={"max_results": 16, "pages": 3, "max_total_results": 80},
+                ),
+                graph.Step(
+                    id=4,
+                    description="search 4",
+                    tool_hint="search_material_sources",
+                    arguments={"max_results": 16, "pages": 3, "max_total_results": 80},
+                ),
+                graph.Step(
+                    id=5,
+                    description="rank",
+                    tool_hint="rank_video_candidates",
+                    arguments={"top_k": 8, "max_review": 80},
+                ),
+            ],
+        )
+
+        normalized = graph._validate_and_normalize_plan(plan, "40 second promo", counts)
+        search_steps = [
+            step for step in normalized.steps if step.tool_hint == "search_material_sources"
+        ]
+        rank_step = next(step for step in normalized.steps if step.tool_hint == "rank_video_candidates")
+
+        self.assertLessEqual(len(search_steps), 3)
+        self.assertTrue(all(step.arguments["max_results"] <= 8 for step in search_steps))
+        self.assertTrue(all(step.arguments["pages"] == 1 for step in search_steps))
+        self.assertTrue(all(step.arguments["max_total_results"] <= 32 for step in search_steps))
+        self.assertLessEqual(rank_step.arguments["top_k"], 4)
+        self.assertLessEqual(rank_step.arguments["max_review"], 32)
+
     def test_short_form_executor_no_longer_has_10s_error(self) -> None:
         graph_source = Path("script/graph.py").read_text(encoding="utf-8")
         self.assertNotIn("短片计划总时长不是 10 秒", graph_source)

@@ -20,6 +20,7 @@ import {
   normalizeRuntimeEvent,
 } from "./eventState";
 import { jobEventsDownloadUrl } from "./logDownload";
+import { buildConfigPayload, shouldRefreshCurrentPlan } from "./workbenchFlow";
 
 const STORAGE_KEYS = {
   language: "crayotter.language",
@@ -141,11 +142,11 @@ function App() {
     ttsModel: "",
     stallTimeout: "150",
     searchPoolSize: "4",
-    downloadPoolSize: "2",
-    videoAnalysisPoolSize: "2",
-    llmPoolSize: "2",
-    ffmpegPoolSize: "2",
-    ttsPoolSize: "2",
+    downloadPoolSize: "3",
+    videoAnalysisPoolSize: "3",
+    llmPoolSize: "4",
+    ffmpegPoolSize: "3",
+    ttsPoolSize: "3",
     exportPoolSize: "1",
     enablePhase2Research: true,
     enablePlanReview: true,
@@ -417,11 +418,11 @@ function App() {
       ttsModel: profile.tts_model_name || "",
       stallTimeout: String(config.agent_stall_timeout_seconds || 150),
       searchPoolSize: String(config.search_pool_size || 4),
-      downloadPoolSize: String(config.download_pool_size || 2),
-      videoAnalysisPoolSize: String(config.video_analysis_pool_size || 2),
-      llmPoolSize: String(config.llm_pool_size || 2),
-      ffmpegPoolSize: String(config.ffmpeg_pool_size || 2),
-      ttsPoolSize: String(config.tts_pool_size || 2),
+      downloadPoolSize: String(config.download_pool_size || 3),
+      videoAnalysisPoolSize: String(config.video_analysis_pool_size || 3),
+      llmPoolSize: String(config.llm_pool_size || 4),
+      ffmpegPoolSize: String(config.ffmpeg_pool_size || 3),
+      ttsPoolSize: String(config.tts_pool_size || 3),
       exportPoolSize: String(config.export_pool_size || 1),
       enablePhase2Research: config.enable_phase2_research !== false,
       enablePlanReview: config.enable_plan_review !== false,
@@ -457,6 +458,9 @@ function App() {
         setSelectedJob((current) => current?.job_id === targetId
           ? { ...current, ...job, artifacts: current.artifacts || [] }
           : job);
+        if (shouldRefreshCurrentPlan(job, selectedPlan)) {
+          loadCurrentPlan(targetId).catch(() => {});
+        }
         if (selectRunning || selectedJobId !== targetId) {
           const [detail, eventsPayload, messagesPayload] = await Promise.all([
             request(`/jobs/${targetId}`),
@@ -479,7 +483,7 @@ function App() {
       setSelectedMessages([]);
       setSelectedPlan(null);
     }
-  }, [loadCurrentPlan, selectedJobId]);
+  }, [loadCurrentPlan, selectedJobId, selectedPlan]);
 
   const attachEventStream = useCallback((job, existingEvents = []) => {
     closeEventStream();
@@ -540,6 +544,18 @@ function App() {
       attachEventStream(selectedJob, selectedEvents);
     }
   }, [attachEventStream, selectedJob?.job_id, selectedJob?.status]);
+
+  useEffect(() => {
+    if (selectedJob?.job_id && shouldRefreshCurrentPlan(selectedJob, selectedPlan)) {
+      loadCurrentPlan(selectedJob.job_id).catch(() => {});
+    }
+  }, [
+    loadCurrentPlan,
+    selectedJob?.job_id,
+    selectedJob?.current_checkpoint,
+    selectedJob?.steering_status,
+    selectedPlan?.plan?.version,
+  ]);
 
   useEffect(() => {
     setHealthText(t("subtitleConnecting"));
@@ -634,36 +650,7 @@ function App() {
 
   const submitConfig = async (event) => {
     event.preventDefault();
-    const stallTimeout = Math.max(10, Number(configForm.stallTimeout || 150));
-    const poolSize = (value, fallback) => Math.max(1, Number(value || fallback));
-    const payload = {
-      active_profile: "default",
-      profiles: {
-        default: {
-          api_key: configForm.apiKey.trim(),
-          base_url: configForm.baseUrl.trim(),
-          model_name: configForm.model.trim(),
-          video_api_key: configForm.videoApiKey.trim(),
-          video_base_url: configForm.videoBaseUrl.trim(),
-          video_model_name: configForm.videoModel.trim(),
-          tts_api_key: configForm.ttsApiKey.trim(),
-          tts_base_url: configForm.ttsBaseUrl.trim(),
-          tts_model_name: configForm.ttsModel.trim(),
-        },
-      },
-      enable_phase2_research: configForm.enablePhase2Research,
-      enable_plan_review: configForm.enablePlanReview,
-      direct_phase3_execution: configForm.directPhase3Execution,
-      prefer_local_materials: configForm.preferLocalMaterials,
-      agent_stall_timeout_seconds: stallTimeout,
-      search_pool_size: poolSize(configForm.searchPoolSize, 4),
-      download_pool_size: poolSize(configForm.downloadPoolSize, 2),
-      video_analysis_pool_size: poolSize(configForm.videoAnalysisPoolSize, 2),
-      llm_pool_size: poolSize(configForm.llmPoolSize, 2),
-      ffmpeg_pool_size: poolSize(configForm.ffmpegPoolSize, 2),
-      tts_pool_size: poolSize(configForm.ttsPoolSize, 2),
-      export_pool_size: poolSize(configForm.exportPoolSize, 1),
-    };
+    const payload = buildConfigPayload(configForm);
     try {
       const config = await request("/config", { method: "PUT", body: JSON.stringify(payload) });
       applyConfig(config);

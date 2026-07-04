@@ -51,11 +51,11 @@ class AppConfig(BaseModel):
     direct_phase3_execution: bool = False
     prefer_local_materials: bool = False
     search_pool_size: int = Field(default=4, ge=1)
-    download_pool_size: int = Field(default=2, ge=1)
-    video_analysis_pool_size: int = Field(default=2, ge=1)
-    llm_pool_size: int = Field(default=2, ge=1)
-    ffmpeg_pool_size: int = Field(default=2, ge=1)
-    tts_pool_size: int = Field(default=2, ge=1)
+    download_pool_size: int = Field(default=3, ge=1)
+    video_analysis_pool_size: int = Field(default=3, ge=1)
+    llm_pool_size: int = Field(default=4, ge=1)
+    ffmpeg_pool_size: int = Field(default=3, ge=1)
+    tts_pool_size: int = Field(default=3, ge=1)
     export_pool_size: int = Field(default=1, ge=1)
     short_form_optimizations: bool = True
     short_form_max_sources: int = Field(default=2, ge=1, le=4)

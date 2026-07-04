@@ -117,14 +117,10 @@ export function SettingsModal({ configForm, setConfigForm, configMessage, setCon
                       </div>
                     </SettingSection>
                     <SettingSection icon={SlidersHorizontal} title={t("resourcePools")}>
-                      <div className="grid gap-4 md:grid-cols-2">
-                        <Field label={t("searchPool")} value={configForm.searchPoolSize} onChange={(value) => update("searchPoolSize", value)} placeholder="4" type="number" />
-                        <Field label={t("downloadPool")} value={configForm.downloadPoolSize} onChange={(value) => update("downloadPoolSize", value)} placeholder="2" type="number" />
-                        <Field label={t("videoAnalysisPool")} value={configForm.videoAnalysisPoolSize} onChange={(value) => update("videoAnalysisPoolSize", value)} placeholder="2" type="number" />
-                        <Field label={t("llmPool")} value={configForm.llmPoolSize} onChange={(value) => update("llmPoolSize", value)} placeholder="2" type="number" />
-                        <Field label={t("ffmpegPool")} value={configForm.ffmpegPoolSize} onChange={(value) => update("ffmpegPoolSize", value)} placeholder="2" type="number" />
-                        <Field label={t("ttsPool")} value={configForm.ttsPoolSize} onChange={(value) => update("ttsPoolSize", value)} placeholder="2" type="number" />
-                        <Field label={t("exportPool")} value={configForm.exportPoolSize} onChange={(value) => update("exportPoolSize", value)} placeholder="1" type="number" />
+                      <div className="settings-env-note">
+                        <strong>{t("resourcePoolsEnvOnlyTitle")}</strong>
+                        <p>{t("resourcePoolsEnvOnlyBody")}</p>
+                        <code>CRAYOTTER_SEARCH_POOL_SIZE / CRAYOTTER_DOWNLOAD_POOL_SIZE / CRAYOTTER_VIDEO_ANALYSIS_POOL_SIZE / CRAYOTTER_LLM_POOL_SIZE / CRAYOTTER_FFMPEG_POOL_SIZE / CRAYOTTER_TTS_POOL_SIZE / CRAYOTTER_EXPORT_POOL_SIZE</code>
                       </div>
                     </SettingSection>
                   </>

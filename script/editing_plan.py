@@ -9,7 +9,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, ValidationError, field_validator
 
 
 PlanStatus = Literal[
@@ -300,7 +300,10 @@ def apply_plan_patch(plan: EditingPlan, patch: PlanPatch) -> tuple[EditingPlan, 
             continue
         if operation.op == "add_scene":
             value = operation.value if isinstance(operation.value, dict) else {}
-            scene = EditingScene.model_validate(value)
+            try:
+                scene = EditingScene.model_validate(value)
+            except ValidationError:
+                continue
             scenes[scene.scene_id] = scene
             continue
         if operation.op == "reorder_scenes":

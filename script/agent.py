@@ -50,11 +50,11 @@ SHORT_FORM_OPTIMIZATIONS = str(
 ).strip().lower() not in {"0", "false", "no", "off"}
 try:
     SEARCH_POOL_SIZE = max(1, int(os.environ.get("CRAYOTTER_SEARCH_POOL_SIZE", "4") or 4))
-    DOWNLOAD_POOL_SIZE = max(1, int(os.environ.get("CRAYOTTER_DOWNLOAD_POOL_SIZE", "2") or 2))
-    VIDEO_ANALYSIS_POOL_SIZE = max(1, int(os.environ.get("CRAYOTTER_VIDEO_ANALYSIS_POOL_SIZE", "2") or 2))
-    LLM_POOL_SIZE = max(1, int(os.environ.get("CRAYOTTER_LLM_POOL_SIZE", "2") or 2))
-    FFMPEG_POOL_SIZE = max(1, int(os.environ.get("CRAYOTTER_FFMPEG_POOL_SIZE", "2") or 2))
-    TTS_POOL_SIZE = max(1, int(os.environ.get("CRAYOTTER_TTS_POOL_SIZE", "2") or 2))
+    DOWNLOAD_POOL_SIZE = max(1, int(os.environ.get("CRAYOTTER_DOWNLOAD_POOL_SIZE", "3") or 3))
+    VIDEO_ANALYSIS_POOL_SIZE = max(1, int(os.environ.get("CRAYOTTER_VIDEO_ANALYSIS_POOL_SIZE", "3") or 3))
+    LLM_POOL_SIZE = max(1, int(os.environ.get("CRAYOTTER_LLM_POOL_SIZE", "4") or 4))
+    FFMPEG_POOL_SIZE = max(1, int(os.environ.get("CRAYOTTER_FFMPEG_POOL_SIZE", "3") or 3))
+    TTS_POOL_SIZE = max(1, int(os.environ.get("CRAYOTTER_TTS_POOL_SIZE", "3") or 3))
     EXPORT_POOL_SIZE = max(1, int(os.environ.get("CRAYOTTER_EXPORT_POOL_SIZE", "1") or 1))
     SHORT_FORM_MAX_SOURCES = min(
         4,
@@ -80,11 +80,11 @@ try:
     )
 except (TypeError, ValueError):
     SEARCH_POOL_SIZE = 4
-    DOWNLOAD_POOL_SIZE = 2
-    VIDEO_ANALYSIS_POOL_SIZE = 2
-    LLM_POOL_SIZE = 2
-    FFMPEG_POOL_SIZE = 2
-    TTS_POOL_SIZE = 2
+    DOWNLOAD_POOL_SIZE = 3
+    VIDEO_ANALYSIS_POOL_SIZE = 3
+    LLM_POOL_SIZE = 4
+    FFMPEG_POOL_SIZE = 3
+    TTS_POOL_SIZE = 3
     EXPORT_POOL_SIZE = 1
     SHORT_FORM_MAX_SOURCES = 2
     VIDEO_ANALYSIS_PROXY_MAX_SECONDS = 45

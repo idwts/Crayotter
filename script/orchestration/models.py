@@ -107,11 +107,11 @@ class TaskExecutionResult(BaseModel):
 
 class ResourcePoolConfig(BaseModel):
     search_pool: int = Field(default=4, ge=1)
-    download_pool: int = Field(default=2, ge=1)
-    video_analysis_pool: int = Field(default=2, ge=1)
-    llm_pool: int = Field(default=2, ge=1)
-    ffmpeg_pool: int = Field(default=2, ge=1)
-    tts_pool: int = Field(default=2, ge=1)
+    download_pool: int = Field(default=3, ge=1)
+    video_analysis_pool: int = Field(default=3, ge=1)
+    llm_pool: int = Field(default=4, ge=1)
+    ffmpeg_pool: int = Field(default=3, ge=1)
+    tts_pool: int = Field(default=3, ge=1)
     export_pool: int = Field(default=1, ge=1)
 
     def as_dict(self) -> dict[str, int]:
