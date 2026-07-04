@@ -34,7 +34,13 @@ Crayotter is a multimodal, agent-driven video editing system that turns a single
 ## 📽️ Demo
 
 <p align="center">
-  <video src="./demo/showcase.mp4" controls width="100%" alt="Crayotter demo video"></video>
+  <a href="https://github.com/idwts/Crayotter/raw/main/demo/showcase.mp4">
+    <img src="./demo/showcase-poster.jpg" alt="Crayotter demo video preview" width="100%" />
+  </a>
+</p>
+
+<p align="center">
+  <a href="https://github.com/idwts/Crayotter/raw/main/demo/showcase.mp4">Watch the demo video</a>
 </p>
 
 A full end-to-end run: from a one-line text request, Crayotter prepares materials, researches an editing blueprint, and produces the final edited video.
@@ -272,30 +278,6 @@ Then open the local workbench in your browser:
 ```text
 http://127.0.0.1:8765/ui/
 ```
-
-The workbench supports:
-
-- task creation in `demo` and `agent` modes
-- local configuration management with `.env` sync
-- task history
-- structured logs and event viewing
-- artifact preview and download
-- interrupted-job resume from the latest scheduler checkpoint
-
-The backend also exposes local runtime routes such as:
-
-- `GET /health`
-- `GET /config`
-- `PUT /config`
-- `GET /jobs`
-- `POST /jobs`
-- `GET /jobs/{job_id}`
-- `GET /jobs/{job_id}/events`
-- `GET /jobs/{job_id}/events/stream`
-- `GET /jobs/{job_id}/artifacts`
-- `POST /jobs/{job_id}/cancel`
-- `POST /jobs/{job_id}/resume`
-- `DELETE /jobs/{job_id}`
 
 > The GUI uses the runtime-root `.env` as the only configuration source of truth. Do not commit real `.env` values.
 

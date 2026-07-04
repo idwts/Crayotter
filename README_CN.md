@@ -34,7 +34,13 @@ Crayotter 是一个多模态、Agent 驱动的视频自动编辑系统，可以�
 ## 📽️ 演示视频
 
 <p align="center">
-  <video src="./demo/showcase.mp4" controls width="100%" alt="Crayotter 演示视频"></video>
+  <a href="https://github.com/idwts/Crayotter/raw/main/demo/showcase.mp4">
+    <img src="./demo/showcase-poster.jpg" alt="Crayotter 演示视频预览" width="100%" />
+  </a>
+</p>
+
+<p align="center">
+  <a href="https://github.com/idwts/Crayotter/raw/main/demo/showcase.mp4">观看演示视频</a>
 </p>
 
 一次完整的端到端运行：从一句文本需求出发，Crayotter 自动准备素材、研究剪辑蓝图，最终产出成片。
@@ -295,27 +301,6 @@ python script\run_backend.py --host 127.0.0.1 --port 8765
 ```text
 http://127.0.0.1:8765/ui/
 ```
-
-工作台当前功能：
-
-- 任务创建：支持创建 `demo` 和 `agent` 任务
-- 环境配置：与 `.env` 双向同步的本地配置管理
-- 历史任务查看
-- 结构化日志与事件查看
-- 产物预览与打开
-- 中断任务从最近调度检查点续跑
-
-后端同时暴露这些本地接口：
-
-- `GET /health`
-- `GET /config`
-- `PUT /config`
-- `GET /jobs`
-- `POST /jobs`
-- `GET /jobs/{job_id}`
-- `GET /jobs/{job_id}/events`
-- `POST /jobs/{job_id}/cancel`
-- `POST /jobs/{job_id}/resume`
 
 > 图形化工作台以运行根目录 `.env` 作为唯一配置真源。不要提交真实 `.env`。
 
