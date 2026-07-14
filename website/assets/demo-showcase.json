@@ -1,6 +1,15 @@
 {
   "items": [
     {
+      "id": "crayotter-operation-showcase",
+      "tab": "showcase",
+      "title": "Crayotter 操作演示",
+      "description": "从一句自然语言需求开始，完整展示素材准备、剪辑研究、工具执行与最终成片导出的端到端流程。",
+      "videoSrc": "https://raw.githubusercontent.com/idwts/Crayotter/main/demo/showcase.mp4",
+      "posterSrc": "https://raw.githubusercontent.com/idwts/Crayotter/main/demo/showcase-poster.jpg",
+      "primary": true
+    },
+    {
       "id": "campus-youth-theme",
       "tab": "campus",
       "title": "campus_youth_final.mp4",

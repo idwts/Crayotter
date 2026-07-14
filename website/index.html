@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <meta name="site-version" content="20260322-01">
+  <meta name="site-version" content="20260714-01">
   <title>Crayotter | 多模态视频自动编辑 Agent</title>
   <meta name="description" content="Crayotter 是一个面向 general agent framework 的多模态视频自动编辑系统，支持三阶段工作流：素材准备、深度研究、自动生成。">
   <link rel="stylesheet" href="./styles.css">
@@ -99,29 +99,36 @@
       <div class="container">
         <div class="section-head">
           <h2>See Crayotter in Action</h2>
-          <p>探索不同领域的剪辑成果。</p>
+          <p>先观看完整操作演示，也可以切换到三个代表性成片案例。</p>
         </div>
 
-        <div class="tabs" role="tablist" aria-label="案例分类">
-          <button class="tab-button active" type="button" role="tab" data-tab-target="campus">青春校园</button>
-          <button class="tab-button" type="button" role="tab" data-tab-target="pipeline">自然风光</button>
-          <button class="tab-button" type="button" role="tab" data-tab-target="ops">治愈旅行</button>
+        <div class="tabs" role="tablist" aria-label="演示视频选择">
+          <button class="tab-button tab-button-primary active" id="demo-tab-showcase" type="button" role="tab" aria-selected="true" aria-controls="demo-panel-showcase" data-tab-target="showcase">操作演示</button>
+          <button class="tab-button" id="demo-tab-campus" type="button" role="tab" aria-selected="false" aria-controls="demo-panel-campus" tabindex="-1" data-tab-target="campus">青春校园</button>
+          <button class="tab-button" id="demo-tab-pipeline" type="button" role="tab" aria-selected="false" aria-controls="demo-panel-pipeline" tabindex="-1" data-tab-target="pipeline">自然风光</button>
+          <button class="tab-button" id="demo-tab-ops" type="button" role="tab" aria-selected="false" aria-controls="demo-panel-ops" tabindex="-1" data-tab-target="ops">治愈旅行</button>
         </div>
 
-        <div class="tab-panel active" data-tab-panel="campus">
-          <div class="demo-stack" data-demo-stack="true" data-demo-tab="campus" data-config="./assets/demo-showcase.json" data-config-version="20260322-01">
+        <div class="tab-panel active" id="demo-panel-showcase" role="tabpanel" aria-labelledby="demo-tab-showcase" data-tab-panel="showcase">
+          <div class="demo-stack" data-demo-stack="true" data-demo-tab="showcase" data-config="./assets/demo-showcase.json" data-config-version="20260714-01">
+            <div class="demo-loading">正在读取操作演示...</div>
+          </div>
+        </div>
+
+        <div class="tab-panel" id="demo-panel-campus" role="tabpanel" aria-labelledby="demo-tab-campus" data-tab-panel="campus">
+          <div class="demo-stack" data-demo-stack="true" data-demo-tab="campus" data-config="./assets/demo-showcase.json" data-config-version="20260714-01">
             <div class="demo-loading">正在读取「青春校园」配置...</div>
           </div>
         </div>
 
-        <div class="tab-panel" data-tab-panel="pipeline">
-          <div class="demo-stack" data-demo-stack="true" data-demo-tab="pipeline" data-config="./assets/demo-showcase.json" data-config-version="20260322-01">
+        <div class="tab-panel" id="demo-panel-pipeline" role="tabpanel" aria-labelledby="demo-tab-pipeline" data-tab-panel="pipeline">
+          <div class="demo-stack" data-demo-stack="true" data-demo-tab="pipeline" data-config="./assets/demo-showcase.json" data-config-version="20260714-01">
             <div class="demo-loading">正在读取「自然风光」配置...</div>
           </div>
         </div>
 
-        <div class="tab-panel" data-tab-panel="ops">
-          <div class="demo-stack" data-demo-stack="true" data-demo-tab="ops" data-config="./assets/demo-showcase.json" data-config-version="20260322-01">
+        <div class="tab-panel" id="demo-panel-ops" role="tabpanel" aria-labelledby="demo-tab-ops" data-tab-panel="ops">
+          <div class="demo-stack" data-demo-stack="true" data-demo-tab="ops" data-config="./assets/demo-showcase.json" data-config-version="20260714-01">
             <div class="demo-loading">正在读取「治愈旅行」配置...</div>
           </div>
         </div>
@@ -217,7 +224,7 @@
     </div>
   </footer>
 
-  <script src="./script.js?v=20260322-01"></script>
+  <script src="./script.js?v=20260714-01"></script>
   <script async defer src="https://buttons.github.io/buttons.js"></script>
 </body>
 </html>
