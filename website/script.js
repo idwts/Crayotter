@@ -93,17 +93,43 @@
   };
 
   const renderDemoCard = (item, calls) => {
+    const posterAttribute = item.posterSrc
+      ? ` poster="${escapeHtml(item.posterSrc)}"`
+      : "";
+    const isPrimary = item.primary === true;
+    const videoMarkup = `
+      <div class="demo-video-frame${isPrimary ? " demo-video-frame-primary" : ""}">
+        <video controls preload="metadata" playsinline${posterAttribute}>
+          <source src="${escapeHtml(item.videoSrc)}" type="video/mp4">
+          当前浏览器不支持视频播放。
+        </video>
+      </div>
+    `;
+
+    if (isPrimary) {
+      return `
+        <article class="demo-work-card demo-work-card-primary">
+          <div class="demo-media demo-media-primary">
+            <span class="demo-kicker">END-TO-END WALKTHROUGH</span>
+            <h3>${escapeHtml(item.title)}</h3>
+            <p>${escapeHtml(item.description || "")}</p>
+            ${videoMarkup}
+            <div class="demo-actions demo-actions-primary">
+              <a class="btn btn-ghost btn-sm" href="${escapeHtml(
+                item.videoSrc
+              )}" target="_blank" rel="noopener noreferrer">在新窗口打开视频</a>
+            </div>
+          </div>
+        </article>
+      `;
+    }
+
     return `
       <article class="demo-work-card">
         <div class="demo-media">
           <h3>${escapeHtml(item.title)}</h3>
           <p>${escapeHtml(item.description || "")}</p>
-          <div class="demo-video-frame">
-            <video controls preload="metadata">
-              <source src="${escapeHtml(item.videoSrc)}" type="video/mp4">
-              当前浏览器不支持视频播放。
-            </video>
-          </div>
+          ${videoMarkup}
         </div>
         <div class="demo-log-path">
           <h4>完整工具调用路径（按日志顺序）</h4>
@@ -286,10 +312,38 @@
   tabButtons.forEach((button) => {
     button.addEventListener("click", () => {
       const target = button.getAttribute("data-tab-target");
-      tabButtons.forEach((b) => b.classList.toggle("active", b === button));
-      tabPanels.forEach((panel) => {
-        panel.classList.toggle("active", panel.getAttribute("data-tab-panel") === target);
+      tabButtons.forEach((b) => {
+        const isActive = b === button;
+        b.classList.toggle("active", isActive);
+        b.setAttribute("aria-selected", String(isActive));
+        b.tabIndex = isActive ? 0 : -1;
       });
+      tabPanels.forEach((panel) => {
+        const isActive = panel.getAttribute("data-tab-panel") === target;
+        panel.classList.toggle("active", isActive);
+        if (!isActive) {
+          panel.querySelectorAll("video").forEach((video) => video.pause());
+        }
+      });
+    });
+
+    button.addEventListener("keydown", (event) => {
+      const currentIndex = tabButtons.indexOf(button);
+      let nextIndex = currentIndex;
+      if (event.key === "ArrowRight" || event.key === "ArrowDown") {
+        nextIndex = (currentIndex + 1) % tabButtons.length;
+      } else if (event.key === "ArrowLeft" || event.key === "ArrowUp") {
+        nextIndex = (currentIndex - 1 + tabButtons.length) % tabButtons.length;
+      } else if (event.key === "Home") {
+        nextIndex = 0;
+      } else if (event.key === "End") {
+        nextIndex = tabButtons.length - 1;
+      } else {
+        return;
+      }
+      event.preventDefault();
+      tabButtons[nextIndex].focus();
+      tabButtons[nextIndex].click();
     });
   });
 

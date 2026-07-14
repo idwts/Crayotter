@@ -437,9 +437,9 @@ a {
 
 .tabs {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: 8px;
-  max-width: 520px;
+  max-width: 720px;
   margin: 0 auto 20px;
   padding: 6px;
   border-radius: 999px;
@@ -461,6 +461,17 @@ a {
 .tab-button.active {
   color: var(--text);
   background: rgba(231, 238, 255, 0.12);
+}
+
+.tab-button-primary {
+  color: color-mix(in srgb, var(--primary) 82%, var(--text) 18%);
+  font-weight: 700;
+}
+
+.tab-button-primary.active {
+  color: #fff;
+  background: linear-gradient(135deg, var(--primary-strong), #6f59dd);
+  box-shadow: 0 8px 22px color-mix(in srgb, var(--primary) 30%, transparent);
 }
 
 .tab-panel {
@@ -757,10 +768,29 @@ a {
   align-items: stretch;
 }
 
+.demo-work-card-primary {
+  display: block;
+  border-color: color-mix(in srgb, var(--primary) 46%, var(--line));
+}
+
 .demo-media {
   padding: 18px;
   border-right: 1px solid var(--line);
   min-width: 0;
+}
+
+.demo-media-primary {
+  border-right: 0;
+  padding: 24px;
+}
+
+.demo-kicker {
+  display: inline-block;
+  margin-bottom: 8px;
+  color: var(--primary);
+  font-size: 0.75rem;
+  font-weight: 700;
+  letter-spacing: 0.12em;
 }
 
 .demo-media h3 {
@@ -793,6 +823,15 @@ a {
   max-height: 100%;
   object-fit: contain;
   display: block;
+}
+
+.demo-video-frame-primary {
+  max-height: none;
+  aspect-ratio: 16 / 9;
+}
+
+.demo-video-frame-primary video {
+  max-height: none;
 }
 
 .demo-log-path {
@@ -879,6 +918,10 @@ a {
   display: flex;
   gap: 10px;
   flex-wrap: wrap;
+}
+
+.demo-actions-primary {
+  justify-content: flex-end;
 }
 
 .btn-sm {
