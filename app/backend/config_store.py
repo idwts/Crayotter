@@ -49,6 +49,14 @@ APP_ENV_VARS = {
     "audio_loudnorm_target": "CRAYOTTER_AUDIO_LOUDNORM_TARGET",
     "post_task_review_mode": "CRAYOTTER_POST_TASK_REVIEW_MODE",
     "agent_stall_timeout_seconds": "CRAYOTTER_AGENT_STALL_TIMEOUT_SECONDS",
+    "youtube_mode": "CRAYOTTER_YOUTUBE_MODE",
+    "default_deadline_seconds": "CRAYOTTER_DEFAULT_DEADLINE_SECONDS",
+    "processing_mode": "CRAYOTTER_PROCESSING_MODE",
+    "phase1_max_seconds": "CRAYOTTER_PHASE1_MAX_SECONDS",
+    "output_profile": "CRAYOTTER_OUTPUT_PROFILE",
+    "browser_auth_browser": "CRAYOTTER_BROWSER_AUTH_BROWSER",
+    "browser_auth_profile": "CRAYOTTER_BROWSER_AUTH_PROFILE",
+    "enabled_material_platforms": "CRAYOTTER_ENABLED_MATERIAL_PLATFORMS",
 }
 
 BOOL_FIELDS = {
@@ -61,11 +69,18 @@ BOOL_FIELDS = {
 
 STRING_FIELDS = {
     "post_task_review_mode",
+    "youtube_mode",
+    "processing_mode",
+    "output_profile",
+    "browser_auth_browser",
+    "browser_auth_profile",
 }
 
 FLOAT_FIELDS = {
     "audio_loudnorm_target",
 }
+
+LIST_FIELDS = {"enabled_material_platforms"}
 
 REMOVED_RESOURCE_ENV_VARS = (
     "CRAYOTTER_PREP_MAX_CONCURRENCY",
@@ -158,6 +173,8 @@ class ConfigStore:
             **{
                 env_name: ("true" if getattr(config, field_name) else "false")
                 if field_name in BOOL_FIELDS
+                else ",".join(getattr(config, field_name))
+                if field_name in LIST_FIELDS
                 else str(getattr(config, field_name))
                 for field_name, env_name in APP_ENV_VARS.items()
             },
@@ -205,6 +222,12 @@ class ConfigStore:
                 payload[field_name] = str(raw[env_name] or default_value).strip() or default_value
             elif field_name in FLOAT_FIELDS:
                 payload[field_name] = _coerce_env_float(raw[env_name], default_value)
+            elif field_name in LIST_FIELDS:
+                payload[field_name] = [
+                    item.strip().lower()
+                    for item in str(raw[env_name] or "").split(",")
+                    if item.strip()
+                ] or list(default_value)
             else:
                 payload[field_name] = _coerce_env_int(raw[env_name], default_value)
 

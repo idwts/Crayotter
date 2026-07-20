@@ -114,7 +114,7 @@ class ResourceScheduler:
                     raise SchedulerError(f"Execution plan cancelled: {plan.plan_id}")
 
                 made_progress = False
-                for task in plan.tasks:
+                for task in sorted(plan.tasks, key=lambda item: item.priority, reverse=True):
                     state = states[task.id]
                     if task.id in completed or task.id in failed or state.status == "running":
                         continue
@@ -127,6 +127,37 @@ class ResourceScheduler:
                         continue
                     if not all(dep in completed for dep in task.depends_on):
                         continue
+                    remaining = self._remaining_seconds(plan)
+                    if task.optional and remaining is not None and (
+                        remaining <= 0 or task.estimated_seconds > remaining
+                    ):
+                        state.status = "skipped"
+                        state.error = "Skipped because the execution budget is exhausted."
+                        state.completed_at = utc_now_iso()
+                        completed.add(task.id)
+                        self._checkpoint(state_path, states)
+                        self._emit(
+                            "optional_task_skipped",
+                            {
+                                "plan_id": plan.plan_id,
+                                "task_id": task.id,
+                                "estimated_seconds": task.estimated_seconds,
+                                "remaining_seconds": max(0.0, remaining),
+                            },
+                        )
+                        made_progress = True
+                        continue
+                    if not task.optional and remaining is not None and remaining <= 0:
+                        self._emit(
+                            "budget_threshold_reached",
+                            {
+                                "plan_id": plan.plan_id,
+                                "task_id": task.id,
+                                "required": True,
+                                "remaining_seconds": 0.0,
+                                "action": "continue_required_task_and_record_sla_miss",
+                            },
+                        )
                     if task.id not in ready_emitted:
                         ready_emitted.add(task.id)
                         self._emit(
@@ -173,6 +204,7 @@ class ResourceScheduler:
                         dep: states[dep].model_copy(deep=True) for dep in task.depends_on
                     }
                     future = pool.submit(executor, task, dependency_states)
+                    setattr(future, "_crayotter_started_monotonic", time.monotonic())
                     running[future] = task
                     made_progress = True
 
@@ -196,6 +228,11 @@ class ResourceScheduler:
                     task = running.pop(future)
                     state = states[task.id]
                     self._release(task)
+                    started_monotonic = getattr(future, "_crayotter_started_monotonic", None)
+                    if started_monotonic is not None:
+                        state.elapsed_seconds = max(
+                            0.0, time.monotonic() - float(started_monotonic)
+                        )
                     try:
                         raw_result = future.result()
                         result = (
@@ -203,6 +240,11 @@ class ResourceScheduler:
                             if isinstance(raw_result, TaskExecutionResult)
                             else TaskExecutionResult.model_validate(raw_result)
                         )
+                        if task.timeout_seconds and state.elapsed_seconds > task.timeout_seconds:
+                            raise TimeoutError(
+                                f"Task timeout after {state.elapsed_seconds:.3f}s "
+                                f"(limit {task.timeout_seconds:.3f}s)"
+                            )
                         state.status = "completed"
                         state.result = result.data
                         state.completed_at = utc_now_iso()
@@ -239,6 +281,8 @@ class ResourceScheduler:
                                 "task_id": task.id,
                                 "attempts": state.attempts,
                                 "artifact_ids": state.artifact_ids,
+                                "elapsed_seconds": round(state.elapsed_seconds, 3),
+                                "estimated_seconds": task.estimated_seconds,
                             },
                         )
                     except Exception as exc:
@@ -363,6 +407,12 @@ class ResourceScheduler:
                 name: {"capacity": self.pools[name], "in_use": self._resource_in_use[name]}
                 for name in self.RESOURCE_ORDER
             }
+
+    @staticmethod
+    def _remaining_seconds(plan: ExecutionPlan) -> float | None:
+        if plan.deadline_at_epoch is None:
+            return None
+        return float(plan.deadline_at_epoch) - time.time()
 
     def _try_acquire(self, task: TaskSpec) -> bool:
         with self._state_lock:

@@ -291,6 +291,17 @@ class RuntimeManager:
                 prefer_local_materials=prefer_local_materials,
                 profile=request.profile or config.active_profile,
                 job_dir=str(job_dir),
+                target_duration_seconds=request.target_duration_seconds,
+                deadline_seconds=request.deadline_seconds or config.default_deadline_seconds,
+                processing_mode=request.processing_mode or config.processing_mode,
+                output_profile=request.output_profile or config.output_profile,
+                enabled_material_platforms=(
+                    request.enabled_material_platforms
+                    if request.enabled_material_platforms is not None
+                    else config.enabled_material_platforms
+                ),
+                browser_auth_browser=request.browser_auth_browser or config.browser_auth_browser,
+                browser_auth_profile=request.browser_auth_profile or config.browser_auth_profile,
             )
             job = ManagedJob(
                 record=record,
@@ -355,6 +366,8 @@ class RuntimeManager:
                 raise RuntimeError("Only interrupted jobs can be resumed.")
 
             config = self.config_store.load()
+            job.record.browser_auth_browser = config.browser_auth_browser or job.record.browser_auth_browser
+            job.record.browser_auth_profile = config.browser_auth_profile
             request = JobRequest(
                 task=job.record.task,
                 mode=job.record.mode,
@@ -363,6 +376,13 @@ class RuntimeManager:
                 enable_plan_review=job.record.enable_plan_review,
                 direct_phase3_execution=job.record.direct_phase3_execution,
                 prefer_local_materials=job.record.prefer_local_materials,
+                target_duration_seconds=job.record.target_duration_seconds,
+                deadline_seconds=job.record.deadline_seconds,
+                processing_mode=job.record.processing_mode,
+                output_profile=job.record.output_profile,
+                enabled_material_platforms=job.record.enabled_material_platforms,
+                browser_auth_browser=job.record.browser_auth_browser,
+                browser_auth_profile=config.browser_auth_profile,
             )
             job.record.status = "queued"
             job.record.error = None
@@ -461,6 +481,13 @@ class RuntimeManager:
                 enable_plan_review=job.record.enable_plan_review,
                 direct_phase3_execution=job.record.direct_phase3_execution,
                 prefer_local_materials=job.record.prefer_local_materials,
+                target_duration_seconds=job.record.target_duration_seconds,
+                deadline_seconds=job.record.deadline_seconds,
+                processing_mode=job.record.processing_mode,
+                output_profile=job.record.output_profile,
+                enabled_material_platforms=job.record.enabled_material_platforms,
+                browser_auth_browser=job.record.browser_auth_browser,
+                browser_auth_profile=job.record.browser_auth_profile,
             )
             self._publish(
                 job,
@@ -649,6 +676,15 @@ class RuntimeManager:
         runtime_config["audio_loudnorm_target"] = config.audio_loudnorm_target
         runtime_config["post_task_review_mode"] = config.post_task_review_mode
         runtime_config["agent_stall_timeout_seconds"] = job.stall_timeout_seconds
+        runtime_config["youtube_mode"] = config.youtube_mode
+        runtime_config["default_deadline_seconds"] = job.record.deadline_seconds
+        runtime_config["processing_mode"] = job.record.processing_mode
+        runtime_config["phase1_max_seconds"] = config.phase1_max_seconds
+        runtime_config["output_profile"] = job.record.output_profile
+        runtime_config["enabled_material_platforms"] = job.record.enabled_material_platforms
+        runtime_config["browser_auth_browser"] = job.record.browser_auth_browser
+        runtime_config["browser_auth_profile"] = job.record.browser_auth_profile
+        runtime_config["target_duration_seconds"] = job.record.target_duration_seconds
         runtime_config["resume_execution"] = resume
         runtime_config["revision"] = job.record.revision
         config_path.write_text(
@@ -897,6 +933,8 @@ class RuntimeManager:
                 job.record.steering_status = "replanning"
             elif event_type == "steering_waiting_user":
                 job.record.steering_status = "waiting_user"
+            elif event_type == "material_source_authorization_required":
+                job.record.steering_status = "waiting_user"
             elif event_type in {
                 "guidance_applied",
                 "guidance_unsupported",
@@ -904,6 +942,24 @@ class RuntimeManager:
                 "steering_replan_completed",
             }:
                 job.record.steering_status = "idle"
+            if "processing_elapsed_seconds" in payload:
+                job.record.processing_elapsed_seconds = float(
+                    payload.get("processing_elapsed_seconds") or 0.0
+                )
+            if "authorization_wait_seconds" in payload:
+                job.record.authorization_wait_seconds = float(
+                    payload.get("authorization_wait_seconds") or 0.0
+                )
+            if "total_wall_seconds" in payload:
+                job.record.total_wall_seconds = float(payload.get("total_wall_seconds") or 0.0)
+            if "degradation_level" in payload:
+                job.record.degradation_level = max(
+                    0, min(4, int(payload.get("degradation_level") or 0))
+                )
+            if event_type == "sla_completed":
+                job.record.sla_status = "completed"
+            elif event_type == "sla_missed":
+                job.record.sla_status = "missed"
             if payload.get("checkpoint"):
                 job.record.current_checkpoint = str(payload["checkpoint"])
             job.record.events_count = stored["sequence"]

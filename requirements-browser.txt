@@ -1,0 +1,5 @@
+-r requirements.txt
+
+# Optional browser-rendered extraction and user-authorized sessions for
+# Douyin/Xiaohongshu. The adapters degrade to structured errors when absent.
+playwright>=1.50,<2

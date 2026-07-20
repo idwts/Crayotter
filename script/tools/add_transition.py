@@ -409,14 +409,26 @@ def add_transition(
         if target_fps <= 1.0:
             target_fps = 30.0
 
+        source_metas = [_get_video_meta(path) for path in unique_paths]
+        already_canonical = all(
+            int(meta.get("width", 0) or 0) == target_w
+            and int(meta.get("height", 0) or 0) == target_h
+            and abs(float(meta.get("fps", 0.0) or 0.0) - target_fps) <= 0.05
+            and _has_audio_stream(Path(path))
+            for path, meta in zip(unique_paths, source_metas)
+        )
         normalized_paths: list[Path] = []
-        for i, p in enumerate(unique_paths):
-            src = Path(p)
-            normalized = tmp_dir / f"norm_{i:02d}.mp4"
-            ok, err = _normalize_clip_for_transition(src, normalized, target_w, target_h, target_fps)
-            if not ok:
-                return f"转场出错: 片段预处理失败({src.name}): {err}"
-            normalized_paths.append(normalized)
+        if already_canonical:
+            normalized_paths = [Path(path) for path in unique_paths]
+            logger.info("转场输入已满足统一规格，跳过片段预处理转码")
+        else:
+            for i, p in enumerate(unique_paths):
+                src = Path(p)
+                normalized = tmp_dir / f"norm_{i:02d}.mp4"
+                ok, err = _normalize_clip_for_transition(src, normalized, target_w, target_h, target_fps)
+                if not ok:
+                    return f"转场出错: 片段预处理失败({src.name}): {err}"
+                normalized_paths.append(normalized)
 
         durations = [float(_get_video_meta(str(p)).get("duration_seconds", 0.0)) for p in normalized_paths]
         if any(d <= 0.2 for d in durations):

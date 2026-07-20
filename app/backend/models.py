@@ -65,6 +65,16 @@ class AppConfig(BaseModel):
     audio_loudnorm_target: float = Field(default=0.0, ge=-70.0, le=0.0)
     post_task_review_mode: Literal["async", "sync", "off"] = "async"
     agent_stall_timeout_seconds: int = Field(default=150, ge=10)
+    youtube_mode: Literal["auto", "on", "off"] = "auto"
+    default_deadline_seconds: int = Field(default=600, ge=60, le=7200)
+    processing_mode: Literal["auto", "speed", "quality"] = "auto"
+    phase1_max_seconds: int = Field(default=180, ge=30, le=3600)
+    output_profile: str = "auto"
+    enabled_material_platforms: list[str] = Field(
+        default_factory=lambda: ["bilibili", "douyin", "xiaohongshu", "youtube"]
+    )
+    browser_auth_browser: str = ""
+    browser_auth_profile: str = ""
 
     def get_profile(self, profile_name: str | None = None) -> ServiceProfile:
         name = profile_name or self.active_profile
@@ -82,6 +92,13 @@ class JobRequest(BaseModel):
     enable_plan_review: bool | None = None
     direct_phase3_execution: bool | None = None
     prefer_local_materials: bool | None = None
+    target_duration_seconds: float | None = Field(default=None, gt=0)
+    deadline_seconds: int | None = Field(default=None, ge=60, le=7200)
+    processing_mode: Literal["auto", "speed", "quality"] | None = None
+    output_profile: str | None = None
+    enabled_material_platforms: list[str] | None = None
+    browser_auth_browser: str | None = None
+    browser_auth_profile: str | None = None
 
 
 class RuntimeEvent(BaseModel):
@@ -114,6 +131,18 @@ class JobRecord(BaseModel):
     output_files: list[str] = Field(default_factory=list)
     job_dir: str = ""
     events_count: int = 0
+    target_duration_seconds: float | None = None
+    deadline_seconds: int = Field(default=600, ge=60)
+    processing_mode: Literal["auto", "speed", "quality"] = "auto"
+    output_profile: str = "auto"
+    enabled_material_platforms: list[str] = Field(default_factory=list)
+    browser_auth_browser: str = ""
+    browser_auth_profile: str = Field(default="", exclude=True, repr=False)
+    processing_elapsed_seconds: float = 0.0
+    authorization_wait_seconds: float = 0.0
+    total_wall_seconds: float = 0.0
+    degradation_level: int = Field(default=0, ge=0, le=4)
+    sla_status: Literal["pending", "completed", "missed"] = "pending"
 
     @property
     def is_terminal(self) -> bool:

@@ -80,6 +80,18 @@ from orchestration import (
     RetryPolicy,
     TaskExecutionResult,
     TaskSpec,
+    ProcessingBudget,
+    create_processing_budget,
+    material_budget_for_duration,
+)
+from media_consistency import (
+    CanonicalRenderRequest,
+    build_quality_analysis_commands,
+    parse_quality_analysis_outputs,
+    probe_media,
+    render_canonical_media,
+    resolve_media_profile,
+    validate_final_media,
 )
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -111,6 +123,19 @@ SHORT_FORM_MAX_SOURCES: int = max(
     1,
     min(4, int(os.environ.get("CRAYOTTER_SHORT_FORM_MAX_SOURCES", "2") or 2)),
 )
+DEFAULT_DEADLINE_SECONDS: float = max(
+    60.0,
+    float(os.environ.get("CRAYOTTER_DEFAULT_DEADLINE_SECONDS", "600") or 600),
+)
+PHASE1_MAX_SECONDS: float = max(
+    30.0,
+    float(os.environ.get("CRAYOTTER_PHASE1_MAX_SECONDS", "180") or 180),
+)
+PROCESSING_MODE: Literal["auto", "speed", "quality"] = (
+    str(os.environ.get("CRAYOTTER_PROCESSING_MODE", "auto") or "auto").strip().lower()
+)
+if PROCESSING_MODE not in {"auto", "speed", "quality"}:
+    PROCESSING_MODE = "auto"
 
 graph_logger = logging.getLogger("graph")
 RUNTIME_EVENT_SINK: Any = None
@@ -118,11 +143,32 @@ _STEERING_COORDINATOR: SteeringCoordinator | None = None
 
 
 class _RealtimeToolTraceHandler(BaseCallbackHandler):
-    def __init__(self) -> None:
+    _ENCODING_TOOLS = {
+        "cut_video",
+        "batch_cut_video",
+        "merge_videos",
+        "add_transition",
+        "add_narration_segments",
+        "add_subtitles",
+        "export_video",
+    }
+
+    def __init__(
+        self,
+        *,
+        deadline_epoch: float | None = None,
+        max_tool_calls: int = 20,
+        max_encoding_calls: int = 6,
+    ) -> None:
         self.raise_error = True
         self._started: dict[str, tuple[str, float]] = {}
         self._model_started: dict[str, float] = {}
         self._tool_counts: dict[str, int] = {}
+        self._deadline_epoch = deadline_epoch
+        self._max_tool_calls = max(1, int(max_tool_calls))
+        self._max_encoding_calls = max(1, int(max_encoding_calls))
+        self._total_tool_calls = 0
+        self._encoding_calls = 0
         self._lock = threading.RLock()
 
     def on_tool_start(
@@ -136,6 +182,21 @@ class _RealtimeToolTraceHandler(BaseCallbackHandler):
         name = str(serialized.get("name") or kwargs.get("name") or "unknown_tool")
         key = str(run_id)
         with self._lock:
+            if self._deadline_epoch is not None and time.time() >= self._deadline_epoch:
+                raise RuntimeError("Phase 3 ReAct fallback exhausted its processing budget")
+            self._total_tool_calls += 1
+            if self._total_tool_calls > self._max_tool_calls:
+                raise RuntimeError(
+                    "Phase 3 ReAct fallback exceeded its tool-call budget "
+                    f"({self._max_tool_calls})"
+                )
+            if name in self._ENCODING_TOOLS:
+                self._encoding_calls += 1
+                if self._encoding_calls > self._max_encoding_calls:
+                    raise RuntimeError(
+                        "Phase 3 ReAct fallback exceeded its encoding budget "
+                        f"({self._max_encoding_calls})"
+                    )
             self._tool_counts[name] = self._tool_counts.get(name, 0) + 1
             if name == "merge_videos" and self._tool_counts[name] > REACT_MAX_MERGE_VIDEO_CALLS:
                 message = (
@@ -158,7 +219,6 @@ class _RealtimeToolTraceHandler(BaseCallbackHandler):
             "tool_started",
             {"phase": "phase3", "tool_name": name, "run_id": key},
         )
-
     def on_chat_model_start(
         self,
         serialized: dict[str, Any],
@@ -278,6 +338,10 @@ class _RealtimeToolTraceHandler(BaseCallbackHandler):
         )
 
 
+class FinalQualityGateError(RuntimeError):
+    """A candidate must never be accepted or converted into a success string."""
+
+
 def _log_react_tool_trace(result_state: dict[str, Any]) -> None:
     """将 ReAct 阶段的工具轨迹显式写入 graph 日志，便于 agent_*.log 复盘。"""
     try:
@@ -360,6 +424,9 @@ class AgentState(BaseModel):
 
     # 时长控制
     target_duration_seconds: float = 0.0
+    processing_budget: ProcessingBudget | None = None
+    budget_report: dict[str, Any] = Field(default_factory=dict)
+    degradation_level: int = Field(default=0, ge=0, le=4)
 
     # Phase 标记: "planning" → "researching" → "react" → "done"
     phase: str = "planning"
@@ -441,6 +508,66 @@ def _resource_pool_config() -> ResourcePoolConfig:
         ffmpeg_pool=FFMPEG_POOL_SIZE,
         tts_pool=TTS_POOL_SIZE,
         export_pool=EXPORT_POOL_SIZE,
+    )
+
+
+def _phase_deadline(state: AgentState, phase: str) -> float | None:
+    budget = state.processing_budget
+    return budget.phase_deadline_epoch(phase) if budget is not None else None
+
+
+def _budget_snapshot(state: AgentState) -> dict[str, Any]:
+    budget = state.processing_budget
+    if budget is None:
+        return {}
+    return {
+        "processing_elapsed_seconds": round(budget.processing_elapsed_seconds(), 3),
+        "authorization_wait_seconds": round(budget.authorization_wait_seconds, 3),
+        "total_wall_seconds": round(time.time() - budget.created_at_epoch, 3),
+        "remaining_seconds": round(budget.remaining_seconds(), 3),
+        "degradation_level": state.degradation_level,
+    }
+
+
+def _media_profile_for_state(state: AgentState):
+    request = state.user_request
+    if re.search(r"(?:9\s*:\s*16|竖屏|portrait|vertical)", request, re.I):
+        aspect = "9:16"
+    elif re.search(r"(?:1\s*:\s*1|方形|square)", request, re.I):
+        aspect = "1:1"
+    else:
+        aspect = "16:9"
+    explicit_resolution = "auto"
+    if re.search(r"(?:4k|3840\s*[x×]\s*2160)", request, re.I):
+        explicit_resolution = "4k"
+    elif re.search(r"(?:1080p|1920\s*[x×]\s*1080|高清|超清)", request, re.I):
+        explicit_resolution = "1080p"
+    elif re.search(r"(?:720p|1280\s*[x×]\s*720)", request, re.I):
+        explicit_resolution = "720p"
+    configured_profile = str(os.environ.get("CRAYOTTER_OUTPUT_PROFILE", "auto") or "auto")
+    if explicit_resolution == "auto" and configured_profile in {"720p", "1080p", "4k"}:
+        explicit_resolution = configured_profile
+    remaining = (
+        state.processing_budget.remaining_seconds()
+        if state.processing_budget is not None
+        else float("inf")
+    )
+    if explicit_resolution == "auto" and remaining < 120:
+        explicit_resolution = "720p"
+        _emit_orchestration_event(
+            "media_profile_degraded",
+            {
+                "reason": "remaining_budget_below_120s",
+                "resolution": "720p",
+                **_budget_snapshot(state),
+            },
+        )
+    fit_mode = "cover" if re.search(r"满屏|铺满|cover|裁满", request, re.I) else "blur_fill"
+    return resolve_media_profile(
+        max(1.0, state.target_duration_seconds or 30.0),
+        user_resolution=explicit_resolution,
+        target_aspect=aspect,
+        fit_mode=fit_mode,
     )
 
 
@@ -896,16 +1023,114 @@ def _register_revision_final(path: str | Path, producer_task_id: str) -> None:
     )
 
 
-def _register_latest_react_video() -> None:
+def _validate_fallback_final(
+    state: AgentState,
+    path: str | Path,
+    producer_task_id: str,
+) -> dict[str, Any]:
+    """Apply the same non-negotiable final gate to legacy/React outputs."""
+    candidate = Path(path).resolve(strict=False)
+    if not candidate.is_file():
+        raise FinalQualityGateError(f"最终成片不存在: {candidate}")
+    profile = _media_profile_for_state(state)
+    source_probe = probe_media(candidate)
+    canonical = WORKSPACE / f"final_fallback_canonical_r{REVISION:03d}.mp4"
+    remaining = (
+        state.processing_budget.remaining_seconds()
+        if state.processing_budget is not None
+        else 300.0
+    )
+    render_canonical_media(
+        CanonicalRenderRequest(
+            input_path=candidate,
+            output_path=canonical,
+            profile=profile,
+            probe=source_probe,
+            duration_seconds=min(source_probe.duration_seconds, profile.target_duration_seconds),
+            final_mix=True,
+            allow_hdr_tonemap=False,
+            preset="superfast" if state.degradation_level >= 3 else "veryfast",
+        ),
+        runner=run_subprocess,
+        timeout_seconds=max(15.0, min(180.0, remaining)),
+    )
+    candidate = canonical.resolve(strict=False)
+    probe = probe_media(candidate)
+    commands = build_quality_analysis_commands(candidate)
+    per_check_timeout = max(5.0, min(90.0, remaining / 4.0))
+    outputs: dict[str, tuple[int, str]] = {}
+    for name, command in {
+        "loudness": commands.loudness,
+        "black_frames": commands.black_frames,
+        "freeze_frames": commands.freeze_frames,
+        "decode": commands.decode,
+    }.items():
+        completed = run_subprocess(
+            list(command),
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=per_check_timeout,
+        )
+        outputs[name] = (
+            completed.returncode,
+            (completed.stderr or "") + "\n" + (completed.stdout or ""),
+        )
+    quality = parse_quality_analysis_outputs(
+        duration_seconds=probe.duration_seconds,
+        loudness_output=outputs["loudness"][1],
+        black_frames_output=outputs["black_frames"][1],
+        freeze_frames_output=outputs["freeze_frames"][1],
+        decode_returncode=outputs["decode"][0],
+    )
+    tolerance = max(1.0, profile.target_duration_seconds * 0.08)
+    validation = validate_final_media(
+        probe,
+        profile,
+        quality,
+        duration_tolerance_seconds=tolerance,
+    )
+    report = {
+        "path": str(candidate),
+        "probe": probe.to_dict(),
+        "quality": {
+            "integrated_lufs": quality.integrated_lufs,
+            "true_peak_dbfs": quality.true_peak_dbfs,
+            "black_frame_ratio": quality.black_frame_ratio,
+            "freeze_frame_ratio": quality.freeze_frame_ratio,
+            "decode_errors": quality.decode_errors,
+        },
+        "validation": validation.to_dict(),
+    }
+    if not validation.passed:
+        raise FinalQualityGateError(f"最终成片质量校验未通过: {validation.to_dict()}")
+    report_path = WORKSPACE / f"phase3_fallback_evaluation_r{REVISION:03d}.json"
+    report_path.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
+    _register_revision_final(candidate, producer_task_id)
+    _artifact_registry().register(
+        artifact_id=f"phase3_fallback_evaluation_r{REVISION:03d}",
+        kind="phase3_evaluation",
+        producer_task_id=producer_task_id,
+        phase="phase3",
+        path=report_path,
+        metadata={"revision": REVISION, "decision": "finish"},
+    )
+    _emit_orchestration_event("evaluator_decision", {"phase": "phase3", "decision": "finish", **report})
+    return report
+
+
+def _register_latest_react_video(state: AgentState) -> dict[str, Any]:
     candidates = [path for path in WORKSPACE.glob("*.mp4") if path.is_file()]
     if not candidates:
-        return
+        raise FinalQualityGateError("ReAct 未生成可验证的视频文件")
     preferred = [
         path
         for path in candidates
         if "final" in path.stem.lower() or "output" in path.stem.lower()
     ]
-    _register_revision_final(
+    return _validate_fallback_final(
+        state,
         max(preferred or candidates, key=lambda path: path.stat().st_mtime),
         "phase3_react_fallback",
     )
@@ -1086,69 +1311,33 @@ def _extract_target_duration_seconds(user_request: str) -> float:
 
 
 def _recommend_material_counts(target_duration_seconds: float) -> dict[str, int]:
-    """根据目标时长推荐素材搜索数量与下载数量区间。"""
-    if SHORT_FORM_OPTIMIZATIONS and 0 < target_duration_seconds <= 20:
-        return {
-            "search_per_source": 8,
-            "search_pages": 1,
-            "max_candidates": 24,
-            "mllm_review": 24,
-            "top_k_min": 1,
-            "top_k_max": SHORT_FORM_MAX_SOURCES,
-        }
-    if SHORT_FORM_OPTIMIZATIONS and 0 < target_duration_seconds <= 45:
-        return {
-            "search_per_source": 8,
-            "search_pages": 1,
-            "max_candidates": 32,
-            "mllm_review": 32,
-            "top_k_min": 3,
-            "top_k_max": 4,
-        }
-    if target_duration_seconds <= 0:
-        return {
-            "search_per_source": 30,
-            "search_pages": 2,
-            "max_candidates": 100,
-            "mllm_review": 100,
-            "top_k_min": 6,
-            "top_k_max": 12,
-        }
-    if target_duration_seconds <= 90:
-        return {
-            "search_per_source": 28,
-            "search_pages": 2,
-            "max_candidates": 100,
-            "mllm_review": 100,
-            "top_k_min": 6,
-            "top_k_max": 10,
-        }
-    if target_duration_seconds <= 180:
-        return {
-            "search_per_source": 40,
-            "search_pages": 3,
-            "max_candidates": 180,
-            "mllm_review": 180,
-            "top_k_min": 10,
-            "top_k_max": 16,
-        }
-    if target_duration_seconds <= 360:
-        return {
-            "search_per_source": 50,
-            "search_pages": 3,
-            "max_candidates": 240,
-            "mllm_review": 240,
-            "top_k_min": 14,
-            "top_k_max": 22,
-        }
+    """Derive a bounded, monotonic material budget from output duration."""
+    material = material_budget_for_duration(target_duration_seconds or 30.0)
+    per_search = max(6, min(8, math.ceil(material.candidate_cap / material.search_task_cap)))
     return {
-        "search_per_source": 60,
-        "search_pages": 4,
-        "max_candidates": 320,
-        "mllm_review": 320,
-        "top_k_min": 18,
-        "top_k_max": 28,
+        "search_per_source": per_search,
+        "search_pages": 1 if target_duration_seconds <= 90 else 2,
+        "max_candidates": material.candidate_cap,
+        "mllm_review": material.candidate_cap,
+        "top_k_min": material.source_min,
+        "top_k_max": material.source_target,
+        "search_task_cap": material.search_task_cap,
+        "coverage_ratio_percent": int(round(material.coverage_ratio * 100)),
     }
+
+
+def _enabled_material_platforms() -> list[str]:
+    platforms = [
+        item.strip().lower()
+        for item in str(
+            os.environ.get(
+                "CRAYOTTER_ENABLED_MATERIAL_PLATFORMS",
+                "bilibili,douyin,xiaohongshu,youtube",
+            )
+        ).split(",")
+        if item.strip()
+    ]
+    return list(dict.fromkeys(platforms)) or ["bilibili"]
 
 
 def _step_result_text(result: StepResult | dict[str, Any] | str) -> str:
@@ -1185,7 +1374,7 @@ def _fallback_prep_plan(
                 tool_hint="search_material_sources",
                 arguments={
                     "query": user_request,
-                    "platforms": ["bilibili"],
+                    "platforms": _enabled_material_platforms(),
                     "max_results": counts["search_per_source"],
                     "pages": counts["search_pages"],
                     "expand_variants": 2 if counts["search_pages"] == 1 else 3,
@@ -1233,7 +1422,7 @@ def _lightweight_material_collection(counts: dict[str, int]) -> bool:
 def _lightweight_search_step_limit(counts: dict[str, int]) -> int:
     if not _lightweight_material_collection(counts):
         return 0
-    return 2 if counts.get("max_candidates", 0) <= 24 else 3
+    return int(counts.get("search_task_cap") or (2 if counts.get("max_candidates", 0) <= 24 else 3))
 
 
 def _plan_has_cycle(steps: list[Step]) -> bool:
@@ -1535,7 +1724,7 @@ def _build_local_first_plan(user_request: str) -> Plan:
                 description="如本地素材不足，再搜索补充素材",
                 tool_hint="search_material_sources",
                 depends_on=[1],
-                arguments={"query": user_request, "platforms": ["bilibili"]},
+                arguments={"query": user_request, "platforms": _enabled_material_platforms()},
             ),
             Step(
                 id=3,
@@ -1995,8 +2184,30 @@ PLANNER_PROMPT = """\
 def planner_node(state: AgentState) -> dict[str, Any]:
     """Phase 1 Planner: 分析需求，生成素材准备步骤。"""
     graph_logger.info("🎯 Phase 1 — Planner 开始规划素材准备")
-    target_duration = _extract_target_duration_seconds(state.user_request)
+    target_duration = state.target_duration_seconds or _extract_target_duration_seconds(state.user_request)
+    processing_budget = state.processing_budget
+    if processing_budget is None or abs(
+        processing_budget.target_duration_seconds - target_duration
+    ) > 0.01:
+        processing_budget = create_processing_budget(
+            target_duration,
+            deadline_seconds=(
+                processing_budget.deadline_seconds
+                if processing_budget is not None
+                else DEFAULT_DEADLINE_SECONDS
+            ),
+            mode=(processing_budget.mode if processing_budget is not None else PROCESSING_MODE),
+            phase1_seconds=PHASE1_MAX_SECONDS,
+            created_at_epoch=(
+                processing_budget.created_at_epoch if processing_budget is not None else None
+            ),
+        )
     counts = _recommend_material_counts(target_duration)
+    if state.processing_budget is None:
+        _emit_orchestration_event(
+            "processing_budget_created",
+            processing_budget.model_dump(),
+        )
     if DIRECT_PHASE3_EXECUTION:
         plan = _build_direct_phase3_plan(state.user_request)
         graph_logger.info("⏩ 直达 Phase 3 已启用，跳过联网素材搜集")
@@ -2086,6 +2297,8 @@ def planner_node(state: AgentState) -> dict[str, Any]:
         "current_step_index": 0,
         "prep_round": 0,
         "target_duration_seconds": target_duration,
+        "processing_budget": processing_budget,
+        "degradation_level": processing_budget.degradation_level,
         "phase": "planning",
     }
 
@@ -2228,7 +2441,7 @@ def executor_node(state: AgentState | dict[str, Any]) -> dict[str, Any]:
                 raise RuntimeError(f"{tool_name} 工具未注册")
             arguments.setdefault("query", state.user_request)
             if tool_name == "search_material_sources":
-                arguments.setdefault("platforms", ["bilibili"])
+                arguments.setdefault("platforms", _enabled_material_platforms())
                 arguments.setdefault("max_results", counts["search_per_source"])
                 arguments.setdefault("pages", counts["search_pages"])
                 arguments.setdefault("max_total_results", counts["max_candidates"])
@@ -2457,7 +2670,7 @@ def _run_phase1_search_and_rank(
     for step in search_steps:
         arguments = dict(step.arguments or {})
         arguments.setdefault("query", state.user_request)
-        arguments.setdefault("platforms", ["bilibili"])
+        arguments.setdefault("platforms", _enabled_material_platforms())
         arguments.setdefault("max_results", counts["search_per_source"])
         arguments.setdefault("pages", counts["search_pages"])
         arguments.setdefault("max_total_results", counts["max_candidates"])
@@ -2559,6 +2772,7 @@ def _run_phase1_search_and_rank(
         phase="phase1",
         goal=state.user_request,
         tasks=tasks,
+        deadline_at_epoch=_phase_deadline(state, "phase1"),
     )
 
     def execute(task: TaskSpec, dependencies: dict[str, Any]) -> TaskExecutionResult:
@@ -2568,12 +2782,35 @@ def _run_phase1_search_and_rank(
         if task.tool_name in {"search_material_sources", "import_material_urls"}:
             raw = tool_obj.invoke(task.arguments)
             parsed = _parse_candidate_result(raw)
-            if not isinstance(parsed, list) or not parsed:
-                raise RuntimeError(f"搜索没有返回候选: {str(raw)[:300]}")
+            source_statuses: list[dict[str, Any]] = []
+            try:
+                payload = json.loads(str(raw))
+                if isinstance(payload, dict):
+                    source_statuses = [
+                        item for item in payload.get("sources", []) if isinstance(item, dict)
+                    ]
+            except (TypeError, ValueError):
+                payload = None
+            for source_status in source_statuses:
+                _emit_orchestration_event("source_adapter_status", source_status)
+                if source_status.get("status") == "authorization_required":
+                    _emit_orchestration_event(
+                        "material_source_authorization_required",
+                        {
+                            "platform": source_status.get("platform"),
+                            "errors": source_status.get("errors", []),
+                            "checkpoint": task.id,
+                        },
+                    )
+            if not isinstance(parsed, list):
+                parsed = []
+            if not parsed and task.tool_name == "import_material_urls":
+                raise RuntimeError(f"素材链接导入没有返回候选: {str(raw)[:300]}")
             return TaskExecutionResult(
                 data={
                     "candidate_count": len(parsed),
                     "candidates": parsed,
+                    "source_statuses": source_statuses,
                 }
             )
 
@@ -2647,7 +2884,7 @@ def _run_phase1_downloads(
                 },
                 resources={"download_pool": 1, "ffmpeg_pool": 1},
                 conflict_keys=[f"write:{output_path.resolve(strict=False)}"],
-                output_kinds=["source_video"],
+                output_kinds=["source_video", "media_probe"],
                 retry=RetryPolicy(max_attempts=2, backoff_seconds=1.0),
             )
         )
@@ -2661,6 +2898,7 @@ def _run_phase1_downloads(
         phase="phase1",
         goal=state.user_request,
         tasks=tasks,
+        deadline_at_epoch=_phase_deadline(state, "phase1"),
     )
 
     def execute(task: TaskSpec, dependencies: dict[str, Any]) -> TaskExecutionResult:
@@ -2672,6 +2910,20 @@ def _run_phase1_downloads(
         if parsed.get("status") != "success" or not parsed.get("path"):
             raise RuntimeError(f"素材下载失败: {str(raw)[:300]}")
         path = str(parsed["path"])
+        probe = probe_media(path)
+        if min(probe.width, probe.height) < 360:
+            raise RuntimeError(
+                f"素材质量不足: short_edge={min(probe.width, probe.height)} < 360"
+            )
+        if probe.average_fps < 15:
+            raise RuntimeError(f"素材质量不足: fps={probe.average_fps:.3f} < 15")
+        if probe.is_hdr:
+            raise RuntimeError("素材为 HDR，当前 Phase 1 未确认可用 tone-map 能力")
+        probe_path = Path(path).with_name(f"{Path(path).stem}_probe.json")
+        probe_path.write_text(
+            json.dumps(probe.to_dict(), ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
         return TaskExecutionResult(
             data={"path": path},
             artifacts=[
@@ -2691,8 +2943,19 @@ def _run_phase1_downloads(
                         "loudnorm_applied": bool(parsed.get("loudnorm_applied")),
                         "loudnorm_target": parsed.get("loudnorm_target"),
                         "fallback_used": bool(parsed.get("fallback_used") or parsed.get("fallback")),
+                        "media_probe": probe.to_dict(),
                     },
-                )
+                ),
+                _task_artifact(
+                    artifact_id=f"{task.id}_probe",
+                    kind="media_probe",
+                    path=probe_path,
+                    task=task,
+                    metadata={
+                        "source_video": path,
+                        "quality_floor_met": True,
+                    },
+                ),
             ],
         )
 
@@ -2745,6 +3008,7 @@ def _run_phase1_analyses(
         phase="phase1",
         goal=state.user_request,
         tasks=tasks,
+        deadline_at_epoch=_phase_deadline(state, "phase1"),
     )
 
     def execute(task: TaskSpec, dependencies: dict[str, Any]) -> TaskExecutionResult:
@@ -2855,6 +3119,32 @@ def phase1_scheduler_node(state: AgentState) -> dict[str, Any]:
             f"phase1_search_rank_round_{state.gap_round}:idle",
         )
         if refreshed_state.target_duration_seconds != state.target_duration_seconds:
+            previous_budget = refreshed_state.processing_budget or state.processing_budget
+            refreshed_budget = create_processing_budget(
+                refreshed_state.target_duration_seconds,
+                deadline_seconds=(
+                    previous_budget.deadline_seconds
+                    if previous_budget is not None
+                    else DEFAULT_DEADLINE_SECONDS
+                ),
+                mode=(previous_budget.mode if previous_budget is not None else PROCESSING_MODE),
+                created_at_epoch=(
+                    previous_budget.created_at_epoch
+                    if previous_budget is not None
+                    else None
+                ),
+                phase1_seconds=PHASE1_MAX_SECONDS,
+            )
+            if previous_budget is not None:
+                refreshed_budget.authorization_wait_seconds = previous_budget.authorization_wait_seconds
+                refreshed_budget.degradation_level = previous_budget.degradation_level
+            refreshed_state = refreshed_state.model_copy(
+                update={"processing_budget": refreshed_budget}
+            )
+            _emit_orchestration_event(
+                "processing_budget_rebalanced",
+                refreshed_budget.model_dump(),
+            )
             counts = _recommend_material_counts(refreshed_state.target_duration_seconds)
             max_selected = max(1, min(_infer_download_top_k("", counts), len(selected)))
             if len(selected) > max_selected:
@@ -2874,43 +3164,59 @@ def phase1_scheduler_node(state: AgentState) -> dict[str, Any]:
                 )
                 selected = selected[:max_selected]
         state = refreshed_state
-        if SHORT_FORM_OPTIMIZATIONS and 0 < state.target_duration_seconds <= 20:
-            max_sources = max(1, min(SHORT_FORM_MAX_SOURCES, len(selected)))
-            analyses: list[str] = []
-            for offset, video in enumerate(selected[:max_sources], start=1):
-                downloaded.extend(
-                    _run_phase1_downloads(
-                        state,
-                        scheduler,
-                        [video],
-                        start_index=offset,
-                    )
+        material_budget = (
+            state.processing_budget.material
+            if state.processing_budget is not None
+            else material_budget_for_duration(state.target_duration_seconds)
+        )
+        bounded_selection = selected[: material_budget.source_target]
+        initial_count = min(material_budget.source_min, len(bounded_selection))
+        analyses: list[str] = []
+        if initial_count:
+            downloaded.extend(
+                _run_phase1_downloads(
+                    state,
+                    scheduler,
+                    bounded_selection[:initial_count],
+                    start_index=1,
                 )
-                analyses = _run_phase1_analyses(state, scheduler)
-                metrics = _material_gap_metrics(state)
-                if (
-                    metrics["analyzed_count"] >= 1
-                    and metrics["usable_seconds"] >= metrics["target_seconds"] * 2
-                    and metrics["topic_coverage_ratio"] >= 0.15
-                    and metrics["orientation_match_ratio"] >= 0.5
-                ):
-                    graph_logger.info(
-                        "✅ 短片素材早停: analyzed=%s usable=%.1fs target=%.1fs",
-                        metrics["analyzed_count"],
-                        metrics["usable_seconds"],
-                        metrics["target_seconds"],
-                    )
-                    _emit_orchestration_event(
-                        "short_form_material_early_stop",
-                        {
-                            "source_downloaded_count": len(downloaded),
-                            "analysis_count": len(analyses),
-                            **metrics,
-                        },
-                    )
-                    break
-        else:
-            downloaded = _run_phase1_downloads(state, scheduler, selected)
+            )
+            analyses = _run_phase1_analyses(state, scheduler)
+
+        for offset, video in enumerate(
+            bounded_selection[initial_count:],
+            start=initial_count + 1,
+        ):
+            metrics = _material_gap_metrics(state)
+            sufficient = (
+                metrics["analyzed_count"] >= metrics["required_sources"]
+                and metrics["duration_coverage_ratio"]
+                >= metrics["required_duration_coverage_ratio"]
+                and metrics["topic_coverage_ratio"] >= 0.15
+                and metrics["orientation_match_ratio"] >= 0.5
+                and metrics["quality_floor_met"]
+                and metrics["duplicate_ratio"] <= 0.75
+            )
+            if sufficient:
+                _emit_orchestration_event(
+                    "material_early_stop",
+                    {
+                        "source_downloaded_count": len(downloaded),
+                        "analysis_count": len(analyses),
+                        "stop_reason": "quality_and_coverage_satisfied",
+                        **metrics,
+                        **_budget_snapshot(state),
+                    },
+                )
+                break
+            downloaded.extend(
+                _run_phase1_downloads(
+                    state,
+                    scheduler,
+                    [video],
+                    start_index=offset,
+                )
+            )
             analyses = _run_phase1_analyses(state, scheduler)
     else:
         analyses = _run_phase1_analyses(state, scheduler)
@@ -2925,6 +3231,8 @@ def phase1_scheduler_node(state: AgentState) -> dict[str, Any]:
         "user_request": state.user_request,
         "guidance_context": state.guidance_context,
         "target_duration_seconds": state.target_duration_seconds,
+        "processing_budget": state.processing_budget,
+        "degradation_level": state.degradation_level,
         "step_results": [
             StepResult(
                 step_id=10000 + state.gap_round,
@@ -2953,6 +3261,9 @@ def _material_gap_metrics(state: AgentState) -> dict[str, Any]:
     topic_text_parts: list[str] = []
     portrait = 0
     landscape = 0
+    quality_pass_count = 0
+    scene_signatures: set[str] = set()
+    segment_count = 0
     for video in analyzed:
         try:
             import cv2
@@ -2960,11 +3271,14 @@ def _material_gap_metrics(state: AgentState) -> dict[str, Any]:
             capture = cv2.VideoCapture(str(video))
             width = int(capture.get(cv2.CAP_PROP_FRAME_WIDTH))
             height = int(capture.get(cv2.CAP_PROP_FRAME_HEIGHT))
+            fps = float(capture.get(cv2.CAP_PROP_FPS) or 0.0)
             capture.release()
             if height > width:
                 portrait += 1
             elif width > 0 and height > 0:
                 landscape += 1
+            if min(width, height) >= 360 and fps >= 15:
+                quality_pass_count += 1
         except Exception:
             pass
         matches = match_analysis_files(video, analysis_index=analysis_index)
@@ -2987,6 +3301,17 @@ def _material_gap_metrics(state: AgentState) -> dict[str, Any]:
                     )
                 except Exception:
                     continue
+                segment_count += 1
+                signature_text = str(
+                    segment.get("description")
+                    or segment.get("content")
+                    or segment.get("scene")
+                    or segment.get("label")
+                    or segment.get("semantic_text")
+                    or ""
+                ).strip().lower()
+                if signature_text:
+                    scene_signatures.add(hashlib.sha256(signature_text[:300].encode("utf-8")).hexdigest())
 
     request_tokens = set(re.findall(r"[a-zA-Z0-9]+|[\u4e00-\u9fff]", state.user_request.lower()))
     material_tokens = set(
@@ -3004,7 +3329,14 @@ def _material_gap_metrics(state: AgentState) -> dict[str, Any]:
     orientation_matches = portrait if wants_portrait else landscape
     orientation_ratio = orientation_matches / max(1, len(analyzed))
     target = max(1.0, state.target_duration_seconds or 300.0)
-    required_sources = 1 if target <= 15 else 2
+    material_budget = (
+        state.processing_budget.material
+        if state.processing_budget is not None
+        else material_budget_for_duration(target)
+    )
+    required_sources = material_budget.source_min
+    quality_floor_ratio = quality_pass_count / max(1, len(analyzed))
+    duplicate_ratio = 1.0 - (len(scene_signatures) / max(1, segment_count))
     return {
         "source_count": len(source_videos),
         "analyzed_count": len(analyzed),
@@ -3012,9 +3344,15 @@ def _material_gap_metrics(state: AgentState) -> dict[str, Any]:
         "usable_seconds": round(usable_seconds, 2),
         "target_seconds": round(target, 2),
         "duration_coverage_ratio": round(usable_seconds / target, 3),
+        "required_duration_coverage_ratio": material_budget.coverage_ratio,
         "topic_coverage_ratio": round(topic_coverage, 3),
         "orientation_match_ratio": round(orientation_ratio, 3),
         "required_sources": required_sources,
+        "source_target": material_budget.source_target,
+        "quality_floor_ratio": round(quality_floor_ratio, 3),
+        "quality_floor_met": quality_floor_ratio >= 2 / 3,
+        "unique_scene_count": len(scene_signatures),
+        "duplicate_ratio": round(max(0.0, duplicate_ratio), 3),
         "requested_orientation": "portrait" if wants_portrait else "landscape",
     }
 
@@ -3040,15 +3378,18 @@ def material_gap_evaluator_node(state: AgentState) -> dict[str, Any]:
         phase="material_gap",
         goal=state.user_request,
         tasks=[task],
+        deadline_at_epoch=_phase_deadline(state, "material_gap"),
     )
 
     def execute(task_spec: TaskSpec, dependencies: dict[str, Any]) -> TaskExecutionResult:
         deterministic_sufficient = (
             metrics["source_count"] >= metrics["required_sources"]
             and metrics["analysis_complete_ratio"] >= 2 / 3
-            and metrics["duration_coverage_ratio"] >= 1.0
+            and metrics["duration_coverage_ratio"] >= metrics["required_duration_coverage_ratio"]
             and metrics["topic_coverage_ratio"] >= 0.15
             and metrics["orientation_match_ratio"] >= 0.5
+            and metrics["quality_floor_met"]
+            and metrics["duplicate_ratio"] <= 0.75
         )
         prompt = (
             "你是视频素材缺口评估器。基于用户目标和确定性指标判断素材是否足够支撑完整叙事。"
@@ -3087,8 +3428,13 @@ def material_gap_evaluator_node(state: AgentState) -> dict[str, Any]:
             decision = "supplement"
         if DIRECT_PHASE3_EXECUTION and metrics["analyzed_count"] > 0:
             decision = "proceed"
-        if state.gap_round >= 2 and decision == "supplement":
-            decision = "proceed" if metrics["analyzed_count"] > 0 else "fail"
+        supplement_limit = (
+            state.processing_budget.material.supplement_rounds
+            if state.processing_budget is not None
+            else 1
+        )
+        if state.gap_round >= supplement_limit and decision == "supplement":
+            decision = "proceed" if deterministic_sufficient else "fail"
         report.update(
             {
                 "decision": decision,
@@ -3622,6 +3968,15 @@ def _compact_editing_research_node(state: AgentState) -> dict[str, Any]:
         arguments={
             "target_duration_seconds": state.target_duration_seconds,
             "analysis_count": len(analysis_files),
+            "user_request": state.user_request,
+            "analysis_inputs": [
+                {
+                    "path": str(path.resolve()),
+                    "size": path.stat().st_size,
+                    "mtime_ns": path.stat().st_mtime_ns,
+                }
+                for path in analysis_files
+            ],
         },
         resources={"llm_pool": 1},
         output_kinds=["editing_blueprint", "editing_blueprint_json"],
@@ -3632,6 +3987,7 @@ def _compact_editing_research_node(state: AgentState) -> dict[str, Any]:
         phase="phase2",
         goal=state.user_request,
         tasks=[task],
+        deadline_at_epoch=_phase_deadline(state, "phase2"),
     )
 
     def execute(task_spec: TaskSpec, dependencies: dict[str, Any]) -> TaskExecutionResult:
@@ -3705,6 +4061,21 @@ def _compact_editing_research_node(state: AgentState) -> dict[str, Any]:
     except ModelCallError:
         raise
     except Exception as exc:
+        remaining = (
+            state.processing_budget.remaining_seconds()
+            if state.processing_budget is not None
+            else float("inf")
+        )
+        if remaining < 60:
+            graph_logger.warning("短片 compact blueprint 失败且预算不足，使用确定性最小蓝图: %s", exc)
+            return {
+                "editing_blueprint": (
+                    "按素材分析中评分最高且互不重复的片段顺序组装；"
+                    f"总时长严格控制为 {state.target_duration_seconds:.1f} 秒；"
+                    "统一画幅和音频后添加简洁字幕，减少复杂转场，并执行最终质量门。"
+                ),
+                "phase": "react",
+            }
         graph_logger.warning("短片 compact blueprint 失败，回退完整 Phase 2: %s", exc)
         _emit_orchestration_event(
             "phase2_compact_fallback",
@@ -3719,8 +4090,42 @@ def editing_research_node(state: AgentState) -> dict[str, Any]:
     analysis_files = _iter_analysis_json_files()
     if not analysis_files:
         return _legacy_editing_research_node(state)
-    if SHORT_FORM_OPTIMIZATIONS and 0 < state.target_duration_seconds <= 20:
-        return _compact_editing_research_node(state)
+    remaining_seconds = (
+        state.processing_budget.remaining_seconds()
+        if state.processing_budget is not None
+        else float("inf")
+    )
+    if (
+        SHORT_FORM_OPTIMIZATIONS
+        and 0 < state.target_duration_seconds <= 45
+    ) or remaining_seconds < 60:
+        compact_state = state
+        if remaining_seconds < 60:
+            level = max(2, state.degradation_level)
+            budget = state.processing_budget.model_copy(deep=True) if state.processing_budget else None
+            if budget is not None:
+                budget.degradation_level = max(budget.degradation_level, level)
+            compact_state = state.model_copy(
+                update={"degradation_level": level, "processing_budget": budget}
+            )
+            _emit_orchestration_event(
+                "degradation_changed",
+                {
+                    "phase": "phase2",
+                    "from_level": state.degradation_level,
+                    "to_level": level,
+                    "degradation_level": level,
+                    "reason": "phase2_remaining_budget_below_60s",
+                    **_budget_snapshot(state),
+                },
+            )
+        result = _compact_editing_research_node(compact_state)
+        result["degradation_level"] = compact_state.degradation_level
+        result["processing_budget"] = compact_state.processing_budget
+        return result
+
+    if state.target_duration_seconds <= 90:
+        analysis_files = analysis_files[:4]
 
     registry = _artifact_registry()
     scheduler = _resource_scheduler(registry)
@@ -3737,6 +4142,8 @@ def editing_research_node(state: AgentState) -> dict[str, Any]:
                     "analysis_path": str(path.resolve()),
                     "analysis_size": path.stat().st_size,
                     "analysis_mtime_ns": path.stat().st_mtime_ns,
+                    "user_request": state.user_request,
+                    "target_duration_seconds": state.target_duration_seconds,
                 },
                 resources={"llm_pool": 1},
                 output_kinds=["source_research"],
@@ -3745,22 +4152,37 @@ def editing_research_node(state: AgentState) -> dict[str, Any]:
         )
 
     source_ids = [task.id for task in source_tasks]
-    topic_prompts = {
-        "narrative": "设计叙事结构、开场钩子、高潮和结尾记忆点。",
-        "visual": "分析跨素材视觉连续性、镜头顺序、色调和转场逻辑。",
-        "pacing": "设计目标时长内的片段分配、信息密度和节奏曲线。",
-        "narration": "设计严格贴合画面的分段旁白、留白和字幕策略。",
-    }
+    if state.target_duration_seconds <= 90:
+        topic_prompts = {
+            "narrative": "设计叙事结构、开场钩子、高潮和结尾记忆点。",
+            "visual_pacing": "合并分析视觉连续性、镜头顺序、色调、转场和节奏曲线。",
+        }
+    else:
+        topic_prompts = {
+            "narrative": "设计叙事结构、开场钩子、高潮和结尾记忆点。",
+            "visual": "分析跨素材视觉连续性、镜头顺序、色调和转场逻辑。",
+            "pacing": "设计目标时长内的片段分配、信息密度和节奏曲线。",
+            "narration": "设计严格贴合画面的分段旁白、留白和字幕策略。",
+        }
     topic_tasks = [
         TaskSpec(
             id=f"phase2_topic_{name}",
             phase="phase2",
             kind="topic_research",
             description=instruction,
-            arguments={"topic": name, "instruction": instruction},
+            arguments={
+                "topic": name,
+                "instruction": instruction,
+                "user_request": state.user_request,
+                "target_duration_seconds": state.target_duration_seconds,
+                "source_task_ids": source_ids,
+            },
             depends_on=source_ids,
             resources={"llm_pool": 1},
             output_kinds=["topic_research"],
+            estimated_seconds=15.0,
+            optional=name != "narrative",
+            priority=20 if name == "narrative" else 10,
             retry=RetryPolicy(max_attempts=2, backoff_seconds=0.5),
         )
         for name, instruction in topic_prompts.items()
@@ -3771,6 +4193,11 @@ def editing_research_node(state: AgentState) -> dict[str, Any]:
         phase="phase2",
         kind="blueprint_integrator",
         description="整合全部素材研究和专题策略",
+        arguments={
+            "user_request": state.user_request,
+            "target_duration_seconds": state.target_duration_seconds,
+            "topic_task_ids": [task.id for task in topic_tasks],
+        },
         depends_on=[task.id for task in topic_tasks],
         resources={"llm_pool": 1},
         output_kinds=["editing_blueprint", "editing_blueprint_json"],
@@ -3781,6 +4208,7 @@ def editing_research_node(state: AgentState) -> dict[str, Any]:
         phase="phase2",
         goal=state.user_request,
         tasks=[*source_tasks, *topic_tasks, integrator_task],
+        deadline_at_epoch=_phase_deadline(state, "phase2"),
     )
 
     def execute(task: TaskSpec, dependencies: dict[str, Any]) -> TaskExecutionResult:
@@ -4256,6 +4684,7 @@ def _build_controlled_edit_plan(state: AgentState) -> ControlledEditPlan:
         phase="phase3",
         goal=state.user_request,
         tasks=[task],
+        deadline_at_epoch=_phase_deadline(state, "phase3"),
     )
 
     def execute(task_spec: TaskSpec, dependencies: dict[str, Any]) -> TaskExecutionResult:
@@ -4418,6 +4847,7 @@ def _build_controlled_narration_plan(
         phase="phase3",
         goal=state.user_request,
         tasks=[task],
+        deadline_at_epoch=_phase_deadline(state, "phase3"),
     )
 
     def execute(task_spec: TaskSpec, dependencies: dict[str, Any]) -> TaskExecutionResult:
@@ -4686,6 +5116,7 @@ def _run_controlled_editor_legacy(state: AgentState) -> str:
             export_task,
             evaluate_task,
         ],
+        deadline_at_epoch=_phase_deadline(state, "phase3"),
     )
 
     def execute(task: TaskSpec, dependencies: dict[str, Any]) -> TaskExecutionResult:
@@ -4974,6 +5405,22 @@ def _run_controlled_editor(state: AgentState) -> str:
     )
     plan_version = approved_plan.version if approved_plan is not None else ""
     registry = _artifact_registry()
+    media_profile = _media_profile_for_state(state)
+    if media_profile.resolution in {"720p", "1080p", "4k"}:
+        plan.resolution = media_profile.resolution
+    profile_path = WORKSPACE / "phase3_media_profile.json"
+    profile_path.write_text(
+        json.dumps(media_profile.to_dict(), ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+    registry.register(
+        artifact_id="phase3_media_profile",
+        kind="media_profile",
+        producer_task_id="phase3_media_profile_resolver",
+        phase="phase3",
+        path=profile_path,
+        metadata={"version": media_profile.version},
+    )
 
     cut_tasks: list[TaskSpec] = []
     for index, clip in enumerate(plan.clips, start=1):
@@ -4993,6 +5440,7 @@ def _run_controlled_editor(state: AgentState) -> str:
                     "start_time": clip.start,
                     "end_time": clip.end,
                     "output_name": output_name,
+                    "media_profile": media_profile.to_dict(),
                 },
                 resources={"ffmpeg_pool": 1},
                 conflict_keys=[f"write:{(WORKSPACE / f'{output_name}.mp4').resolve()}"],
@@ -5027,6 +5475,7 @@ def _run_controlled_editor(state: AgentState) -> str:
         phase="phase3",
         goal=state.user_request,
         tasks=[*cut_tasks, merge_task, analyze_task],
+        deadline_at_epoch=_phase_deadline(state, "phase3"),
     )
 
     def execute_visual(
@@ -5034,30 +5483,45 @@ def _run_controlled_editor(state: AgentState) -> str:
         dependencies: dict[str, Any],
     ) -> TaskExecutionResult:
         if task.kind == "clip_cut":
-            raw = _TOOL_NAME_MAP["cut_video"].invoke(
-                {
-                    "input_path": task.arguments["input_path"],
-                    "start_time": task.arguments["start_time"],
-                    "end_time": task.arguments["end_time"],
-                    "output_name": task.arguments["output_name"],
-                }
+            input_path = str(task.arguments["input_path"])
+            output_path = WORKSPACE / f"{task.arguments['output_name']}.mp4"
+            source_probe = probe_media(input_path)
+            render_canonical_media(
+                CanonicalRenderRequest(
+                    input_path=input_path,
+                    output_path=output_path,
+                    profile=media_profile,
+                    probe=source_probe,
+                    start_seconds=float(task.arguments["start_time"]),
+                    duration_seconds=(
+                        float(task.arguments["end_time"])
+                        - float(task.arguments["start_time"])
+                    ),
+                    final_mix=False,
+                    allow_hdr_tonemap=False,
+                    preset="superfast" if state.degradation_level >= 3 else "veryfast",
+                    crf=21,
+                ),
+                timeout_seconds=min(
+                    1200.0,
+                    max(60.0, _budget_snapshot(state).get("remaining_seconds", 1200.0)),
+                ),
             )
-            parsed = json.loads(str(raw))
-            path = str(parsed.get("path") or "")
-            if parsed.get("status") != "success" or not path:
-                raise RuntimeError(f"裁剪失败: {str(raw)[:300]}")
+            path = str(output_path.resolve())
             return TaskExecutionResult(
                 data={"path": path},
                 artifacts=[
                     _task_artifact(
                         artifact_id=f"{task.id}_video",
-                        kind="video_clip",
+                        kind="canonical_video_clip",
                         path=path,
                         task=task,
                         metadata={
                             "plan_version": task.arguments.get("plan_version", ""),
                             "scene_id": task.arguments.get("scene_id", ""),
                             "execution_step_id": task.arguments.get("execution_step_id", task.id),
+                            "media_profile_version": media_profile.version,
+                            "source_probe": source_probe.to_dict(),
                         },
                     )
                 ],
@@ -5189,6 +5653,7 @@ def _run_controlled_editor(state: AgentState) -> str:
         phase="phase3",
         goal=state.user_request,
         tasks=[*tts_tasks, narration_task],
+        deadline_at_epoch=_phase_deadline(state, "phase3"),
     )
 
     def execute_narration(
@@ -5293,6 +5758,7 @@ def _run_controlled_editor(state: AgentState) -> str:
         phase="phase3",
         goal=state.user_request,
         tasks=[subtitle_task],
+        deadline_at_epoch=_phase_deadline(state, "phase3"),
     )
 
     def execute_subtitle(
@@ -5363,6 +5829,8 @@ def _run_controlled_editor(state: AgentState) -> str:
             "output_name": export_output_name,
             "resolution": plan.resolution,
             "revision": REVISION,
+            "media_profile": media_profile.to_dict(),
+            "preset": "superfast" if state.degradation_level >= 3 else "veryfast",
         },
         resources={"export_pool": 1, "ffmpeg_pool": 1},
         conflict_keys=["phase3:final_export"],
@@ -5373,7 +5841,11 @@ def _run_controlled_editor(state: AgentState) -> str:
         phase="phase3",
         kind="final_evaluator",
         description="校验最终成片时长和文件有效性",
-        arguments={"revision": REVISION},
+        arguments={
+            "revision": REVISION,
+            "media_profile": media_profile.to_dict(),
+            "target_duration_seconds": state.target_duration_seconds,
+        },
         depends_on=[export_task.id],
         resources={"ffmpeg_pool": 1},
         output_kinds=["phase3_evaluation"],
@@ -5383,6 +5855,7 @@ def _run_controlled_editor(state: AgentState) -> str:
         phase="phase3",
         goal=state.user_request,
         tasks=[export_task, evaluate_task],
+        deadline_at_epoch=_phase_deadline(state, "phase3"),
     )
 
     def execute_export(
@@ -5390,43 +5863,81 @@ def _run_controlled_editor(state: AgentState) -> str:
         dependencies: dict[str, Any],
     ) -> TaskExecutionResult:
         if task.kind == "final_export":
-            raw = _TOOL_NAME_MAP["export_video"].invoke(
-                {
-                    "input_path": subtitled_path,
-                    "output_name": export_output_name,
-                    "resolution": plan.resolution,
-                }
+            input_probe = probe_media(subtitled_path)
+            output_path = WORKSPACE / f"{export_output_name}.mp4"
+            render_canonical_media(
+                CanonicalRenderRequest(
+                    input_path=subtitled_path,
+                    output_path=output_path,
+                    profile=media_profile,
+                    probe=input_probe,
+                    duration_seconds=input_probe.duration_seconds,
+                    final_mix=True,
+                    allow_hdr_tonemap=False,
+                    preset="superfast" if state.degradation_level >= 3 else "veryfast",
+                    crf=21,
+                ),
+                timeout_seconds=min(
+                    1200.0,
+                    max(90.0, _budget_snapshot(state).get("remaining_seconds", 1200.0)),
+                ),
             )
-            parsed = json.loads(str(raw))
-            path = str(parsed.get("path") or "")
-            if parsed.get("status") != "success" or not path:
-                raise RuntimeError(f"最终导出失败: {str(raw)[:300]}")
+            path = str(output_path.resolve())
             return TaskExecutionResult(
-                data={"path": path},
+                data={"path": path, "media_profile": media_profile.to_dict()},
                 artifacts=[
                     _task_artifact(
                         artifact_id=f"phase3_export_candidate_r{REVISION:03d}",
                         kind="export_candidate",
                         path=path,
                         task=task,
-                        metadata={"revision": REVISION},
+                        metadata={
+                            "revision": REVISION,
+                            "media_profile_version": media_profile.version,
+                        },
                     )
                 ],
             )
 
         final_path = str(dependencies[export_task.id].result["path"])
-        raw = _TOOL_NAME_MAP["inspect_video_duration"].invoke(
-            {"video_path": final_path}
-        )
-        metadata = json.loads(str(raw))
-        duration = float(metadata.get("duration_seconds", 0.0) or 0.0)
+        final_probe = probe_media(final_path)
+        duration = final_probe.duration_seconds
         target = state.target_duration_seconds or duration
         tolerance = max(1.0, target * 0.08)
-        decision = (
-            "finish"
-            if duration > 0 and abs(duration - target) <= tolerance
-            else "fallback_react"
+        quality_commands = build_quality_analysis_commands(final_path)
+        quality_outputs: dict[str, tuple[int, str]] = {}
+        for name, command in {
+            "loudness": quality_commands.loudness,
+            "black_frames": quality_commands.black_frames,
+            "freeze_frames": quality_commands.freeze_frames,
+            "decode": quality_commands.decode,
+        }.items():
+            completed = run_subprocess(
+                list(command),
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                timeout=min(300.0, max(45.0, duration * 3.0)),
+            )
+            quality_outputs[name] = (
+                completed.returncode,
+                (completed.stderr or "") + "\n" + (completed.stdout or ""),
+            )
+        quality_metrics = parse_quality_analysis_outputs(
+            duration_seconds=duration,
+            loudness_output=quality_outputs["loudness"][1],
+            black_frames_output=quality_outputs["black_frames"][1],
+            freeze_frames_output=quality_outputs["freeze_frames"][1],
+            decode_returncode=quality_outputs["decode"][0],
         )
+        validation = validate_final_media(
+            final_probe,
+            media_profile,
+            quality_metrics,
+            duration_tolerance_seconds=tolerance,
+        )
+        decision = "finish" if validation.passed else "fallback_react"
         report = {
             "decision": decision,
             "path": final_path,
@@ -5434,34 +5945,17 @@ def _run_controlled_editor(state: AgentState) -> str:
             "target_duration_seconds": target,
             "tolerance_seconds": tolerance,
             "revision": REVISION,
+            "media_profile": media_profile.to_dict(),
+            "probe": final_probe.to_dict(),
+            "quality": {
+                "integrated_lufs": quality_metrics.integrated_lufs,
+                "true_peak_dbfs": quality_metrics.true_peak_dbfs,
+                "black_frame_ratio": quality_metrics.black_frame_ratio,
+                "freeze_frame_ratio": quality_metrics.freeze_frame_ratio,
+                "decode_errors": quality_metrics.decode_errors,
+            },
+            "validation": validation.to_dict(),
         }
-        if decision != "finish" and duration > target + tolerance:
-            repair_name = f"{Path(final_path).stem}_repair_r{REVISION:03d}"
-            try:
-                repair_raw = _TOOL_NAME_MAP["cut_video"].invoke(
-                    {
-                        "input_path": final_path,
-                        "start_time": 0.0,
-                        "end_time": target,
-                        "output_name": repair_name,
-                    }
-                )
-                repair = json.loads(str(repair_raw))
-                repaired_path = str(repair.get("path") or "")
-                if repair.get("status") == "success" and repaired_path:
-                    final_path = repaired_path
-                    duration = target
-                    decision = "finish"
-                    report.update(
-                        {
-                            "decision": decision,
-                            "path": final_path,
-                            "duration_seconds": duration,
-                            "repair": "trim_tail",
-                        }
-                    )
-            except Exception as exc:
-                report["repair_error"] = str(exc)[:300]
         report_path = WORKSPACE / f"phase3_evaluation_r{REVISION:03d}.json"
         report_path.write_text(
             json.dumps(report, ensure_ascii=False, indent=2),
@@ -5870,9 +6364,9 @@ def _run_short_form_editor(state: AgentState) -> str:
         )
     )
     duration = float(final_meta.get("duration_seconds", 0.0) or 0.0)
-    _register_revision_final(final_path, "phase3_short_form")
     if abs(duration - target_duration) > max(1.0, target_duration * 0.08):
         raise ShortFormExecutionError(f"最终成片时长不合格: {duration:.3f}s")
+    _validate_fallback_final(state, final_path, "phase3_short_form")
     _emit_orchestration_event(
         "phase3_path",
         {
@@ -6043,11 +6537,38 @@ def react_editor_node(state: AgentState) -> dict[str, Any]:
     )
     graph_logger.info("📝 分析上下文长度: %d 字", len(analysis_context))
 
+    remaining_seconds = (
+        state.processing_budget.remaining_seconds()
+        if state.processing_budget is not None
+        else DEFAULT_DEADLINE_SECONDS
+    )
+    if remaining_seconds < 30:
+        raise RuntimeError(
+            f"Phase 3 受控路径失败且仅剩 {remaining_seconds:.1f}s，停止进入 ReAct 回退"
+        )
+    react_deadline = time.time() + max(10.0, remaining_seconds - 10.0)
+    max_tool_calls = max(4, min(20, int(remaining_seconds // 8)))
+    max_encoding_calls = max(1, min(6, int(remaining_seconds // 35)))
+    recursion_limit = max(12, min(48, max_tool_calls * 2 + 4))
+    _emit_orchestration_event(
+        "phase3_react_budget",
+        {
+            "remaining_seconds": round(remaining_seconds, 3),
+            "max_tool_calls": max_tool_calls,
+            "max_encoding_calls": max_encoding_calls,
+            "recursion_limit": recursion_limit,
+        },
+    )
+
     try:
-        trace_handler = _RealtimeToolTraceHandler()
+        trace_handler = _RealtimeToolTraceHandler(
+            deadline_epoch=react_deadline,
+            max_tool_calls=max_tool_calls,
+            max_encoding_calls=max_encoding_calls,
+        )
         result_state = react_agent.invoke(
             {"messages": [("user", user_message)]},
-            config={"recursion_limit": 100, "callbacks": [trace_handler]},
+            config={"recursion_limit": recursion_limit, "callbacks": [trace_handler]},
         )
         if model_abort_requested() and fail_fast_model_errors():
             raise_model_failure(
@@ -6057,7 +6578,7 @@ def react_editor_node(state: AgentState) -> dict[str, Any]:
             )
         _log_react_tool_trace(result_state)
         final_msg = _extract_final_message(result_state)
-        _register_latest_react_video()
+        _register_latest_react_video(state)
     except SteeringReplanRequested as exc:
         updated = _state_with_current_guidance(state)
         return {
@@ -6071,6 +6592,8 @@ def react_editor_node(state: AgentState) -> dict[str, Any]:
             "guidance_context": updated.guidance_context,
         }
     except ModelCallError:
+        raise
+    except FinalQualityGateError:
         raise
     except Exception as e:
         if fail_fast_model_errors():

@@ -1,4 +1,10 @@
 from .artifacts import ArtifactRegistry
+from .budget import (
+    MaterialBudget,
+    ProcessingBudget,
+    create_processing_budget,
+    material_budget_for_duration,
+)
 from .models import (
     ArtifactRef,
     ExecutionPlan,
@@ -13,6 +19,10 @@ from .scheduler import ResourceScheduler, SchedulerError
 __all__ = [
     "ArtifactRef",
     "ArtifactRegistry",
+    "MaterialBudget",
+    "ProcessingBudget",
+    "create_processing_budget",
+    "material_budget_for_duration",
     "ExecutionPlan",
     "ResourcePoolConfig",
     "ResourceScheduler",

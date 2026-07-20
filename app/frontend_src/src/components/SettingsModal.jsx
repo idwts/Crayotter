@@ -114,6 +114,13 @@ export function SettingsModal({ configForm, setConfigForm, configMessage, setCon
                         <Field label={t("ttsBaseUrl")} value={configForm.ttsBaseUrl} onChange={(value) => update("ttsBaseUrl", value)} placeholder={t("optionalBaseUrlPlaceholder")} />
                         <Field label={t("ttsModel")} value={configForm.ttsModel} onChange={(value) => update("ttsModel", value)} placeholder="qwen-tts-latest" />
                         <Field label={t("stallTimeout")} value={configForm.stallTimeout} onChange={(value) => update("stallTimeout", value)} placeholder="150" type="number" />
+                        <Field label="YouTube 模式 (auto/on/off)" value={configForm.youtubeMode} onChange={(value) => update("youtubeMode", value)} placeholder="auto" />
+                        <Field label="素材平台（逗号分隔）" value={configForm.enabledMaterialPlatforms} onChange={(value) => update("enabledMaterialPlatforms", value)} placeholder="bilibili,douyin,xiaohongshu,youtube" />
+                        <Field label="默认处理时限（秒）" value={configForm.defaultDeadlineSeconds} onChange={(value) => update("defaultDeadlineSeconds", value)} placeholder="600" type="number" />
+                        <Field label="处理模式 (auto/speed/quality)" value={configForm.processingMode} onChange={(value) => update("processingMode", value)} placeholder="auto" />
+                        <Field label="输出规格" value={configForm.outputProfile} onChange={(value) => update("outputProfile", value)} placeholder="auto" />
+                        <Field label="授权浏览器 (chrome/msedge)" value={configForm.browserAuthBrowser} onChange={(value) => update("browserAuthBrowser", value)} placeholder="chrome" />
+                        <Field label="浏览器 Profile 目录" value={configForm.browserAuthProfile} onChange={(value) => update("browserAuthProfile", value)} placeholder="请输入 Default/Profile 目录的完整路径" />
                       </div>
                     </SettingSection>
                     <SettingSection icon={SlidersHorizontal} title={t("resourcePools")}>

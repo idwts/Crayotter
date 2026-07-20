@@ -196,6 +196,16 @@ python -m venv .venv
 pip install -r requirements.txt
 ```
 
+To enable browser-rendered Douyin/Xiaohongshu extraction and user-authorized
+retry, install the optional browser dependencies instead:
+
+```bash
+pip install -r requirements-browser.txt
+```
+
+This mode reuses a local Chrome/Edge installation and does not automate or
+bypass CAPTCHAs. Authorization state is temporary and job-scoped.
+
 ### 3) Configure API Endpoints and Runtime Options
 
 Copy `.env.example` to `.env`, then edit the values there:

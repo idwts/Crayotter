@@ -180,7 +180,7 @@ class DownloadMaterialVideoTests(unittest.TestCase):
 
         self.assertFalse(output_path.exists())
 
-    def test_download_material_video_uses_yt_dlp_and_normalizes_to_h264_aac(self) -> None:
+    def test_download_material_video_uses_ytdlp_for_youtube_and_normalizes_to_h264_aac(self) -> None:
         module = importlib.import_module("script.tools.download_material_video")
         download_tool = module.download_material_video
 
@@ -214,16 +214,16 @@ class DownloadMaterialVideoTests(unittest.TestCase):
             ):
                 raw = download_tool.invoke(
                     {
-                        "url": "https://www.douyin.com/video/7336481666707229992",
-                        "source": "douyin",
-                        "filename": "douyin_sample",
+                        "url": "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
+                        "source": "youtube",
+                        "filename": "youtube_sample",
                     }
                 )
                 path_exists_before_cleanup = Path(json.loads(str(raw))["path"]).exists()
 
         result = json.loads(str(raw))
         self.assertEqual(result["status"], "success")
-        self.assertEqual(result["source"], "douyin")
+        self.assertEqual(result["source"], "youtube")
         self.assertEqual(result["codec"], "h264")
         self.assertEqual(result["audio_codec"], "aac")
         self.assertTrue(result["normalized"])
@@ -278,7 +278,7 @@ class DownloadMaterialVideoTests(unittest.TestCase):
 
         def fake_run(cmd, capture_output=True, text=True, timeout=None):
             commands.append(list(cmd))
-            if "douyin.com" in str(cmd):
+            if "kuaishou.com" in str(cmd):
                 return subprocess.CompletedProcess(cmd, 1, "", "fresh cookies needed")
             output_arg = cmd[cmd.index("-o") + 1] if "-o" in cmd else None
             if output_arg:
@@ -315,17 +315,18 @@ class DownloadMaterialVideoTests(unittest.TestCase):
             ):
                 raw = download_tool.invoke(
                     {
-                        "url": "https://www.douyin.com/video/7336481666707229992",
-                        "source": "douyin",
+                        "url": "https://www.kuaishou.com/f/X3t3Ee6o1L7gqHe",
+                        "source": "kuaishou",
                         "filename": "fallback_sample",
                         "fallback_query": "校园宣传片",
+                        "fallback_to_bilibili": True,
                     }
                 )
 
         result = json.loads(str(raw))
         self.assertEqual(result["status"], "success")
         self.assertEqual(result["source"], "bilibili")
-        self.assertEqual(result["original_source"], "douyin")
+        self.assertEqual(result["original_source"], "kuaishou")
         self.assertTrue(result["fallback"])
         self.assertEqual(result["fallback_query"], "校园宣传片")
         self.assertTrue(any("bilibili.com" in " ".join(command) for command in commands))
@@ -347,24 +348,36 @@ class MaterialConfigTests(unittest.TestCase):
 
 
 class SearchAndRankingMaterialSourceTests(unittest.TestCase):
-    def test_search_material_sources_falls_back_to_bilibili_for_unsupported_keyword_platform(self) -> None:
+    def test_search_material_sources_uses_registered_douyin_adapter(self) -> None:
         module = importlib.import_module("script.tools.search_material_sources")
         bili_candidate = {
             "title": "校园宣传片",
             "url": "https://www.bilibili.com/video/BV1xx411c7XZ",
             "bvid": "BV1xx411c7XZ",
             "duration_seconds": 60,
-            "source": "bilibili",
+            "source": "douyin",
         }
 
+        fake_result = type(
+            "FakeSourceResult",
+            (),
+            {
+                "candidates": [bili_candidate],
+                "to_dict": lambda self: {
+                    "platform": "douyin",
+                    "status": "success",
+                    "candidates": [bili_candidate],
+                    "errors": [],
+                },
+            },
+        )()
+        fake_registry = type(
+            "FakeRegistry",
+            (),
+            {"search": lambda self, request: fake_result},
+        )()
         with patch.object(module, "_append_candidates_to_pool"), patch.object(
-            module,
-            "search_bilibili_video",
-            type(
-                "FakeSearchTool",
-                (),
-                {"invoke": lambda self, arguments: json.dumps([bili_candidate], ensure_ascii=False)},
-            )(),
+            module, "_source_registry", return_value=fake_registry
         ):
             raw = module.search_material_sources.invoke(
                 {
@@ -376,9 +389,10 @@ class SearchAndRankingMaterialSourceTests(unittest.TestCase):
             )
 
         result = json.loads(str(raw))
-        self.assertEqual(result["unsupported"][0]["platform"], "douyin")
+        self.assertEqual(result["sources"][0]["platform"], "douyin")
+        self.assertEqual(result["sources"][0]["status"], "success")
         self.assertEqual(len(result["candidates"]), 1)
-        self.assertEqual(result["candidates"][0]["source"], "bilibili")
+        self.assertEqual(result["candidates"][0]["source"], "douyin")
 
     def test_rank_keeps_imported_url_candidate_with_unknown_duration(self) -> None:
         module = importlib.import_module("script.tools.rank_video_candidates")
