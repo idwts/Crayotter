@@ -436,7 +436,9 @@ class EditingPlanStore:
         path.parent.mkdir(parents=True, exist_ok=True)
         temp_path = path.with_name(f".{path.name}.{os.getpid()}.{threading.get_ident()}.tmp")
         temp_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
-        attempts = 8 if os.name == "nt" else 1
+        # Antivirus, sync clients, and network filesystems can transiently lock
+        # the destination on non-Windows hosts too; the bounded retry is cheap.
+        attempts = 8
         try:
             for attempt in range(attempts):
                 try:

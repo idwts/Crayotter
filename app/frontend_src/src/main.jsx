@@ -152,6 +152,13 @@ function App() {
     enablePlanReview: true,
     directPhase3Execution: false,
     preferLocalMaterials: false,
+    youtubeMode: "auto",
+    enabledMaterialPlatforms: "bilibili,douyin,xiaohongshu,youtube",
+    defaultDeadlineSeconds: "600",
+    processingMode: "auto",
+    outputProfile: "auto",
+    browserAuthBrowser: "",
+    browserAuthProfile: "",
   });
   const eventSourceRef = useRef(null);
   const refreshTimerRef = useRef(null);
@@ -428,6 +435,13 @@ function App() {
       enablePlanReview: config.enable_plan_review !== false,
       directPhase3Execution: config.direct_phase3_execution === true,
       preferLocalMaterials: config.prefer_local_materials === true,
+      youtubeMode: config.youtube_mode || "auto",
+      enabledMaterialPlatforms: (config.enabled_material_platforms || ["bilibili", "douyin", "xiaohongshu", "youtube"]).join(","),
+      defaultDeadlineSeconds: String(config.default_deadline_seconds || 600),
+      processingMode: config.processing_mode || "auto",
+      outputProfile: config.output_profile || "auto",
+      browserAuthBrowser: config.browser_auth_browser || "",
+      browserAuthProfile: config.browser_auth_profile || "",
     });
     setEnablePhase2Research(config.enable_phase2_research !== false);
     setEnablePlanReview(config.enable_plan_review !== false);
@@ -507,6 +521,12 @@ function App() {
           })
           .catch(() => {});
       }
+      if (event.type === "material_source_authorization_required") {
+        notify(
+          "warning",
+          `${event.payload?.platform || "素材平台"} 需要浏览器授权；其他平台会继续。请在设置中选择浏览器和 Profile，后续重试将使用该授权。`,
+        );
+      }
       if (["job_completed", "job_failed", "job_cancelled"].includes(event.type)) {
         refreshJobs(true).catch(() => {});
       }
@@ -518,7 +538,7 @@ function App() {
     source.onerror = () => {
       closeEventStream();
     };
-  }, [closeEventStream, loadCurrentPlan, loadMessages, refreshJobs]);
+  }, [closeEventStream, loadCurrentPlan, loadMessages, notify, refreshJobs]);
 
   const selectJob = useCallback(async (jobId) => {
     const job = jobs.find((item) => item.job_id === jobId);

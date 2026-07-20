@@ -108,6 +108,28 @@ try:
 except (TypeError, ValueError):
     AGENT_STALL_TIMEOUT_SECONDS = 150
 RESUME_EXECUTION = False
+DEFAULT_DEADLINE_SECONDS = max(
+    60, int(os.environ.get("CRAYOTTER_DEFAULT_DEADLINE_SECONDS", "600") or 600)
+)
+PHASE1_MAX_SECONDS = max(
+    30, int(os.environ.get("CRAYOTTER_PHASE1_MAX_SECONDS", "180") or 180)
+)
+PROCESSING_MODE = str(os.environ.get("CRAYOTTER_PROCESSING_MODE", "auto") or "auto").strip().lower()
+YOUTUBE_MODE = str(os.environ.get("CRAYOTTER_YOUTUBE_MODE", "auto") or "auto").strip().lower()
+OUTPUT_PROFILE = str(os.environ.get("CRAYOTTER_OUTPUT_PROFILE", "auto") or "auto").strip()
+BROWSER_AUTH_BROWSER = str(os.environ.get("CRAYOTTER_BROWSER_AUTH_BROWSER", "") or "").strip()
+BROWSER_AUTH_PROFILE = str(os.environ.get("CRAYOTTER_BROWSER_AUTH_PROFILE", "") or "").strip()
+ENABLED_MATERIAL_PLATFORMS = [
+    item.strip().lower()
+    for item in str(
+        os.environ.get(
+            "CRAYOTTER_ENABLED_MATERIAL_PLATFORMS",
+            "bilibili,douyin,xiaohongshu,youtube",
+        )
+    ).split(",")
+    if item.strip()
+]
+TARGET_DURATION_SECONDS = 0.0
 
 # 配置 agent 日志（始终写到仓库根目录 logs/）
 SCRIPT_DIR = Path(__file__).resolve().parent
@@ -170,6 +192,7 @@ _TOOL_FAILED_REALTIME_RE = re.compile(
 )
 
 from graph import AgentState, build_graph
+from orchestration import create_processing_budget
 from tools import (
     MEMORY_EXPERIENCE_DIR,
     USER_WORKSPACE,
@@ -239,6 +262,12 @@ def _build_runtime_settings() -> dict[str, Any]:
         "audio_loudnorm_target": AUDIO_LOUDNORM_TARGET,
         "post_task_review_mode": POST_TASK_REVIEW_MODE,
         "agent_stall_timeout_seconds": AGENT_STALL_TIMEOUT_SECONDS,
+        "youtube_mode": YOUTUBE_MODE,
+        "default_deadline_seconds": DEFAULT_DEADLINE_SECONDS,
+        "processing_mode": PROCESSING_MODE,
+        "output_profile": OUTPUT_PROFILE,
+        "enabled_material_platforms": ENABLED_MATERIAL_PLATFORMS,
+        "target_duration_seconds": TARGET_DURATION_SECONDS,
         "video_api_key": VIDEO_API_KEY,
         "video_base_url": VIDEO_BASE_URL,
         "video_model_name": VIDEO_MODEL_NAME,
@@ -302,6 +331,9 @@ def apply_runtime_config(config: Mapping[str, Any] | None = None) -> dict[str, A
     global VIDEO_ANALYSIS_PROXY_MAX_SECONDS, DOWNLOAD_MAX_HEIGHT, STANDARDIZE_TARGET_FPS, AUDIO_LOUDNORM_TARGET
     global VIDEO_API_KEY, VIDEO_BASE_URL, VIDEO_MODEL_NAME
     global TTS_API_KEY, TTS_BASE_URL, TTS_MODEL_NAME
+    global DEFAULT_DEADLINE_SECONDS, PHASE1_MAX_SECONDS, PROCESSING_MODE, YOUTUBE_MODE, OUTPUT_PROFILE
+    global BROWSER_AUTH_BROWSER, BROWSER_AUTH_PROFILE
+    global ENABLED_MATERIAL_PLATFORMS, TARGET_DURATION_SECONDS
 
     config = dict(config or {})
 
@@ -370,6 +402,40 @@ def apply_runtime_config(config: Mapping[str, Any] | None = None) -> dict[str, A
         config.get("audio_loudnorm_target"),
         AUDIO_LOUDNORM_TARGET,
     )
+    DEFAULT_DEADLINE_SECONDS = max(
+        60,
+        _coerce_positive_int(
+            config.get("default_deadline_seconds"),
+            DEFAULT_DEADLINE_SECONDS,
+        ),
+    )
+    PHASE1_MAX_SECONDS = max(
+        30,
+        _coerce_positive_int(config.get("phase1_max_seconds"), PHASE1_MAX_SECONDS),
+    )
+    PROCESSING_MODE = str(config.get("processing_mode") or PROCESSING_MODE).strip().lower()
+    if PROCESSING_MODE not in {"auto", "speed", "quality"}:
+        PROCESSING_MODE = "auto"
+    YOUTUBE_MODE = str(config.get("youtube_mode") or YOUTUBE_MODE).strip().lower()
+    if YOUTUBE_MODE not in {"auto", "on", "off"}:
+        YOUTUBE_MODE = "auto"
+    OUTPUT_PROFILE = str(config.get("output_profile") or OUTPUT_PROFILE or "auto").strip()
+    raw_platforms = config.get("enabled_material_platforms", ENABLED_MATERIAL_PLATFORMS)
+    if isinstance(raw_platforms, str):
+        raw_platforms = raw_platforms.split(",")
+    ENABLED_MATERIAL_PLATFORMS = [
+        str(item).strip().lower() for item in (raw_platforms or []) if str(item).strip()
+    ] or ["bilibili", "douyin", "xiaohongshu", "youtube"]
+    BROWSER_AUTH_BROWSER = str(
+        config.get("browser_auth_browser") or BROWSER_AUTH_BROWSER or ""
+    ).strip()
+    BROWSER_AUTH_PROFILE = str(
+        config.get("browser_auth_profile") or BROWSER_AUTH_PROFILE or ""
+    ).strip()
+    TARGET_DURATION_SECONDS = max(
+        0.0,
+        _coerce_runtime_float(config.get("target_duration_seconds"), 0.0),
+    )
     os.environ["CRAYOTTER_SEARCH_POOL_SIZE"] = str(SEARCH_POOL_SIZE)
     os.environ["CRAYOTTER_DOWNLOAD_POOL_SIZE"] = str(DOWNLOAD_POOL_SIZE)
     os.environ["CRAYOTTER_VIDEO_ANALYSIS_POOL_SIZE"] = str(VIDEO_ANALYSIS_POOL_SIZE)
@@ -391,6 +457,14 @@ def apply_runtime_config(config: Mapping[str, Any] | None = None) -> dict[str, A
     os.environ["CRAYOTTER_STANDARDIZE_TARGET_FPS"] = str(STANDARDIZE_TARGET_FPS)
     os.environ["CRAYOTTER_AUDIO_LOUDNORM_TARGET"] = str(AUDIO_LOUDNORM_TARGET)
     os.environ["CRAYOTTER_POST_TASK_REVIEW_MODE"] = POST_TASK_REVIEW_MODE
+    os.environ["CRAYOTTER_DEFAULT_DEADLINE_SECONDS"] = str(DEFAULT_DEADLINE_SECONDS)
+    os.environ["CRAYOTTER_PHASE1_MAX_SECONDS"] = str(PHASE1_MAX_SECONDS)
+    os.environ["CRAYOTTER_PROCESSING_MODE"] = PROCESSING_MODE
+    os.environ["CRAYOTTER_YOUTUBE_MODE"] = YOUTUBE_MODE
+    os.environ["CRAYOTTER_OUTPUT_PROFILE"] = OUTPUT_PROFILE
+    os.environ["CRAYOTTER_ENABLED_MATERIAL_PLATFORMS"] = ",".join(ENABLED_MATERIAL_PLATFORMS)
+    os.environ["CRAYOTTER_BROWSER_AUTH_BROWSER"] = BROWSER_AUTH_BROWSER
+    os.environ["CRAYOTTER_BROWSER_AUTH_PROFILE"] = BROWSER_AUTH_PROFILE
     AGENT_STALL_TIMEOUT_SECONDS = _coerce_positive_int(
         config.get("agent_stall_timeout_seconds"),
         AGENT_STALL_TIMEOUT_SECONDS,
@@ -430,6 +504,9 @@ def apply_runtime_config(config: Mapping[str, Any] | None = None) -> dict[str, A
     graph_module.EXPORT_POOL_SIZE = EXPORT_POOL_SIZE
     graph_module.SHORT_FORM_OPTIMIZATIONS = SHORT_FORM_OPTIMIZATIONS
     graph_module.SHORT_FORM_MAX_SOURCES = SHORT_FORM_MAX_SOURCES
+    graph_module.DEFAULT_DEADLINE_SECONDS = float(DEFAULT_DEADLINE_SECONDS)
+    graph_module.PHASE1_MAX_SECONDS = float(PHASE1_MAX_SECONDS)
+    graph_module.PROCESSING_MODE = PROCESSING_MODE
     tools_module.configure(
         api_key=API_KEY,
         base_url=BASE_URL,
@@ -1032,6 +1109,7 @@ def run_task(
         root_logger.addHandler(event_handler)
         _emit_runtime_event(event_callback, "task_started", {"task": task})
 
+    run_started_at = time.time()
     try:
         reset_analysis_failure_circuit()
         reset_model_abort()
@@ -1068,11 +1146,19 @@ def run_task(
             print(f"⏳ Agent 开始规划和执行...\n")
             print("=" * 60)
 
-        start_time = time.time()
+        start_time = run_started_at
         initial_state = AgentState(
             user_request=task,
             base_user_request=task,
             revision=REVISION,
+            target_duration_seconds=TARGET_DURATION_SECONDS,
+            processing_budget=create_processing_budget(
+                TARGET_DURATION_SECONDS or 30.0,
+                deadline_seconds=DEFAULT_DEADLINE_SECONDS,
+                mode=PROCESSING_MODE,
+                created_at_epoch=start_time,
+                phase1_seconds=PHASE1_MAX_SECONDS,
+            ),
         )
 
         final_state = None
@@ -1155,6 +1241,19 @@ def run_task(
 
         _emit_runtime_event(
             event_callback,
+            "sla_completed" if elapsed <= DEFAULT_DEADLINE_SECONDS else "sla_missed",
+            {
+                "processing_elapsed_seconds": round(elapsed, 2),
+                "authorization_wait_seconds": 0.0,
+                "total_wall_seconds": round(elapsed, 2),
+                "deadline_seconds": DEFAULT_DEADLINE_SECONDS,
+                "degradation_level": int(
+                    (final_state or {}).get("degradation_level", 0) or 0
+                ),
+            },
+        )
+        _emit_runtime_event(
+            event_callback,
             "task_completed",
             {
                 "task": task,
@@ -1165,6 +1264,19 @@ def run_task(
         )
         return output
     except ModelCallError as exc:
+        failure_elapsed = max(0.0, time.time() - run_started_at)
+        _emit_runtime_event(
+            event_callback,
+            "sla_missed",
+            {
+                "processing_elapsed_seconds": round(failure_elapsed, 2),
+                "authorization_wait_seconds": 0.0,
+                "total_wall_seconds": round(failure_elapsed, 2),
+                "deadline_seconds": DEFAULT_DEADLINE_SECONDS,
+                "degradation_level": 0,
+                "reason": "model_call_failed",
+            },
+        )
         emit_benchmark_event("benchmark_aborted", {"status": "aborted_model_failure", **exc.to_payload()})
         _emit_runtime_event(
             event_callback,
@@ -1178,6 +1290,19 @@ def run_task(
         )
         raise
     except Exception as exc:
+        failure_elapsed = max(0.0, time.time() - run_started_at)
+        _emit_runtime_event(
+            event_callback,
+            "sla_missed",
+            {
+                "processing_elapsed_seconds": round(failure_elapsed, 2),
+                "authorization_wait_seconds": 0.0,
+                "total_wall_seconds": round(failure_elapsed, 2),
+                "deadline_seconds": DEFAULT_DEADLINE_SECONDS,
+                "degradation_level": 0,
+                "reason": "task_failed",
+            },
+        )
         _emit_runtime_event(
             event_callback,
             "task_failed",
@@ -1185,6 +1310,12 @@ def run_task(
         )
         raise
     finally:
+        try:
+            from tools.search_material_sources import cleanup_runtime_source_sessions
+
+            cleanup_runtime_source_sessions()
+        except Exception as cleanup_exc:
+            agent_logger.warning("浏览器授权临时态清理失败: %s", cleanup_exc)
         if event_callback is not None:
             root_logger.removeHandler(event_handler)
 

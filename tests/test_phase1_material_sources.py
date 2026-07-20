@@ -4,6 +4,7 @@ import json
 import sys
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 from unittest.mock import patch
 
@@ -67,7 +68,16 @@ class Phase1MaterialSourceTests(unittest.TestCase):
         scheduler = _CapturingScheduler()
         state = graph.AgentState(user_request="做一个校园宣传片")
 
-        with patch.dict(graph._TOOL_NAME_MAP, {"download_material_video": fake_tool}, clear=False):
+        fake_probe = SimpleNamespace(
+            width=1280,
+            height=720,
+            average_fps=30.0,
+            is_hdr=False,
+            to_dict=lambda: {"width": 1280, "height": 720, "average_fps": 30.0},
+        )
+        with patch.dict(graph._TOOL_NAME_MAP, {"download_material_video": fake_tool}, clear=False), patch.object(
+            graph, "probe_media", return_value=fake_probe
+        ), patch.object(Path, "write_text", return_value=1):
             downloaded = graph._run_phase1_downloads(state, scheduler, selected)
 
         self.assertEqual(len(downloaded), 2)

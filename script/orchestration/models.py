@@ -41,6 +41,10 @@ class TaskSpec(BaseModel):
     conflict_keys: list[str] = Field(default_factory=list)
     input_artifacts: list[str] = Field(default_factory=list)
     output_kinds: list[str] = Field(default_factory=list)
+    estimated_seconds: float = Field(default=0.0, ge=0.0)
+    priority: int = Field(default=0, ge=-100, le=100)
+    optional: bool = False
+    timeout_seconds: float | None = Field(default=None, gt=0.0)
     retry: RetryPolicy = Field(default_factory=RetryPolicy)
 
     @field_validator("depends_on", "conflict_keys", "input_artifacts", "output_kinds")
@@ -66,6 +70,7 @@ class ExecutionPlan(BaseModel):
     goal: str = ""
     tasks: list[TaskSpec] = Field(default_factory=list)
     created_at: str = Field(default_factory=utc_now_iso)
+    deadline_at_epoch: float | None = Field(default=None, gt=0.0)
 
 
 class ArtifactRef(BaseModel):
@@ -98,6 +103,7 @@ class TaskState(BaseModel):
     error: str = ""
     result: dict[str, Any] = Field(default_factory=dict)
     artifact_ids: list[str] = Field(default_factory=list)
+    elapsed_seconds: float = Field(default=0.0, ge=0.0)
 
 
 class TaskExecutionResult(BaseModel):

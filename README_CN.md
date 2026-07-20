@@ -195,6 +195,14 @@ python -m venv .venv
 pip install -r requirements.txt
 ```
 
+如需启用抖音/小红书的浏览器渲染与用户授权重试，请改用：
+
+```bash
+pip install -r requirements-browser.txt
+```
+
+该功能复用本机 Chrome/Edge，不处理或绕过验证码；浏览器登录态只在当前任务的私有工作目录中临时使用。
+
 ### 3) API 配置与运行参数设置
 
 首先把模板配置文件复制一份，生成专属的自定义配置文件 `.env`，直接在终端执行这条命令即可：

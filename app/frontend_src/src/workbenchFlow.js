@@ -58,6 +58,16 @@ export function buildConfigPayload(configForm) {
     direct_phase3_execution: Boolean(configForm?.directPhase3Execution),
     prefer_local_materials: Boolean(configForm?.preferLocalMaterials),
     agent_stall_timeout_seconds: stallTimeout,
+    youtube_mode: String(configForm?.youtubeMode || "auto"),
+    enabled_material_platforms: String(configForm?.enabledMaterialPlatforms || "")
+      .split(",")
+      .map((item) => item.trim().toLowerCase())
+      .filter(Boolean),
+    default_deadline_seconds: Math.max(60, Number(configForm?.defaultDeadlineSeconds || 600)),
+    processing_mode: String(configForm?.processingMode || "auto"),
+    output_profile: String(configForm?.outputProfile || "auto"),
+    browser_auth_browser: String(configForm?.browserAuthBrowser || "").trim(),
+    browser_auth_profile: String(configForm?.browserAuthProfile || "").trim(),
   };
 }
 

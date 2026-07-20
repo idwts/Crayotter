@@ -20,6 +20,11 @@ SAFE_CAPABILITIES = frozenset(
         "metadata_probe",
         "user_provided_url_import",
         "authorized_cookie_use",
+        "public_page_crawl",
+        "rendered_dom_extraction",
+        "browser_network_observation",
+        "user_authorized_browser_session",
+        "media_response_download",
         "format_standardization",
         "manual_smoke_test",
     }

@@ -4,6 +4,8 @@ from ._shared import *
 from .download_bilibili_video import _download_via_bilibili_api
 from .material_sources import detect_platform_from_url
 from .search_bilibili_video import search_bilibili_video
+from .source_adapters import DownloadRequest
+from .search_material_sources import _source_registry
 
 
 @tool
@@ -13,7 +15,7 @@ def download_material_video(
     filename: str = "material_video",
     prefer_h264: bool = True,
     fallback_query: str = "",
-    fallback_to_bilibili: bool = True,
+    fallback_to_bilibili: bool = False,
 ) -> str:
     """下载任意支持平台素材，并清洗为剪辑兼容的 MP4/H.264/AAC。"""
     original_url = str(url or "").strip()
@@ -37,7 +39,30 @@ def download_material_video(
         if output_path.exists():
             output_path.unlink()
 
-        result = _run_yt_dlp_download(original_url, tmp_path, max_height=max_height, prefer_h264=prefer_h264)
+        adapter_payload: dict[str, Any] | None = None
+        if platform in {"douyin", "xiaohongshu", "rednote"}:
+            adapter_result = _source_registry().download(
+                DownloadRequest(
+                    url=original_url,
+                    platform="xiaohongshu" if platform == "rednote" else platform,
+                    destination=tmp_path,
+                    timeout_seconds=60.0,
+                    auth_profile=str(os.environ.get("CRAYOTTER_BROWSER_AUTH_PROFILE", "") or ""),
+                )
+            )
+            adapter_payload = adapter_result.to_dict()
+            adapter_succeeded = bool(adapter_payload.get("path")) and adapter_payload.get("status") in {
+                "success",
+                "partial",
+            }
+            result = subprocess.CompletedProcess(
+                args=[f"{platform}_source_adapter"],
+                returncode=0 if adapter_succeeded else 1,
+                stdout=json.dumps(adapter_payload, ensure_ascii=False),
+                stderr="" if adapter_succeeded else json.dumps(adapter_payload, ensure_ascii=False),
+            )
+        else:
+            result = _run_yt_dlp_download(original_url, tmp_path, max_height=max_height, prefer_h264=prefer_h264)
         fallback_used = False
         fallback_url = ""
         fallback_reason = ""
@@ -98,14 +123,28 @@ def download_material_video(
                 f"duration {duration:.1f}s exceeds {MAX_DOWNLOAD_DURATION_SECONDS}s",
             )
 
-        standardization = normalize_downloaded_material(
-            tmp_path,
-            output_path,
-            max_height=max_height,
-            target_fps=target_fps,
-            loudnorm_target=loudnorm_target,
-        )
-        tmp_path.unlink(missing_ok=True)
+        raw_ingest = str(os.environ.get("CRAYOTTER_PHASE1_RAW_INGEST", "true")).strip().lower() not in {
+            "0", "false", "no", "off"
+        }
+        if raw_ingest and not _needs_normalization(probe):
+            shutil.move(str(tmp_path), str(output_path))
+            standardization = {
+                "standardized": False,
+                "target_fps": None,
+                "pixel_format": str(probe.get("pixel_format") or ""),
+                "loudnorm_applied": False,
+                "loudnorm_target": 0.0,
+                "standardization_steps": ["raw_ingest"],
+            }
+        else:
+            standardization = normalize_downloaded_material(
+                tmp_path,
+                output_path,
+                max_height=max_height,
+                target_fps=target_fps,
+                loudnorm_target=loudnorm_target,
+            )
+            tmp_path.unlink(missing_ok=True)
         final_probe = _probe_video(output_path)
         codec = "h264"
         audio_codec = "aac"
@@ -127,9 +166,10 @@ def download_material_video(
                 "fps": round(float(final_probe.get("fps") or 0), 2),
                 "codec": codec,
                 "audio_codec": audio_codec,
-                "normalized": True,
+                "normalized": bool(standardization.get("standardized")),
                 "cache_hit": False,
                 "download_elapsed_seconds": round(elapsed, 3),
+                "adapter": adapter_payload or {},
             }
         payload.update(standardization)
         return json.dumps(payload, ensure_ascii=False)
