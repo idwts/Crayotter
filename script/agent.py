@@ -19,6 +19,8 @@ from memory_reference import (
     sanitize_memory_reference,
 )
 from model_runtime import ModelCallError, emit_benchmark_event, reset_model_abort
+from runtime import RuntimeSettings, WorkflowContext
+from workflow import SkillRegistry
 
 # ═══════════════════════════════════════════════════════════════════════════
 # API 配置 - 请在此处设置你的密钥和中转站地址
@@ -130,6 +132,7 @@ ENABLED_MATERIAL_PLATFORMS = [
     if item.strip()
 ]
 TARGET_DURATION_SECONDS = 0.0
+RUNTIME_SETTINGS: RuntimeSettings | None = None
 
 # 配置 agent 日志（始终写到仓库根目录 logs/）
 SCRIPT_DIR = Path(__file__).resolve().parent
@@ -268,6 +271,11 @@ def _build_runtime_settings() -> dict[str, Any]:
         "output_profile": OUTPUT_PROFILE,
         "enabled_material_platforms": ENABLED_MATERIAL_PLATFORMS,
         "target_duration_seconds": TARGET_DURATION_SECONDS,
+        "resume_execution": RESUME_EXECUTION,
+        "revision": REVISION,
+        "phase1_max_seconds": PHASE1_MAX_SECONDS,
+        "browser_auth_browser": BROWSER_AUTH_BROWSER,
+        "browser_auth_profile": BROWSER_AUTH_PROFILE,
         "video_api_key": VIDEO_API_KEY,
         "video_base_url": VIDEO_BASE_URL,
         "video_model_name": VIDEO_MODEL_NAME,
@@ -334,6 +342,7 @@ def apply_runtime_config(config: Mapping[str, Any] | None = None) -> dict[str, A
     global DEFAULT_DEADLINE_SECONDS, PHASE1_MAX_SECONDS, PROCESSING_MODE, YOUTUBE_MODE, OUTPUT_PROFILE
     global BROWSER_AUTH_BROWSER, BROWSER_AUTH_PROFILE
     global ENABLED_MATERIAL_PLATFORMS, TARGET_DURATION_SECONDS
+    global RUNTIME_SETTINGS
 
     config = dict(config or {})
 
@@ -518,7 +527,19 @@ def apply_runtime_config(config: Mapping[str, Any] | None = None) -> dict[str, A
         tts_base_url=TTS_BASE_URL,
         tts_model_name=TTS_MODEL_NAME,
     )
-    return _build_runtime_settings()
+    RUNTIME_SETTINGS = RuntimeSettings.from_mapping(_build_runtime_settings())
+    graph_module.set_workflow_context(
+        WorkflowContext(
+            settings=RUNTIME_SETTINGS,
+            tools=graph_module.TOOL_CATALOG,
+            workspace=WORKSPACE,
+            user_workspace=USER_WORKSPACE,
+            memory_experience_dir=MEMORY_EXPERIENCE_DIR,
+            skills=SkillRegistry.defaults(),
+            event_sink=graph_module.RUNTIME_EVENT_SINK,
+        )
+    )
+    return RUNTIME_SETTINGS.model_dump()
 
 
 def _ensure_runtime_ready() -> None:

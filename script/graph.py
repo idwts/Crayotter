@@ -24,7 +24,6 @@ import json
 import math
 import hashlib
 import logging
-import operator
 import os
 import re
 import shutil
@@ -35,15 +34,13 @@ import threading
 import uuid
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
-from typing import Annotated, Any, Literal
+from typing import Any, Literal
 
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
 from langchain_core.callbacks import BaseCallbackHandler
 from langchain_openai import ChatOpenAI
-from langgraph.graph import START, StateGraph
 from langgraph.prebuilt import create_react_agent
 from langgraph.types import Send
-from pydantic import BaseModel, Field
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 if str(SCRIPT_DIR) not in sys.path:
@@ -93,6 +90,90 @@ from media_consistency import (
     resolve_media_profile,
     validate_final_media,
 )
+try:
+    from .workflow import (
+        AgentState,
+        EDITING_TOOL_NAMES,
+        PREP_TOOL_NAMES,
+        REMOTE_PREP_TOOL_NAMES,
+        Plan,
+        Step,
+        StepResult,
+        WorkflowNodes,
+        WorkflowRoutes,
+        build_tool_catalog,
+        build_workflow_graph,
+    )
+except ImportError:
+    from workflow import (
+        AgentState,
+        EDITING_TOOL_NAMES,
+        PREP_TOOL_NAMES,
+        REMOTE_PREP_TOOL_NAMES,
+        Plan,
+        Step,
+        StepResult,
+        WorkflowNodes,
+        WorkflowRoutes,
+        build_tool_catalog,
+        build_workflow_graph,
+    )
+try:
+    from .phases.editing_execution import (
+        ControlledClip,
+        ControlledEditPlan,
+        ControlledNarration,
+        ControlledNarrationPlan,
+        ShortFormClip,
+        ShortFormEditPlan,
+        ShortFormExecutionError,
+        ShortFormNarration,
+        build_react_budget,
+        should_try_short_form_fallback,
+    )
+    from .phases.editing_research import (
+        build_research_execution_plan,
+        select_research_mode,
+    )
+    from .phases.material_preparation import (
+        build_fallback_plan,
+        deterministic_material_sufficient,
+        lightweight_material_collection,
+        lightweight_search_step_limit,
+        normalize_gap_report,
+        plan_has_cycle,
+        recommend_material_counts,
+        validate_and_normalize_plan,
+    )
+    from .runtime import WorkflowContext
+except ImportError:
+    from phases.editing_execution import (
+        ControlledClip,
+        ControlledEditPlan,
+        ControlledNarration,
+        ControlledNarrationPlan,
+        ShortFormClip,
+        ShortFormEditPlan,
+        ShortFormExecutionError,
+        ShortFormNarration,
+        build_react_budget,
+        should_try_short_form_fallback,
+    )
+    from phases.editing_research import (
+        build_research_execution_plan,
+        select_research_mode,
+    )
+    from phases.material_preparation import (
+        build_fallback_plan,
+        deterministic_material_sufficient,
+        lightweight_material_collection,
+        lightweight_search_step_limit,
+        normalize_gap_report,
+        plan_has_cycle,
+        recommend_material_counts,
+        validate_and_normalize_plan,
+    )
+    from runtime import WorkflowContext
 
 # ═══════════════════════════════════════════════════════════════════════════
 # API 配置 - 从 agent.py 传入
@@ -140,6 +221,18 @@ if PROCESSING_MODE not in {"auto", "speed", "quality"}:
 graph_logger = logging.getLogger("graph")
 RUNTIME_EVENT_SINK: Any = None
 _STEERING_COORDINATOR: SteeringCoordinator | None = None
+WORKFLOW_CONTEXT: WorkflowContext | None = None
+
+
+def set_workflow_context(context: WorkflowContext | None) -> None:
+    """Install static dependencies for the next graph run.
+
+    Module globals remain as a compatibility adapter for existing entrypoints
+    and tests while phase implementations migrate to explicit context access.
+    """
+
+    global WORKFLOW_CONTEXT
+    WORKFLOW_CONTEXT = context
 
 
 class _RealtimeToolTraceHandler(BaseCallbackHandler):
@@ -367,139 +460,17 @@ def _log_react_tool_trace(result_state: dict[str, Any]) -> None:
         graph_logger.warning("⚠️ 记录 Phase3 工具轨迹失败: %s", e)
 
 # ═══════════════════════════════════════════════════════════════════════════
-# State 定义
-# ═══════════════════════════════════════════════════════════════════════════
-
-
-class Step(BaseModel):
-    """一个执行步骤。"""
-
-    id: int = Field(description="步骤编号")
-    description: str = Field(description="步骤描述")
-    tool_hint: str = Field(default="", description="建议使用的工具名称")
-    depends_on: list[int] = Field(default_factory=list, description="前置步骤 ID")
-    arguments: dict[str, Any] = Field(default_factory=dict, description="工具调用参数")
-    status: str = Field(default="pending", description="pending/running/done/failed")
-    result: str = Field(default="", description="执行结果")
-
-
-class StepResult(BaseModel):
-    """Phase 1 单个 DAG 步骤的结构化执行结果。"""
-
-    step_id: int
-    tool_name: str
-    status: Literal["done", "failed", "skipped"]
-    result: str = ""
-    duration_seconds: float = 0.0
-    error: str = ""
-    data: dict[str, Any] = Field(default_factory=dict)
-
-
-class Plan(BaseModel):
-    """Phase 1 的执行计划（仅素材准备阶段）"""
-
-    goal: str = Field(description="用户的最终目标")
-    analysis: str = Field(default="", description="需求分析")
-    steps: list[Step] = Field(default_factory=list, description="有序步骤列表")
-
-
-class AgentState(BaseModel):
-    """Planner + ReAct 混合 Agent 的全局状态"""
-
-    # 用户输入
-    user_request: str = ""
-    base_user_request: str = ""
-    guidance_context: str = ""
-    steering_target_phase: str = ""
-    current_checkpoint: str = ""
-    revision: int = 1
-
-    # Phase 1: 结构化规划
-    plan: Plan | None = None
-    current_step_index: int = 0
-    active_step_id: int = 0
-    prep_round: int = 0
-    step_results: Annotated[list[StepResult], operator.add] = Field(default_factory=list)
-    messages: Annotated[list[Any], operator.add] = Field(default_factory=list)
-
-    # 时长控制
-    target_duration_seconds: float = 0.0
-    processing_budget: ProcessingBudget | None = None
-    budget_report: dict[str, Any] = Field(default_factory=dict)
-    degradation_level: int = Field(default=0, ge=0, le=4)
-
-    # Phase 标记: "planning" → "researching" → "react" → "done"
-    phase: str = "planning"
-
-    # Phase 2: 剪辑研究蓝图
-    editing_blueprint: str = ""
-    editing_plan_version: str = ""
-    editing_plan_status: str = ""
-    material_gap_report: dict[str, Any] = Field(default_factory=dict)
-    gap_round: int = 0
-    phase2_artifact_ids: list[str] = Field(default_factory=list)
-
-    # 最终输出
-    final_output: str = ""
-    should_end: bool = False
-
-    class Config:
-        arbitrary_types_allowed = True
-
-
-# ═══════════════════════════════════════════════════════════════════════════
 # 工具分组
 # ═══════════════════════════════════════════════════════════════════════════
-_TOOL_NAME_MAP: dict[str, Any] = {
-    getattr(t, "name", ""): t for t in ALL_TOOLS
-}
-
-# Phase 1: 素材准备工具
-PREP_TOOL_NAMES = {
-    "search_material_sources",
-    "import_material_urls",
-    "download_material_video",
-    "rank_video_candidates",
-    "analyze_video",
-    "inspect_video_duration",
-}
-REMOTE_PREP_TOOL_NAMES = {
-    "search_material_sources",
-    "import_material_urls",
-    "download_material_video",
-    "rank_video_candidates",
-}
-
-# Phase 3: 剪辑创作工具
-EDITING_TOOL_NAMES = {
-    "recall_semantic_segments",
-    "analyze_video",
-    "batch_cut_video",
-    "cut_video",
-    "merge_videos",
-    "inspect_video_duration",
-    "list_transition_presets",
-    "plan_transition_timeline",
-    "add_transition",
-    "validate_narration_timeline",
-    "build_edit_timeline_from_segments",
-    "align_narration_to_timeline",
-    "validate_timeline_constraints",
-    "score_cut_continuity",
-    "recommend_transition_for_cut",
-    "duck_background_audio",
-    "normalize_loudness",
-    "add_narration",
-    "add_narration_segments",
-    "add_subtitles",
-    "export_video",
-}
-
-PREP_TOOLS = [t for t in ALL_TOOLS if getattr(t, "name", "") in PREP_TOOL_NAMES]
-EDITING_TOOLS = [t for t in ALL_TOOLS if getattr(t, "name", "") in EDITING_TOOL_NAMES]
+TOOL_CATALOG = build_tool_catalog(ALL_TOOLS)
+_TOOL_NAME_MAP = TOOL_CATALOG.by_name
+PREP_TOOLS = TOOL_CATALOG.preparation
+EDITING_TOOLS = TOOL_CATALOG.editing
 
 
 def _resource_pool_config() -> ResourcePoolConfig:
+    if WORKFLOW_CONTEXT is not None:
+        return ResourcePoolConfig(**WORKFLOW_CONTEXT.settings.resource_pools())
     return ResourcePoolConfig(
         search_pool=SEARCH_POOL_SIZE,
         download_pool=DOWNLOAD_POOL_SIZE,
@@ -790,7 +761,8 @@ def _route_after_blueprint_steering(state: AgentState) -> str:
 
 
 def _artifact_registry() -> ArtifactRegistry:
-    return ArtifactRegistry(WORKSPACE)
+    workspace = WORKFLOW_CONTEXT.workspace if WORKFLOW_CONTEXT is not None else WORKSPACE
+    return ArtifactRegistry(workspace)
 
 
 def _editing_plan_store() -> EditingPlanStore:
@@ -1311,19 +1283,7 @@ def _extract_target_duration_seconds(user_request: str) -> float:
 
 
 def _recommend_material_counts(target_duration_seconds: float) -> dict[str, int]:
-    """Derive a bounded, monotonic material budget from output duration."""
-    material = material_budget_for_duration(target_duration_seconds or 30.0)
-    per_search = max(6, min(8, math.ceil(material.candidate_cap / material.search_task_cap)))
-    return {
-        "search_per_source": per_search,
-        "search_pages": 1 if target_duration_seconds <= 90 else 2,
-        "max_candidates": material.candidate_cap,
-        "mllm_review": material.candidate_cap,
-        "top_k_min": material.source_min,
-        "top_k_max": material.source_target,
-        "search_task_cap": material.search_task_cap,
-        "coverage_ratio_percent": int(round(material.coverage_ratio * 100)),
-    }
+    return recommend_material_counts(target_duration_seconds)
 
 
 def _enabled_material_platforms() -> list[str]:
@@ -1363,89 +1323,29 @@ def _fallback_prep_plan(
     user_request: str,
     counts: dict[str, int],
 ) -> Plan:
-    top_k = max(1, (counts["top_k_min"] + counts["top_k_max"]) // 2)
-    return Plan(
-        goal=user_request,
-        analysis="自动生成的素材准备 DAG",
-        steps=[
-            Step(
-                id=1,
-                description="搜索相关视频素材",
-                tool_hint="search_material_sources",
-                arguments={
-                    "query": user_request,
-                    "platforms": _enabled_material_platforms(),
-                    "max_results": counts["search_per_source"],
-                    "pages": counts["search_pages"],
-                    "expand_variants": 2 if counts["search_pages"] == 1 else 3,
-                    "max_total_results": counts["max_candidates"],
-                },
-            ),
-            Step(
-                id=2,
-                description="筛选候选视频",
-                tool_hint="rank_video_candidates",
-                depends_on=[1],
-                arguments={
-                    "candidates_json": "[]",
-                    "top_k": top_k,
-                    "max_review": counts["mllm_review"],
-                    "selection_goal": user_request,
-                },
-            ),
-            Step(
-                id=3,
-                description="下载最佳素材",
-                tool_hint="download_material_video",
-                depends_on=[2],
-                arguments={},
-            ),
-            Step(
-                id=4,
-                description="分析所有已下载视频",
-                tool_hint="analyze_video",
-                depends_on=[3],
-                arguments={"analysis_goal": user_request},
-            ),
-        ],
+    return build_fallback_plan(
+        user_request,
+        counts,
+        enabled_platforms=_enabled_material_platforms(),
     )
 
 
 def _lightweight_material_collection(counts: dict[str, int]) -> bool:
-    return (
-        SHORT_FORM_OPTIMIZATIONS
-        and counts.get("search_pages") == 1
-        and counts.get("max_candidates", 0) <= 32
+    return lightweight_material_collection(
+        counts,
+        enabled=SHORT_FORM_OPTIMIZATIONS,
     )
 
 
 def _lightweight_search_step_limit(counts: dict[str, int]) -> int:
-    if not _lightweight_material_collection(counts):
-        return 0
-    return int(counts.get("search_task_cap") or (2 if counts.get("max_candidates", 0) <= 24 else 3))
+    return lightweight_search_step_limit(
+        counts,
+        enabled=SHORT_FORM_OPTIMIZATIONS,
+    )
 
 
 def _plan_has_cycle(steps: list[Step]) -> bool:
-    ids = {step.id for step in steps}
-    indegree = {step.id: 0 for step in steps}
-    children: dict[int, list[int]] = {step.id: [] for step in steps}
-    for step in steps:
-        for dependency in step.depends_on:
-            if dependency not in ids:
-                continue
-            indegree[step.id] += 1
-            children[dependency].append(step.id)
-
-    ready = [step_id for step_id, degree in indegree.items() if degree == 0]
-    visited = 0
-    while ready:
-        step_id = ready.pop()
-        visited += 1
-        for child_id in children[step_id]:
-            indegree[child_id] -= 1
-            if indegree[child_id] == 0:
-                ready.append(child_id)
-    return visited != len(steps)
+    return plan_has_cycle(steps)
 
 
 def _validate_and_normalize_plan(
@@ -1453,108 +1353,17 @@ def _validate_and_normalize_plan(
     user_request: str,
     counts: dict[str, int],
 ) -> Plan:
-    """校验 Agent 提议的 DAG，并强制补齐素材准备阶段的不变量。"""
-    if not plan.steps:
-        return plan
-
-    raw_ids = [step.id for step in plan.steps]
-    if any(step_id <= 0 for step_id in raw_ids) or len(raw_ids) != len(set(raw_ids)):
-        graph_logger.warning("⚠️ Planner DAG 步骤 ID 非法，回退为标准 DAG")
-        return _fallback_prep_plan(user_request, counts)
-
-    valid_ids = set(raw_ids)
-    normalized: list[Step] = []
-    for step in plan.steps:
-        step.tool_hint = _normalize_tool_hint(step)
-        step.depends_on = sorted(
-            {
-                int(dependency)
-                for dependency in step.depends_on
-                if int(dependency) in valid_ids and int(dependency) != step.id
-            }
-        )
-        step.arguments = dict(step.arguments or {})
-        normalized.append(step)
-
-    search_step_limit = _lightweight_search_step_limit(counts)
-    if search_step_limit:
-        kept_search_ids = {
-            step.id
-            for step in [
-                item for item in normalized
-                if item.tool_hint == "search_material_sources"
-            ][:search_step_limit]
-        }
-        normalized = [
-            step
-            for step in normalized
-            if step.tool_hint != "search_material_sources" or step.id in kept_search_ids
-        ]
-        kept_ids = {step.id for step in normalized}
-        for step in normalized:
-            step.depends_on = [dependency for dependency in step.depends_on if dependency in kept_ids]
-            if step.tool_hint == "search_material_sources":
-                step.arguments["max_results"] = min(
-                    int(step.arguments.get("max_results", counts["search_per_source"]) or counts["search_per_source"]),
-                    counts["search_per_source"],
-                )
-                step.arguments["pages"] = 1
-                step.arguments["expand_variants"] = min(
-                    int(step.arguments.get("expand_variants", 2) or 2),
-                    2,
-                )
-                step.arguments["max_total_results"] = min(
-                    int(step.arguments.get("max_total_results", counts["max_candidates"]) or counts["max_candidates"]),
-                    counts["max_candidates"],
-                )
-            elif step.tool_hint == "rank_video_candidates":
-                step.arguments["top_k"] = min(
-                    int(step.arguments.get("top_k", counts["top_k_max"]) or counts["top_k_max"]),
-                    counts["top_k_max"],
-                )
-                step.arguments["max_review"] = min(
-                    int(step.arguments.get("max_review", counts["mllm_review"]) or counts["mllm_review"]),
-                    counts["mllm_review"],
-                )
-
-    if DIRECT_PHASE3_EXECUTION:
-        normalized = [
-            step for step in normalized
-            if step.tool_hint not in REMOTE_PREP_TOOL_NAMES
-        ]
-        kept_ids = {step.id for step in normalized}
-        for step in normalized:
-            step.depends_on = [item for item in step.depends_on if item in kept_ids]
-
-    search_ids = [
-        step.id
-        for step in normalized
-        if step.tool_hint in {"search_material_sources", "import_material_urls"}
-    ]
-    rank_ids = [step.id for step in normalized if step.tool_hint == "rank_video_candidates"]
-    download_ids = [step.id for step in normalized if step.tool_hint == "download_material_video"]
-
-    positions = {step.id: index for index, step in enumerate(normalized)}
-    for step in normalized:
-        required: set[int] = set(step.depends_on)
-        if step.tool_hint == "rank_video_candidates":
-            required.update(search_ids)
-        elif step.tool_hint == "download_material_video":
-            required.update(rank_ids)
-        elif step.tool_hint == "analyze_video":
-            required.update(
-                download_id
-                for download_id in download_ids
-                if positions.get(download_id, -1) < positions.get(step.id, -1)
-            )
-        step.depends_on = sorted(required)
-
-    if _plan_has_cycle(normalized):
-        graph_logger.warning("⚠️ Planner DAG 存在环路，回退为标准 DAG")
-        return _fallback_prep_plan(user_request, counts)
-
-    plan.steps = normalized
-    return plan
+    return validate_and_normalize_plan(
+        plan,
+        user_request,
+        counts,
+        normalize_tool_hint=_normalize_tool_hint,
+        enabled_platforms=_enabled_material_platforms(),
+        short_form_optimizations=SHORT_FORM_OPTIMIZATIONS,
+        direct_phase3_execution=DIRECT_PHASE3_EXECUTION,
+        remote_tool_names=REMOTE_PREP_TOOL_NAMES,
+        warning=lambda message: graph_logger.warning("⚠️ %s", message),
+    )
 
 
 def _build_tool_catalog(tools: list[Any] | None = None) -> str:
@@ -3382,15 +3191,7 @@ def material_gap_evaluator_node(state: AgentState) -> dict[str, Any]:
     )
 
     def execute(task_spec: TaskSpec, dependencies: dict[str, Any]) -> TaskExecutionResult:
-        deterministic_sufficient = (
-            metrics["source_count"] >= metrics["required_sources"]
-            and metrics["analysis_complete_ratio"] >= 2 / 3
-            and metrics["duration_coverage_ratio"] >= metrics["required_duration_coverage_ratio"]
-            and metrics["topic_coverage_ratio"] >= 0.15
-            and metrics["orientation_match_ratio"] >= 0.5
-            and metrics["quality_floor_met"]
-            and metrics["duplicate_ratio"] <= 0.75
-        )
+        deterministic_sufficient = deterministic_material_sufficient(metrics)
         prompt = (
             "你是视频素材缺口评估器。基于用户目标和确定性指标判断素材是否足够支撑完整叙事。"
             "只返回 JSON："
@@ -3419,30 +3220,20 @@ def material_gap_evaluator_node(state: AgentState) -> dict[str, Any]:
             report = _parse_json_object(str(response.content))
         except Exception:
             report = {}
-        decision = str(report.get("decision") or "").lower()
-        if metrics["analyzed_count"] == 0:
-            decision = "fail"
-        elif deterministic_sufficient and decision != "fail":
-            decision = "proceed"
-        elif decision not in {"proceed", "supplement", "fail"}:
-            decision = "supplement"
-        if DIRECT_PHASE3_EXECUTION and metrics["analyzed_count"] > 0:
-            decision = "proceed"
         supplement_limit = (
             state.processing_budget.material.supplement_rounds
             if state.processing_budget is not None
             else 1
         )
-        if state.gap_round >= supplement_limit and decision == "supplement":
-            decision = "proceed" if deterministic_sufficient else "fail"
-        report.update(
-            {
-                "decision": decision,
-                "metrics": metrics,
-                "round": state.gap_round,
-                "evaluated_at": time.time(),
-            }
+        report = normalize_gap_report(
+            report,
+            metrics=metrics,
+            round_index=state.gap_round,
+            supplement_limit=supplement_limit,
+            direct_phase3_execution=DIRECT_PHASE3_EXECUTION,
+            evaluated_at=time.time(),
         )
+        decision = str(report["decision"])
         report_path = WORKSPACE / f"material_gap_report_round_{state.gap_round}.json"
         report_path.write_text(
             json.dumps(report, ensure_ascii=False, indent=2),
@@ -4095,10 +3886,11 @@ def editing_research_node(state: AgentState) -> dict[str, Any]:
         if state.processing_budget is not None
         else float("inf")
     )
-    if (
-        SHORT_FORM_OPTIMIZATIONS
-        and 0 < state.target_duration_seconds <= 45
-    ) or remaining_seconds < 60:
+    if select_research_mode(
+        target_duration_seconds=state.target_duration_seconds,
+        remaining_seconds=remaining_seconds,
+        short_form_optimizations=SHORT_FORM_OPTIMIZATIONS,
+    ) == "compact":
         compact_state = state
         if remaining_seconds < 60:
             level = max(2, state.degradation_level)
@@ -4129,85 +3921,11 @@ def editing_research_node(state: AgentState) -> dict[str, Any]:
 
     registry = _artifact_registry()
     scheduler = _resource_scheduler(registry)
-    source_tasks: list[TaskSpec] = []
-    for path in analysis_files:
-        source_id = uuid.uuid5(uuid.NAMESPACE_URL, str(path.resolve())).hex[:12]
-        source_tasks.append(
-            TaskSpec(
-                id=f"phase2_source_{source_id}",
-                phase="phase2",
-                kind="source_research",
-                description=f"研究素材 {path.name}",
-                arguments={
-                    "analysis_path": str(path.resolve()),
-                    "analysis_size": path.stat().st_size,
-                    "analysis_mtime_ns": path.stat().st_mtime_ns,
-                    "user_request": state.user_request,
-                    "target_duration_seconds": state.target_duration_seconds,
-                },
-                resources={"llm_pool": 1},
-                output_kinds=["source_research"],
-                retry=RetryPolicy(max_attempts=2, backoff_seconds=0.5),
-            )
-        )
-
-    source_ids = [task.id for task in source_tasks]
-    if state.target_duration_seconds <= 90:
-        topic_prompts = {
-            "narrative": "设计叙事结构、开场钩子、高潮和结尾记忆点。",
-            "visual_pacing": "合并分析视觉连续性、镜头顺序、色调、转场和节奏曲线。",
-        }
-    else:
-        topic_prompts = {
-            "narrative": "设计叙事结构、开场钩子、高潮和结尾记忆点。",
-            "visual": "分析跨素材视觉连续性、镜头顺序、色调和转场逻辑。",
-            "pacing": "设计目标时长内的片段分配、信息密度和节奏曲线。",
-            "narration": "设计严格贴合画面的分段旁白、留白和字幕策略。",
-        }
-    topic_tasks = [
-        TaskSpec(
-            id=f"phase2_topic_{name}",
-            phase="phase2",
-            kind="topic_research",
-            description=instruction,
-            arguments={
-                "topic": name,
-                "instruction": instruction,
-                "user_request": state.user_request,
-                "target_duration_seconds": state.target_duration_seconds,
-                "source_task_ids": source_ids,
-            },
-            depends_on=source_ids,
-            resources={"llm_pool": 1},
-            output_kinds=["topic_research"],
-            estimated_seconds=15.0,
-            optional=name != "narrative",
-            priority=20 if name == "narrative" else 10,
-            retry=RetryPolicy(max_attempts=2, backoff_seconds=0.5),
-        )
-        for name, instruction in topic_prompts.items()
-    ]
     integrator_id = "phase2_blueprint_integrator"
-    integrator_task = TaskSpec(
-        id=integrator_id,
-        phase="phase2",
-        kind="blueprint_integrator",
-        description="整合全部素材研究和专题策略",
-        arguments={
-            "user_request": state.user_request,
-            "target_duration_seconds": state.target_duration_seconds,
-            "topic_task_ids": [task.id for task in topic_tasks],
-        },
-        depends_on=[task.id for task in topic_tasks],
-        resources={"llm_pool": 1},
-        output_kinds=["editing_blueprint", "editing_blueprint_json"],
-        retry=RetryPolicy(max_attempts=2, backoff_seconds=0.5),
-    )
-    plan = ExecutionPlan(
-        plan_id="phase2_parallel_research",
-        phase="phase2",
-        goal=state.user_request,
-        tasks=[*source_tasks, *topic_tasks, integrator_task],
+    plan = build_research_execution_plan(
+        analysis_files=analysis_files,
+        user_request=state.user_request,
+        target_duration_seconds=state.target_duration_seconds,
         deadline_at_epoch=_phase_deadline(state, "phase2"),
     )
 
@@ -4500,58 +4218,6 @@ add_narration_segments(
   - user_temp: {user_workspace}
   - memory_experience: {memory_experience}
 """
-
-
-class ShortFormClip(BaseModel):
-    source_path: str
-    start: float = Field(ge=0)
-    end: float = Field(gt=0)
-    label: str = ""
-
-
-class ShortFormNarration(BaseModel):
-    text: str
-    start: float = Field(ge=0)
-    end: float = Field(gt=0)
-
-
-class ShortFormEditPlan(BaseModel):
-    clips: list[ShortFormClip] = Field(min_length=3, max_length=4)
-    narration: list[ShortFormNarration] = Field(min_length=1, max_length=3)
-    voice: str = "Ethan"
-    output_name: str = "short_form_promo"
-
-
-class ShortFormExecutionError(RuntimeError):
-    pass
-
-
-class ControlledClip(BaseModel):
-    scene_id: str = ""
-    source_path: str
-    start: float = Field(ge=0)
-    end: float = Field(gt=0)
-    label: str = ""
-
-
-class ControlledNarration(BaseModel):
-    scene_id: str = ""
-    text: str
-    start: float = Field(ge=0)
-    end: float = Field(gt=0)
-
-
-class ControlledEditPlan(BaseModel):
-    clips: list[ControlledClip] = Field(min_length=1, max_length=24)
-    narration: list[ControlledNarration] = Field(default_factory=list, max_length=24)
-    voice: str = "Ethan"
-    output_name: str = "output_final"
-    resolution: Literal["720p", "1080p", "4k"] = "1080p"
-
-
-class ControlledNarrationPlan(BaseModel):
-    narration: list[ControlledNarration] = Field(default_factory=list, max_length=24)
-    voice: str = "Ethan"
 
 
 class SteeringReplanRequested(RuntimeError):
@@ -6449,10 +6115,10 @@ def react_editor_node(state: AgentState) -> dict[str, Any]:
                 {"reason": str(exc)[:500]},
             )
 
-    if (
-        SHORT_FORM_OPTIMIZATIONS
-        and 0 < state.target_duration_seconds <= 20
-        and state.editing_blueprint
+    if should_try_short_form_fallback(
+        enabled=SHORT_FORM_OPTIMIZATIONS,
+        target_duration_seconds=state.target_duration_seconds,
+        has_blueprint=bool(state.editing_blueprint),
     ):
         try:
             final_msg = _run_short_form_editor(state)
@@ -6547,9 +6213,10 @@ def react_editor_node(state: AgentState) -> dict[str, Any]:
             f"Phase 3 受控路径失败且仅剩 {remaining_seconds:.1f}s，停止进入 ReAct 回退"
         )
     react_deadline = time.time() + max(10.0, remaining_seconds - 10.0)
-    max_tool_calls = max(4, min(20, int(remaining_seconds // 8)))
-    max_encoding_calls = max(1, min(6, int(remaining_seconds // 35)))
-    recursion_limit = max(12, min(48, max_tool_calls * 2 + 4))
+    react_budget = build_react_budget(remaining_seconds)
+    max_tool_calls = react_budget.max_tool_calls
+    max_encoding_calls = react_budget.max_encoding_calls
+    recursion_limit = react_budget.recursion_limit
     _emit_orchestration_event(
         "phase3_react_budget",
         {
@@ -6618,61 +6285,45 @@ def react_editor_node(state: AgentState) -> dict[str, Any]:
 # ═══════════════════════════════════════════════════════════════════════════
 # 构建图
 # ═══════════════════════════════════════════════════════════════════════════
+def _route_after_react_editor(state: AgentState) -> str:
+    if state.should_end or state.phase == "done":
+        return "__end__"
+    if state.phase == "planning":
+        return "planner"
+    if state.phase == "researching":
+        return "editing_research"
+    return "react_editor"
+
+
 def build_graph() -> Any:
-    """构建 Planner + ReAct 混合架构图。"""
+    """Build the workflow from stable topology and injected implementations."""
 
-    graph = StateGraph(AgentState)
-
-    # 添加节点
-    graph.add_node("steering_entry", steering_entry_node)
-    graph.add_node("steering_after_planner", steering_after_planner_node)
-    graph.add_node("steering_after_phase1", steering_after_phase1_node)
-    graph.add_node("steering_after_material_gap", steering_after_material_gap_node)
-    graph.add_node("steering_after_blueprint", steering_after_blueprint_node)
-    graph.add_node("planner", planner_node)              # Phase 1: 规划素材准备
-    graph.add_node("phase1_scheduler", phase1_scheduler_node)
-    graph.add_node("material_gap_evaluator", material_gap_evaluator_node)
-    graph.add_node("editing_research", editing_research_node)  # Phase 2: 深度剪辑研究
-    graph.add_node("generate_editing_plan", generate_editing_plan_node)
-    graph.add_node("validate_editing_plan", validate_editing_plan_node)
-    graph.add_node("plan_review_gate", plan_review_gate_node)
-    graph.add_node("react_editor", react_editor_node)    # Phase 3: 自主创作
-
-    # Phase 1 边
-    graph.add_edge(START, "steering_entry")
-    graph.add_conditional_edges("steering_entry", _route_steering_entry)
-    graph.add_edge("planner", "steering_after_planner")
-    graph.add_conditional_edges("steering_after_planner", _route_after_planner_steering)
-    graph.add_edge("phase1_scheduler", "steering_after_phase1")
-    graph.add_conditional_edges("steering_after_phase1", _route_after_phase1_steering)
-    graph.add_edge("material_gap_evaluator", "steering_after_material_gap")
-    graph.add_conditional_edges(
-        "steering_after_material_gap",
-        _route_after_material_gap_steering,
-    )
-
-    # Phase 2 → Phase 3
-    graph.add_edge("editing_research", "steering_after_blueprint")
-    graph.add_conditional_edges("steering_after_blueprint", _route_after_blueprint_steering)
-    graph.add_edge("generate_editing_plan", "validate_editing_plan")
-    graph.add_edge("validate_editing_plan", "plan_review_gate")
-    graph.add_edge("plan_review_gate", "react_editor")
-
-    # Phase 3 边
-    graph.add_conditional_edges(
-        "react_editor",
-        lambda state: (
-            "__end__"
-            if state.should_end or state.phase == "done"
-            else "planner"
-            if state.phase == "planning"
-            else "editing_research"
-            if state.phase == "researching"
-            else "react_editor"
+    return build_workflow_graph(
+        state_schema=AgentState,
+        nodes=WorkflowNodes(
+            steering_entry=steering_entry_node,
+            steering_after_planner=steering_after_planner_node,
+            steering_after_phase1=steering_after_phase1_node,
+            steering_after_material_gap=steering_after_material_gap_node,
+            steering_after_blueprint=steering_after_blueprint_node,
+            planner=planner_node,
+            phase1_scheduler=phase1_scheduler_node,
+            material_gap_evaluator=material_gap_evaluator_node,
+            editing_research=editing_research_node,
+            generate_editing_plan=generate_editing_plan_node,
+            validate_editing_plan=validate_editing_plan_node,
+            plan_review_gate=plan_review_gate_node,
+            react_editor=react_editor_node,
+        ),
+        routes=WorkflowRoutes(
+            after_steering_entry=_route_steering_entry,
+            after_planner_steering=_route_after_planner_steering,
+            after_phase1_steering=_route_after_phase1_steering,
+            after_material_gap_steering=_route_after_material_gap_steering,
+            after_blueprint_steering=_route_after_blueprint_steering,
+            after_react_editor=_route_after_react_editor,
         ),
     )
-
-    return graph.compile()
 
 
 """
