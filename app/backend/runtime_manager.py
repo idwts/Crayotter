@@ -15,7 +15,12 @@ from .config_store import JOBS_DIR, ConfigStore
 from .event_bus import EventBus
 from .models import AppConfig, JobRecord, JobRequest, RuntimeEvent, TERMINAL_JOB_STATUSES, utc_now_iso
 from .task_titles import summarize_task_title
-from app.media_metadata import video_duration_seconds
+from .services import (
+    ArtifactQueryService,
+    JobRepository,
+    PlanReviewService,
+    WorkerSupervisor,
+)
 from app.runtime_paths import configure_runtime_environment, get_bundle_root, get_runtime_root, is_frozen
 from app.steering import SteeringCoordinator, SteeringStore, classify_guidance
 from script.editing_plan import (
@@ -60,15 +65,15 @@ class ManagedJob:
 
 class RuntimeManager:
     AGENT_STALL_TIMEOUT_SECONDS = 600
-    VIDEO_SUFFIXES = {".mp4", ".webm", ".mov", ".mkv", ".avi", ".m4v", ".mpeg", ".mpg"}
-    TEXT_SUFFIXES = {".txt", ".md", ".json", ".jsonl", ".log"}
-    _media_metadata_cache: dict[tuple[str, int, int], float | None] = {}
-    _media_metadata_lock = threading.RLock()
 
     def __init__(self, config_store: ConfigStore) -> None:
         self.config_store = config_store
         self._jobs: dict[str, ManagedJob] = {}
         self._lock = threading.RLock()
+        self._job_repository = JobRepository(JOBS_DIR)
+        self._artifact_query = ArtifactQueryService(get_runtime_root())
+        self._plan_reviews = PlanReviewService()
+        self._worker_supervisor = WorkerSupervisor()
         self._load_existing_jobs()
 
     def list_jobs(self) -> list[dict[str, Any]]:
@@ -851,25 +856,7 @@ class RuntimeManager:
 
     @staticmethod
     def _terminate_process_tree(process: subprocess.Popen[str]) -> None:
-        if process.poll() is not None:
-            return
-        try:
-            if os.name == "nt":
-                subprocess.run(
-                    ["taskkill", "/PID", str(process.pid), "/T", "/F"],
-                    capture_output=True,
-                    text=True,
-                    timeout=5,
-                )
-            else:
-                process.terminate()
-                process.wait(timeout=2)
-        except Exception:
-            try:
-                process.kill()
-                process.wait(timeout=2)
-            except Exception:
-                pass
+        WorkerSupervisor.terminate_process_tree(process)
 
     def _mark_running(self, job: ManagedJob) -> None:
         with job.lock:
@@ -968,9 +955,8 @@ class RuntimeManager:
             self._write_summary(job)
         return stored
 
-    @staticmethod
-    def _plan_store(job: ManagedJob) -> EditingPlanStore:
-        return EditingPlanStore(job.job_dir / "workspace")
+    def _plan_store(self, job: ManagedJob) -> EditingPlanStore:
+        return self._plan_reviews.store_for_workspace(job.job_dir / "workspace")
 
     def _generate_plan_patch(
         self,
@@ -1058,174 +1044,24 @@ class RuntimeManager:
         with path.open("a", encoding="utf-8") as handle:
             handle.write(json.dumps(event, ensure_ascii=False) + "\n")
 
-    @staticmethod
-    def _write_summary(job: ManagedJob) -> None:
-        payload = job.record.model_dump()
-        payload["job_dir"] = str(job.job_dir)
-        job.summary_path.write_text(
-            json.dumps(payload, ensure_ascii=False, indent=2),
-            encoding="utf-8",
-        )
+    def _write_summary(self, job: ManagedJob) -> None:
+        self._job_repository.save(job.record, job.job_dir)
 
     @staticmethod
     def _new_job_id() -> str:
         return f"job_{time.strftime('%Y%m%d_%H%M%S')}_{uuid.uuid4().hex[:6]}"
 
-    @staticmethod
-    def _artifact_kind(suffix: str) -> str:
-        if suffix in RuntimeManager.VIDEO_SUFFIXES:
-            return "video"
-        if suffix in RuntimeManager.TEXT_SUFFIXES:
-            return "text"
-        return "file"
-
-    @classmethod
-    def _video_duration_seconds(cls, path: Path, stat: os.stat_result) -> float | None:
-        key = (str(path), stat.st_mtime_ns, stat.st_size)
-        with cls._media_metadata_lock:
-            if key in cls._media_metadata_cache:
-                return cls._media_metadata_cache[key]
-
-        try:
-            parsed = video_duration_seconds(path)
-            duration = round(parsed, 2) if parsed is not None else None
-        except (OSError, TypeError, ValueError):
-            duration = None
-
-        with cls._media_metadata_lock:
-            stale_keys = [cached for cached in cls._media_metadata_cache if cached[0] == str(path)]
-            for stale_key in stale_keys:
-                cls._media_metadata_cache.pop(stale_key, None)
-            cls._media_metadata_cache[key] = duration
-        return duration
-
-    @classmethod
-    def _collect_artifacts(cls, job: ManagedJob) -> list[dict[str, Any]]:
-        runtime_root = get_runtime_root()
-        results: list[dict[str, Any]] = []
-        seen: set[str] = set()
-        registry_metadata: dict[str, dict[str, Any]] = {}
-
-        candidate_paths: list[Path] = []
-        for path_str in job.record.output_files:
-            if path_str:
-                candidate_paths.append(Path(path_str))
-        output_dir = job.job_dir / "output"
-        if output_dir.exists():
-            for path in sorted(output_dir.rglob("*")):
-                if path.is_file():
-                    candidate_paths.append(path)
-        manifest_path = job.job_dir / "workspace" / ".crayotter" / "artifact_manifest.json"
-        if manifest_path.exists():
-            try:
-                manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-                for artifact in manifest.get("artifacts", []):
-                    raw_path = str(artifact.get("path") or "")
-                    if not raw_path:
-                        continue
-                    registry_metadata[str(Path(raw_path).resolve(strict=False))] = dict(artifact)
-                    candidate_paths.append(Path(raw_path))
-            except Exception:
-                pass
-
-        for path in candidate_paths:
-            try:
-                resolved = path.resolve(strict=False)
-            except Exception:
-                resolved = path
-            key = str(resolved)
-            registry_item = registry_metadata.get(key, {})
-            if key in seen:
-                continue
-            seen.add(key)
-            exists = resolved.exists() and resolved.is_file()
-            if not exists:
-                if registry_item:
-                    metadata = dict(registry_item.get("metadata", {}))
-                    artifact_revision = int(metadata.get("revision", 1) or 1)
-                    metadata["revision"] = artifact_revision
-                    metadata["current"] = artifact_revision == job.record.revision
-                    results.append(
-                        {
-                            "path": str(resolved),
-                            "display_path": str(resolved),
-                            "name": resolved.name,
-                            "suffix": resolved.suffix.lower(),
-                            "kind": registry_item.get("kind", "file"),
-                            "size_bytes": 0,
-                            "duration_seconds": None,
-                            "artifact_id": registry_item.get("id", ""),
-                            "producer_task_id": registry_item.get("producer_task_id", ""),
-                            "phase": registry_item.get("phase", ""),
-                            "valid": False,
-                            "metadata": metadata,
-                            "revision": artifact_revision,
-                            "is_current": metadata["current"],
-                        }
-                    )
-                continue
-            try:
-                relative = resolved.relative_to(runtime_root)
-                display_path = str(relative)
-            except Exception:
-                display_path = str(resolved)
-            suffix = resolved.suffix.lower()
-            stat = resolved.stat()
-            kind = str(registry_item.get("kind") or cls._artifact_kind(suffix))
-            metadata = dict(registry_item.get("metadata", {}))
-            artifact_revision = int(metadata.get("revision", 1) or 1)
-            metadata["revision"] = artifact_revision
-            metadata["current"] = artifact_revision == job.record.revision
-            results.append(
-                {
-                    "path": str(resolved),
-                    "display_path": display_path,
-                    "name": resolved.name,
-                    "suffix": suffix,
-                    "kind": kind,
-                    "size_bytes": stat.st_size,
-                    "duration_seconds": (
-                        cls._video_duration_seconds(resolved, stat)
-                        if suffix in cls.VIDEO_SUFFIXES
-                        else None
-                    ),
-                    "artifact_id": registry_item.get("id", ""),
-                    "producer_task_id": registry_item.get("producer_task_id", ""),
-                    "phase": registry_item.get("phase", ""),
-                    "valid": bool(registry_item.get("valid", True)),
-                    "metadata": metadata,
-                    "revision": artifact_revision,
-                    "is_current": metadata["current"],
-                }
-            )
-        return sorted(results, key=lambda item: item["display_path"])
+    def _collect_artifacts(self, job: ManagedJob) -> list[dict[str, Any]]:
+        return self._artifact_query.collect(job)
 
     def _load_existing_jobs(self) -> None:
-        if not JOBS_DIR.exists():
-            return
-
-        for job_dir in sorted(JOBS_DIR.iterdir()):
-            if not job_dir.is_dir():
-                continue
-            summary_path = job_dir / "summary.json"
-            if not summary_path.exists():
-                continue
-            try:
-                payload = json.loads(summary_path.read_text(encoding="utf-8"))
-                record = JobRecord.model_validate(payload)
-                job = ManagedJob(record=record, job_dir=job_dir)
-                if job.events_path.exists():
-                    seeded_events: list[dict[str, Any]] = []
-                    for line in job.events_path.read_text(encoding="utf-8").splitlines():
-                        if not line.strip():
-                            continue
-                        seeded_events.append(json.loads(line))
-                    job.bus.seed(seeded_events)
-                if record.status not in TERMINAL_JOB_STATUSES and record.status != "interrupted":
-                    record.status = "interrupted"
-                    record.completed_at = None
-                    record.error = record.error or "Backend restarted before the task finished."
-                    self._write_summary(job)
-                self._jobs[record.job_id] = job
-            except Exception:
-                continue
+        for persisted in self._job_repository.load_all():
+            record = persisted.record
+            job = ManagedJob(record=record, job_dir=persisted.job_dir)
+            job.bus.seed(persisted.events)
+            if record.status not in TERMINAL_JOB_STATUSES and record.status != "interrupted":
+                record.status = "interrupted"
+                record.completed_at = None
+                record.error = record.error or "Backend restarted before the task finished."
+                self._write_summary(job)
+            self._jobs[record.job_id] = job

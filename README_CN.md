@@ -94,6 +94,10 @@ Crayotter 是一个多模态、Agent 驱动的视频自动编辑系统，可以�
 
 ## 项目概览
 
+更完整的当前实现说明见
+[业务流程、系统架构与模块化设计](./docs/architecture_cn.md)，其中包含端到端流程图、
+组件架构图、技术栈、关键数据对象、扩展规则与分阶段模块化路线。
+
 <p align="center">
   <img src="./crayottor_framework.jpg" alt="Crayotter 框架总览">
 </p>
