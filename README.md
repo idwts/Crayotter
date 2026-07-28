@@ -21,6 +21,9 @@
   <a href="https://arxiv.org/abs/2606.07636" target="_blank" rel="noopener noreferrer">
     <img src="https://img.shields.io/badge/arXiv-2606.07636-b31b1b?style=for-the-badge&logo=arxiv&logoColor=white" alt="arXiv Paper">
   </a>
+  <a href="./LICENSE" target="_blank" rel="noopener noreferrer">
+    <img src="https://img.shields.io/badge/License-PolyForm%20Noncommercial%201.0.0-blue?style=for-the-badge" alt="License">
+  </a>
 </p>
 
 <p align="center">
