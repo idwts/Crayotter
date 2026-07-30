@@ -24,5 +24,11 @@ app/bin/
 packaging/generated/
 Crayotter-Windows-x64.zip
 
+# Local documentation and reading notes (not tracked in git)
+# docs/
+docs/*
+!docs/project-control/
+!docs/worklogs/
+
 phase3_rl/generated/
 phase3_rl/runs/
