@@ -1288,63 +1288,93 @@ def _prepare_timestamped_video_for_analysis(video_path: Path) -> Path | None:
     return None
 
 def _tts_generate(text: str, voice: str, out_path: Path) -> str | None:
-    """调用 DashScope TTS 生成音频并保存到 out_path。成功返回 None，失败返回错误信息。"""
+    """调用 DashScope TTS 生成音频并保存到 out_path。成功返回 None，失败返回错误信息。
+
+    对 429 限流错误做指数退避重试，降低因瞬时 QPS 超限导致整个旁白链路失败的概率。
+    """
     supported_voices = {"Cherry", "Serena", "Ethan", "Chelsie", "Dylan", "Jada", "Sunny"}
     if voice not in supported_voices:
         logger.warning("TTS 音色 %s 不受当前模型支持，自动使用 Ethan", voice)
         voice = "Ethan"
+
+    max_attempts = 3
+    base_delay = 1.0
     started_at = time.perf_counter()
-    try:
-        ensure_model_calls_allowed()
-        emit_benchmark_event(
-            "model_call_started",
-            {"stage": "tts", "model": TTS_MODEL_NAME, "voice": voice},
-        )
-        dashscope.api_key = TTS_API_KEY
-        response = dashscope.MultiModalConversation.call(
-            model=TTS_MODEL_NAME,
-            text=text,
-            voice=voice,
-        )
-        if response.status_code == 200:
-            audio_url = response.output.audio.url
-            import urllib.request
-            urllib.request.urlretrieve(audio_url, str(out_path))
-            logger.info("TTS 生成成功: %s (%.0f chars) -> %s", text[:30], len(text), out_path.name)
+
+    def _try_once() -> tuple[bool, str | None]:
+        """返回 (是否成功, 错误信息)。"""
+        try:
+            ensure_model_calls_allowed()
             emit_benchmark_event(
-                "model_call_completed",
-                {
-                    "stage": "tts",
-                    "model": TTS_MODEL_NAME,
-                    "voice": voice,
-                    "duration_seconds": round(time.perf_counter() - started_at, 3),
-                },
+                "model_call_started",
+                {"stage": "tts", "model": TTS_MODEL_NAME, "voice": voice},
             )
-            return None
-        else:
+            dashscope.api_key = TTS_API_KEY
+            response = dashscope.MultiModalConversation.call(
+                model=TTS_MODEL_NAME,
+                text=text,
+                voice=voice,
+            )
+            if response.status_code == 200:
+                audio_url = response.output.audio.url
+                import urllib.request
+                urllib.request.urlretrieve(audio_url, str(out_path))
+                logger.info("TTS 生成成功: %s (%.0f chars) -> %s", text[:30], len(text), out_path.name)
+                emit_benchmark_event(
+                    "model_call_completed",
+                    {
+                        "stage": "tts",
+                        "model": TTS_MODEL_NAME,
+                        "voice": voice,
+                        "duration_seconds": round(time.perf_counter() - started_at, 3),
+                    },
+                )
+                return True, None
+            else:
+                status_code = getattr(response, "status_code", None)
+                message = getattr(response, "message", "TTS returned non-success status.")
+                if fail_fast_model_errors():
+                    raise_model_failure(
+                        stage="tts",
+                        model=TTS_MODEL_NAME,
+                        message=message,
+                        status_code=status_code,
+                        request_id=str(getattr(response, "request_id", "") or ""),
+                        duration_seconds=time.perf_counter() - started_at,
+                    )
+                return False, f"TTS 失败 (status={status_code}): {message}"
+        except ModelCallError:
+            raise
+        except Exception as e:
             if fail_fast_model_errors():
+                response = getattr(e, "response", None)
                 raise_model_failure(
                     stage="tts",
                     model=TTS_MODEL_NAME,
-                    message=getattr(response, "message", "TTS returned non-success status."),
+                    message=e,
                     status_code=getattr(response, "status_code", None),
-                    request_id=str(getattr(response, "request_id", "") or ""),
                     duration_seconds=time.perf_counter() - started_at,
                 )
-            return f"TTS 失败 (status={response.status_code}): {response.message}"
-    except ModelCallError:
-        raise
-    except Exception as e:
-        if fail_fast_model_errors():
-            response = getattr(e, "response", None)
-            raise_model_failure(
-                stage="tts",
-                model=TTS_MODEL_NAME,
-                message=e,
-                status_code=getattr(response, "status_code", None),
-                duration_seconds=time.perf_counter() - started_at,
+            return False, f"TTS 异常: {e}"
+
+    last_error: str | None = None
+    for attempt in range(max_attempts):
+        if attempt > 0:
+            delay = base_delay * (2 ** (attempt - 1))
+            logger.warning(
+                "TTS 遇到限流/错误，第 %d 次重试，等待 %.1fs: %s",
+                attempt,
+                delay,
+                last_error,
             )
-        return f"TTS 异常: {e}"
+            time.sleep(delay)
+        success, last_error = _try_once()
+        if success:
+            return None
+        if last_error and "429" not in last_error and "rate limit" not in last_error.lower():
+            break
+
+    return last_error or "TTS 失败：已达到最大重试次数"
 
 
 __all__ = [

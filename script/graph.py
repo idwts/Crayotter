@@ -197,6 +197,10 @@ REACT_MAX_MERGE_VIDEO_CALLS: int = max(
     1,
     int(os.environ.get("CRAYOTTER_REACT_MAX_MERGE_VIDEO_CALLS", "4") or 4),
 )
+MAX_REACT_ANALYSIS_CONTEXT_CHARS: int = max(
+    4096,
+    int(os.environ.get("CRAYOTTER_MAX_REACT_ANALYSIS_CONTEXT_CHARS", "20000") or 20000),
+)
 SHORT_FORM_OPTIMIZATIONS: bool = str(
     os.environ.get("CRAYOTTER_SHORT_FORM_OPTIMIZATIONS", "true")
 ).strip().lower() not in {"0", "false", "no", "off"}
@@ -1683,6 +1687,8 @@ def _build_full_analysis_context() -> str:
     """读取所有分析 JSON，构建完整的分析上下文供 Phase 2/2 使用。
 
     Enhanced: 包含每个片段的时长计算和更结构化的输出，方便深度研究。
+    当素材较多时，会对分析详情做自适应截断，避免 ReAct fallback 时上下文
+    超过模型输入上限（如 qwen-max 的 30720 token）。
     """
     json_files = _iter_analysis_json_files()
     if not json_files:
@@ -1733,7 +1739,29 @@ def _build_full_analysis_context() -> str:
         f"━━━ 素材总览: {len(blocks)} 个源视频, "
         f"总可用片段时长 {total_available_duration:.1f}s ━━━\n\n"
     )
-    return summary + "\n\n".join(blocks)
+    full_text = summary + "\n\n".join(blocks)
+
+    # 自适应截断：优先保留素材总览，再保留各块的结构化元数据，最后截断分析详情。
+    max_chars = MAX_REACT_ANALYSIS_CONTEXT_CHARS
+    if len(full_text) > max_chars:
+        # 预留 summary 空间
+        overhead = len(summary) + 200
+        budget_per_block = max(300, (max_chars - overhead) // max(1, len(blocks)))
+        truncated_blocks: list[str] = []
+        for block in blocks:
+            if len(block) > budget_per_block and "分析详情:" in block:
+                prefix, _, detail = block.partition("   分析详情:\n")
+                allowed_detail = max(0, budget_per_block - len(prefix) - 50)
+                block = f"{prefix}\n   分析详情:\n{detail[:allowed_detail]}\n   ...(已截断)"
+            truncated_blocks.append(block[:budget_per_block])
+        full_text = summary + "\n\n".join(truncated_blocks)
+        graph_logger.warning(
+            "分析上下文超长（%d 字），已自适应截断至 %d 字",
+            len(summary) + sum(len(b) for b in blocks),
+            len(full_text),
+        )
+
+    return full_text
 
 
 def _looks_like_tool_call_text(text: str) -> bool:
