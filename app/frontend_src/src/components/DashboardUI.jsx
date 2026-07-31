@@ -19,6 +19,7 @@ import {
   History,
   Languages,
   LayoutDashboard,
+  LogOut,
   Menu,
   Play,
   Plus,
@@ -74,6 +75,8 @@ export function AppSidebar({
   setSettingsOpen,
   notify,
   t,
+  authUser,
+  onLogout,
 }) {
   return (
     <aside
@@ -149,6 +152,11 @@ export function AppSidebar({
         )}
 
         <div className="mt-auto grid gap-1.5 border-t border-slate-100 pt-3">
+          {!collapsed && authUser && (
+            <div className="px-3 pb-1 text-xs text-slate-500">
+              {authUser.username}
+            </div>
+          )}
           <button
             className={cx("nav-item", collapsed && "justify-center px-0")}
             onClick={() => setSettingsOpen(true)}
@@ -158,6 +166,17 @@ export function AppSidebar({
             <Settings size={18} />
             {!collapsed && <span>{t("settings")}</span>}
           </button>
+          {onLogout && (
+            <button
+              className={cx("nav-item", collapsed && "justify-center px-0")}
+              onClick={onLogout}
+              type="button"
+              title={collapsed ? t("logout") : undefined}
+            >
+              <LogOut size={18} />
+              {!collapsed && <span>{t("logout")}</span>}
+            </button>
+          )}
         </div>
       </div>
     </aside>

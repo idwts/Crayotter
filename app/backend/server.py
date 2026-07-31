@@ -1,12 +1,19 @@
 from __future__ import annotations
 
 import argparse
-import cgi
+try:
+    import cgi
+except ImportError:  # Python 3.13+; public trial uploads are disabled anyway.
+    cgi = None
 import json
 import mimetypes
+import os
 import re
+import secrets
 import socket
 import shutil
+import threading
+import time
 from datetime import datetime, timezone
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -17,6 +24,8 @@ from urllib.parse import parse_qs, quote, urlparse
 from .config_store import ConfigStore
 from .models import JobRequest
 from .runtime_manager import RuntimeManager
+from app.backend import auth as auth_service
+from app.backend import db
 from app.media_index import build_analysis_index, is_video_file, match_analysis_files
 from app.runtime_paths import configure_runtime_environment, get_bundle_root, get_runtime_root, resource_path, runtime_path
 
@@ -26,6 +35,12 @@ class BackendService:
         self.config_store = ConfigStore()
         self.config_store.load()
         self.runtime_manager = RuntimeManager(self.config_store)
+        # 初始化数据库连接池；若未配置 DATABASE_URL 则延迟报错，避免无 DB 场景启动失败。
+        try:
+            db.init_pool()
+        except RuntimeError as exc:
+            import logging
+            logging.getLogger(__name__).warning("Database not initialized: %s", exc)
 
 
 SERVICE = BackendService()
@@ -36,6 +51,38 @@ RUNTIME_ROOT = get_runtime_root()
 FRONTEND_DIR = resource_path("app", "frontend")
 UPLOADS_DIR = runtime_path("user_temp")
 UPLOADS_DIR.mkdir(parents=True, exist_ok=True)
+PUBLIC_UPLOADS_DIR = runtime_path("public_uploads")
+
+# Session cookie 配置（注意：与现有匿名 owner_id 的 crayotter_session 区分）
+SESSION_COOKIE_NAME = "crayotter_auth_session"
+SESSION_COOKIE_MAX_AGE_SECONDS = 30 * 24 * 60 * 60  # 30 days
+PUBLIC_UPLOADS_DIR.mkdir(parents=True, exist_ok=True)
+MAX_JSON_BODY_BYTES = int(os.environ.get("CRAYOTTER_MAX_JSON_BODY_BYTES", "65536"))
+PUBLIC_UPLOAD_MAX_BYTES = int(os.environ.get("CRAYOTTER_PUBLIC_UPLOAD_MAX_BYTES", str(500 * 1024 * 1024)))
+PUBLIC_UPLOAD_SESSION_MAX_BYTES = int(os.environ.get("CRAYOTTER_PUBLIC_UPLOAD_SESSION_MAX_BYTES", str(1500 * 1024 * 1024)))
+PUBLIC_JOBS_PER_HOUR = int(os.environ.get("CRAYOTTER_PUBLIC_JOBS_PER_HOUR", "3"))
+PUBLIC_ACTIVE_JOBS_PER_SESSION = int(os.environ.get("CRAYOTTER_PUBLIC_ACTIVE_JOBS_PER_SESSION", "1"))
+
+
+class PublicTrialGuard:
+    def __init__(self) -> None:
+        self._submissions: dict[str, list[float]] = {}
+        self._lock = threading.Lock()
+
+    def check_submission(self, owner_id: str) -> None:
+        now = time.monotonic()
+        with self._lock:
+            recent = [item for item in self._submissions.get(owner_id, []) if item >= now - 3600]
+            if len(recent) >= PUBLIC_JOBS_PER_HOUR:
+                raise RuntimeError("Trial limit reached. Please try again later.")
+            active = sum(item["status"] in {"queued", "running"} for item in SERVICE.runtime_manager.list_jobs(owner_id))
+            if active >= PUBLIC_ACTIVE_JOBS_PER_SESSION:
+                raise RuntimeError("You already have a queued or running job.")
+            recent.append(now)
+            self._submissions[owner_id] = recent
+
+
+PUBLIC_TRIAL_GUARD = PublicTrialGuard()
 
 
 class BackendHandler(BaseHTTPRequestHandler):
@@ -46,6 +93,7 @@ class BackendHandler(BaseHTTPRequestHandler):
         raw_path = parsed.path or "/"
         path = raw_path.rstrip("/") or "/"
         query = parse_qs(parsed.query)
+        owner_id = self._owner_id()
 
         try:
             if raw_path == "/ui/":
@@ -62,55 +110,27 @@ class BackendHandler(BaseHTTPRequestHandler):
                 return
 
             if path == "/":
-                self._write_json(
-                    HTTPStatus.OK,
-                    {
-                        "service": "crayotter-backend",
-                        "version": "0.1",
-                        "ui": "/ui/",
-                        "routes": [
-                            "GET /health",
-                            "GET /config",
-                            "PUT /config",
-                            "GET /jobs",
-                            "POST /jobs",
-                            "GET /jobs/{job_id}",
-                            "GET /jobs/{job_id}/artifacts",
-                            "GET /jobs/{job_id}/events",
-                            "GET /jobs/{job_id}/events.log",
-                            "GET /jobs/{job_id}/events/stream",
-                            "GET /jobs/{job_id}/messages",
-                            "GET /jobs/{job_id}/plans/current",
-                            "GET /jobs/{job_id}/plans/{version}",
-                            "GET /jobs/{job_id}/plans/diff?from=v001&to=v002",
-                            "GET /files?path=<absolute-or-project-relative-path>",
-                            "GET /uploads",
-                            "POST /uploads",
-                            "DELETE /uploads?path=user_temp/<file>",
-                            "POST /jobs/{job_id}/cancel",
-                            "POST /jobs/{job_id}/resume",
-                            "POST /jobs/{job_id}/messages",
-                            "POST /jobs/{job_id}/pause",
-                            "POST /jobs/{job_id}/approve",
-                            "POST /jobs/{job_id}/plans/{version}/feedback",
-                            "POST /jobs/{job_id}/plans/{version}/approve",
-                            "POST /jobs/{job_id}/plans/{version}/reject",
-                            "DELETE /jobs/{job_id}",
-                        ],
-                    },
-                )
+                self._redirect("/ui/")
                 return
 
             if path == "/health":
                 self._write_json(HTTPStatus.OK, {"ok": True})
                 return
 
+            if path == "/api/auth/me":
+                user = self._auth_user()
+                if user is None:
+                    self._write_json(HTTPStatus.UNAUTHORIZED, {"error": "Not authenticated"})
+                    return
+                self._write_json(HTTPStatus.OK, {"user": user})
+                return
+
             if path == "/config":
-                self._write_json(HTTPStatus.OK, SERVICE.config_store.load().model_dump())
+                self._write_json(HTTPStatus.OK, self._public_config())
                 return
 
             if path == "/jobs":
-                self._write_json(HTTPStatus.OK, {"items": SERVICE.runtime_manager.list_jobs()})
+                self._write_json(HTTPStatus.OK, {"items": SERVICE.runtime_manager.list_jobs(owner_id)})
                 return
 
             if path == "/files":
@@ -118,32 +138,33 @@ class BackendHandler(BaseHTTPRequestHandler):
                 if not raw_path:
                     self._write_json(HTTPStatus.BAD_REQUEST, {"error": "Missing path query parameter."})
                     return
-                self._serve_project_file(
+                self._serve_project_file_for_owner(
                     raw_path,
+                    owner_id,
                     download=query.get("download", ["0"])[0].lower() in {"1", "true", "yes"},
                 )
                 return
 
             if path == "/uploads":
-                self._write_json(HTTPStatus.OK, {"items": self._list_upload_items()})
+                self._write_json(HTTPStatus.OK, {"items": self._list_upload_items(self._uploads_root(owner_id))})
                 return
 
             if path.startswith("/jobs/") and path.endswith("/events/stream"):
                 job_id = path.split("/")[2]
                 after_sequence = int(query.get("after", ["0"])[0] or 0)
-                self._stream_events(job_id=job_id, after_sequence=after_sequence)
+                self._stream_events(job_id=job_id, after_sequence=after_sequence, owner_id=owner_id)
                 return
 
             if path.startswith("/jobs/") and path.endswith("/artifacts"):
                 job_id = path.split("/")[2]
-                items = SERVICE.runtime_manager.list_job_artifacts(job_id)
+                items = SERVICE.runtime_manager.list_job_artifacts(job_id, owner_id)
                 self._write_json(HTTPStatus.OK, {"items": items})
                 return
 
             if path.startswith("/jobs/") and path.endswith("/events"):
                 job_id = path.split("/")[2]
                 after_sequence = int(query.get("after", ["0"])[0] or 0)
-                items = SERVICE.runtime_manager.list_events(job_id, after_sequence=after_sequence)
+                items = SERVICE.runtime_manager.list_events(job_id, after_sequence=after_sequence, owner_id=owner_id)
                 self._write_json(HTTPStatus.OK, {"items": items})
                 return
 
@@ -151,14 +172,14 @@ class BackendHandler(BaseHTTPRequestHandler):
                 job_id = path.split("/")[2]
                 self._write_text_attachment(
                     HTTPStatus.OK,
-                    SERVICE.runtime_manager.events_log_text(job_id),
+                    SERVICE.runtime_manager.events_log_text(job_id, owner_id),
                     filename=f"{job_id}-events.log",
                 )
                 return
 
             if path.startswith("/jobs/") and path.endswith("/messages"):
                 job_id = path.split("/")[2]
-                items = SERVICE.runtime_manager.list_messages(job_id)
+                items = SERVICE.runtime_manager.list_messages(job_id, owner_id)
                 self._write_json(HTTPStatus.OK, {"items": items})
                 return
 
@@ -166,23 +187,23 @@ class BackendHandler(BaseHTTPRequestHandler):
                 parts = path.split("/")
                 job_id = parts[2]
                 if len(parts) >= 5 and parts[3] == "plans" and parts[4] == "current":
-                    self._write_json(HTTPStatus.OK, SERVICE.runtime_manager.get_current_plan(job_id))
+                    self._write_json(HTTPStatus.OK, SERVICE.runtime_manager.get_current_plan(job_id, owner_id))
                     return
                 if len(parts) >= 5 and parts[3] == "plans" and parts[4] == "diff":
                     from_version = query.get("from", [""])[0]
                     to_version = query.get("to", [""])[0]
                     self._write_json(
                         HTTPStatus.OK,
-                        SERVICE.runtime_manager.get_plan_diff(job_id, from_version, to_version),
+                        SERVICE.runtime_manager.get_plan_diff(job_id, from_version, to_version, owner_id),
                     )
                     return
                 if len(parts) >= 5 and parts[3] == "plans":
-                    self._write_json(HTTPStatus.OK, SERVICE.runtime_manager.get_plan(job_id, parts[4]))
+                    self._write_json(HTTPStatus.OK, SERVICE.runtime_manager.get_plan(job_id, parts[4], owner_id))
                     return
 
             if path.startswith("/jobs/"):
                 job_id = path.split("/")[2]
-                self._write_json(HTTPStatus.OK, SERVICE.runtime_manager.get_job_detail(job_id))
+                self._write_json(HTTPStatus.OK, SERVICE.runtime_manager.get_job_detail(job_id, owner_id))
                 return
 
             self._write_json(HTTPStatus.NOT_FOUND, {"error": f"Unknown route: {path}"})
@@ -199,6 +220,9 @@ class BackendHandler(BaseHTTPRequestHandler):
             if path != "/config":
                 self._write_json(HTTPStatus.NOT_FOUND, {"error": f"Unknown route: {path}"})
                 return
+            if self._public_mode:
+                self._write_json(HTTPStatus.FORBIDDEN, {"error": "Server configuration is managed by the operator."})
+                return
             payload = self._read_json()
             config = SERVICE.config_store.update(payload)
             self._write_json(HTTPStatus.OK, config.model_dump())
@@ -208,29 +232,102 @@ class BackendHandler(BaseHTTPRequestHandler):
     def do_POST(self) -> None:  # noqa: N802
         parsed = urlparse(self.path)
         path = parsed.path.rstrip("/") or "/"
+        owner_id = self._owner_id()
 
         try:
+            if path == "/api/auth/register":
+                payload = self._read_json()
+                result = auth_service.register(
+                    str(payload.get("username") or ""),
+                    str(payload.get("password") or ""),
+                    ip_address=self._client_ip(),
+                    user_agent=self._client_user_agent(),
+                )
+                self._write_json(HTTPStatus.CREATED, result)
+                return
+
+            if path == "/api/auth/login":
+                payload = self._read_json()
+                result = auth_service.login(
+                    str(payload.get("username") or ""),
+                    str(payload.get("password") or ""),
+                    ip_address=self._client_ip(),
+                    user_agent=self._client_user_agent(),
+                )
+                self._write_json(
+                    HTTPStatus.OK,
+                    {"user": result["user"], "expires_at": result["expires_at"]},
+                    set_auth_token=result["token"],
+                )
+                return
+
+            if path == "/api/auth/logout":
+                token = self._session_token()
+                if token:
+                    auth_service.logout(token, ip_address=self._client_ip())
+                self._write_json(HTTPStatus.OK, {"ok": True}, clear_auth=True)
+                return
+
+            if path == "/api/auth/password":
+                user = self._auth_user()
+                if user is None:
+                    self._write_json(HTTPStatus.UNAUTHORIZED, {"error": "Not authenticated"})
+                    return
+                payload = self._read_json()
+                auth_service.change_password(
+                    user["id"],
+                    str(payload.get("old_password") or ""),
+                    str(payload.get("new_password") or ""),
+                    ip_address=self._client_ip(),
+                )
+                self._write_json(HTTPStatus.OK, {"ok": True}, clear_auth=True)
+                return
+
             if path == "/uploads":
-                items = self._handle_upload_request()
+                items = self._handle_upload_request(self._uploads_root(owner_id), public=self._public_mode)
                 self._write_json(HTTPStatus.CREATED, {"items": items})
                 return
 
             if path == "/jobs":
+                self._check_public_submission(owner_id)
                 payload = self._read_json()
                 request = JobRequest.model_validate(payload)
-                record = SERVICE.runtime_manager.create_job(request)
+                if self._public_mode:
+                    # Workflow switches are task-scoped and safe to honour.
+                    # Do not let an anonymous browser select local browser
+                    # profiles, server-side material settings, or a different
+                    # persisted model profile.
+                    request = JobRequest(
+                        task=request.task,
+                        mode=request.mode,
+                        enable_phase2_research=request.enable_phase2_research,
+                        enable_plan_review=request.enable_plan_review,
+                        direct_phase3_execution=request.direct_phase3_execution,
+                        prefer_local_materials=request.prefer_local_materials,
+                        target_duration_seconds=request.target_duration_seconds,
+                        deadline_seconds=request.deadline_seconds,
+                        processing_mode=request.processing_mode,
+                        output_profile=request.output_profile,
+                        enabled_material_platforms=request.enabled_material_platforms,
+                    )
+                record = SERVICE.runtime_manager.create_job(
+                    request,
+                    owner_id,
+                    self._public_runtime_overrides() if self._public_mode else None,
+                    self._uploads_root(owner_id) if self._public_mode else None,
+                )
                 self._write_json(HTTPStatus.CREATED, record)
                 return
 
             if path.startswith("/jobs/") and path.endswith("/cancel"):
                 job_id = path.split("/")[2]
-                result = SERVICE.runtime_manager.cancel_job(job_id)
+                result = SERVICE.runtime_manager.cancel_job(job_id, owner_id)
                 self._write_json(HTTPStatus.OK, result)
                 return
 
             if path.startswith("/jobs/") and path.endswith("/resume"):
                 job_id = path.split("/")[2]
-                result = SERVICE.runtime_manager.resume_job(job_id)
+                result = SERVICE.runtime_manager.resume_job(job_id, owner_id)
                 self._write_json(HTTPStatus.OK, result)
                 return
 
@@ -240,6 +337,7 @@ class BackendHandler(BaseHTTPRequestHandler):
                 result = SERVICE.runtime_manager.add_message(
                     job_id,
                     str(payload.get("content") or ""),
+                    owner_id,
                 )
                 self._write_json(HTTPStatus.CREATED, result)
                 return
@@ -250,6 +348,7 @@ class BackendHandler(BaseHTTPRequestHandler):
                 result = SERVICE.runtime_manager.pause_job(
                     job_id,
                     str(payload.get("mode") or "next_safe_point"),
+                    owner_id,
                 )
                 self._write_json(HTTPStatus.OK, result)
                 return
@@ -260,6 +359,7 @@ class BackendHandler(BaseHTTPRequestHandler):
                 result = SERVICE.runtime_manager.approve_job(
                     job_id,
                     str(payload.get("pause_token") or ""),
+                    owner_id,
                 )
                 self._write_json(HTTPStatus.OK, result)
                 return
@@ -275,15 +375,16 @@ class BackendHandler(BaseHTTPRequestHandler):
                         job_id,
                         version,
                         str(payload.get("feedback") or payload.get("content") or ""),
+                        owner_id,
                     )
                     self._write_json(HTTPStatus.CREATED, result)
                     return
                 if action == "approve":
-                    result = SERVICE.runtime_manager.approve_plan(job_id, version)
+                    result = SERVICE.runtime_manager.approve_plan(job_id, version, owner_id)
                     self._write_json(HTTPStatus.OK, result)
                     return
                 if action == "reject":
-                    result = SERVICE.runtime_manager.reject_plan(job_id, version)
+                    result = SERVICE.runtime_manager.reject_plan(job_id, version, owner_id)
                     self._write_json(HTTPStatus.OK, result)
                     return
 
@@ -299,6 +400,7 @@ class BackendHandler(BaseHTTPRequestHandler):
         parsed = urlparse(self.path)
         path = parsed.path.rstrip("/") or "/"
         query = parse_qs(parsed.query)
+        owner_id = self._owner_id()
 
         try:
             if path == "/uploads":
@@ -306,13 +408,13 @@ class BackendHandler(BaseHTTPRequestHandler):
                 if not raw_path:
                     self._write_json(HTTPStatus.BAD_REQUEST, {"error": "Missing path query parameter."})
                     return
-                removed = self._delete_upload(raw_path)
+                removed = self._delete_upload(raw_path, self._uploads_root(owner_id))
                 self._write_json(HTTPStatus.OK, removed)
                 return
 
             if path.startswith("/jobs/"):
                 job_id = path.split("/")[2]
-                result = SERVICE.runtime_manager.delete_job(job_id)
+                result = SERVICE.runtime_manager.delete_job(job_id, owner_id)
                 self._write_json(HTTPStatus.OK, result)
                 return
 
@@ -334,27 +436,54 @@ class BackendHandler(BaseHTTPRequestHandler):
             return
 
     def _read_json(self) -> dict[str, Any]:
-        length = int(self.headers.get("Content-Length", "0") or 0)
+        try:
+            length = int(self.headers.get("Content-Length", "0") or 0)
+        except ValueError as exc:
+            raise ValueError("Invalid Content-Length header.") from exc
+        if length < 0 or length > MAX_JSON_BODY_BYTES:
+            raise ValueError(f"JSON request body must not exceed {MAX_JSON_BODY_BYTES} bytes.")
         raw = self.rfile.read(length) if length else b"{}"
         if not raw:
             return {}
         return json.loads(raw.decode("utf-8"))
 
-    def _write_json(self, status: HTTPStatus, payload: dict[str, Any]) -> None:
+    def _write_json(
+        self,
+        status: HTTPStatus,
+        payload: dict[str, Any],
+        *,
+        set_auth_token: str | None = None,
+        clear_auth: bool = False,
+    ) -> None:
         body = json.dumps(payload, ensure_ascii=False, indent=2).encode("utf-8")
         self.send_response(status)
+        self._send_session_cookie()
+        # 显式设置/清除 auth session cookie（必须在 send_response 之后、end_headers 之前）
+        if set_auth_token:
+            self._set_session_cookie(set_auth_token)
+        if clear_auth:
+            self._set_session_cookie("", clear=True)
+        # 若已登录且无显式操作时，刷新 auth session cookie 以滚动过期时间；数据库未就绪时静默跳过。
+        if not set_auth_token and not clear_auth:
+            try:
+                token = self._session_token()
+                if token and auth_service.get_user_by_token(token):
+                    self._set_session_cookie(token)
+            except Exception:
+                pass
         self.send_header("Content-Type", "application/json; charset=utf-8")
         self.send_header("Content-Length", str(len(body)))
-        self.send_header("Cache-Control", "no-store")
+        self._send_security_headers()
         self.end_headers()
         self.wfile.write(body)
 
     def _write_text_attachment(self, status: HTTPStatus, text: str, *, filename: str) -> None:
         body = text.encode("utf-8")
         self.send_response(status)
+        self._send_session_cookie()
         self.send_header("Content-Type", "text/plain; charset=utf-8")
         self.send_header("Content-Length", str(len(body)))
-        self.send_header("Cache-Control", "no-store")
+        self._send_security_headers()
         encoded_name = quote(filename)
         self.send_header("Content-Disposition", f"attachment; filename*=UTF-8''{encoded_name}")
         self.end_headers()
@@ -362,7 +491,9 @@ class BackendHandler(BaseHTTPRequestHandler):
 
     def _redirect(self, location: str) -> None:
         self.send_response(HTTPStatus.FOUND)
+        self._send_session_cookie()
         self.send_header("Location", location)
+        self._send_security_headers()
         self.end_headers()
 
     def _serve_static(self, path: Path) -> None:
@@ -388,6 +519,33 @@ class BackendHandler(BaseHTTPRequestHandler):
 
         if not self._is_allowed_file_path(resolved):
             self._write_json(HTTPStatus.FORBIDDEN, {"error": "Requested file is outside the project workspace."})
+            return
+        self._send_file(resolved, allow_range=True, download=download)
+
+    def _serve_project_file_for_owner(self, raw_path: str, owner_id: str, *, download: bool = False) -> None:
+        if not self._public_mode:
+            self._serve_project_file(raw_path, download=download)
+            return
+        try:
+            resolved = Path(raw_path).resolve(strict=True)
+        except FileNotFoundError:
+            self._write_json(HTTPStatus.NOT_FOUND, {"error": "File not found."})
+            return
+        allowed = False
+        for job in SERVICE.runtime_manager._jobs.values():
+            if job.record.owner_id != owner_id:
+                continue
+            for artifact in SERVICE.runtime_manager.list_job_artifacts(job.record.job_id, owner_id):
+                try:
+                    if resolved == Path(str(artifact.get("path") or "")).resolve(strict=True):
+                        allowed = True
+                        break
+                except FileNotFoundError:
+                    continue
+            if allowed:
+                break
+        if not allowed:
+            self._write_json(HTTPStatus.FORBIDDEN, {"error": "Requested file is not an artifact owned by this session."})
             return
         self._send_file(resolved, allow_range=True, download=download)
 
@@ -427,9 +585,10 @@ class BackendHandler(BaseHTTPRequestHandler):
         ):
             content_type = f"{content_type}; charset=utf-8"
         self.send_response(status)
+        self._send_session_cookie()
         self.send_header("Content-Type", content_type or "application/octet-stream")
         self.send_header("Content-Length", str(content_length))
-        self.send_header("Cache-Control", "no-store")
+        self._send_security_headers()
         if allow_range:
             self.send_header("Accept-Ranges", "bytes")
         if status == HTTPStatus.PARTIAL_CONTENT:
@@ -452,10 +611,11 @@ class BackendHandler(BaseHTTPRequestHandler):
 
     def _write_range_not_satisfiable(self, file_size: int) -> None:
         self.send_response(HTTPStatus.REQUESTED_RANGE_NOT_SATISFIABLE)
+        self._send_session_cookie()
         self.send_header("Content-Range", f"bytes */{file_size}")
         self.send_header("Content-Length", "0")
         self.send_header("Accept-Ranges", "bytes")
-        self.send_header("Cache-Control", "no-store")
+        self._send_security_headers()
         self.end_headers()
 
     @staticmethod
@@ -480,22 +640,22 @@ class BackendHandler(BaseHTTPRequestHandler):
         return f"{safe_stem}{safe_suffix}"
 
     @staticmethod
-    def _allocate_upload_path(filename: str) -> Path:
-        candidate = UPLOADS_DIR / filename
+    def _allocate_upload_path(filename: str, upload_dir: Path) -> Path:
+        candidate = upload_dir / filename
         if not candidate.exists():
             return candidate
         stem = candidate.stem
         suffix = candidate.suffix
         index = 2
         while True:
-            deduped = UPLOADS_DIR / f"{stem}_{index}{suffix}"
+            deduped = upload_dir / f"{stem}_{index}{suffix}"
             if not deduped.exists():
                 return deduped
             index += 1
 
     @staticmethod
-    def _display_upload_path(path: Path) -> str:
-        relative = path.relative_to(UPLOADS_DIR)
+    def _display_upload_path(path: Path, upload_dir: Path) -> str:
+        relative = path.relative_to(upload_dir)
         return (Path("user_temp") / relative).as_posix()
 
     @classmethod
@@ -503,6 +663,7 @@ class BackendHandler(BaseHTTPRequestHandler):
         cls,
         path: Path,
         *,
+        upload_dir: Path,
         analysis_index: dict[str, list[Path]] | None = None,
     ) -> dict[str, Any]:
         stat = path.stat()
@@ -511,14 +672,14 @@ class BackendHandler(BaseHTTPRequestHandler):
         return {
             "name": path.name,
             "path": str(path.resolve()),
-            "display_path": cls._display_upload_path(path),
+            "display_path": cls._display_upload_path(path, upload_dir),
             "size_bytes": stat.st_size,
             "modified_at": datetime.fromtimestamp(stat.st_mtime, tz=timezone.utc).isoformat(),
             "kind": "video" if is_video_file(path) else "file",
             "has_analysis": bool(analysis_matches),
             "analysis_count": len(analysis_matches),
             "analysis_path": str(latest_analysis.resolve()) if latest_analysis is not None else "",
-            "analysis_display_path": cls._display_upload_path(latest_analysis) if latest_analysis is not None else "",
+            "analysis_display_path": cls._display_upload_path(latest_analysis, upload_dir) if latest_analysis is not None else "",
             "analysis_modified_at": (
                 datetime.fromtimestamp(latest_analysis.stat().st_mtime, tz=timezone.utc).isoformat()
                 if latest_analysis is not None
@@ -527,31 +688,40 @@ class BackendHandler(BaseHTTPRequestHandler):
         }
 
     @classmethod
-    def _list_upload_items(cls) -> list[dict[str, Any]]:
-        analysis_index = build_analysis_index([UPLOADS_DIR])
+    def _list_upload_items(cls, upload_dir: Path) -> list[dict[str, Any]]:
+        analysis_index = build_analysis_index([upload_dir])
         items: list[dict[str, Any]] = []
-        for path in sorted(UPLOADS_DIR.rglob("*"), key=lambda item: item.stat().st_mtime, reverse=True):
+        for path in sorted(upload_dir.rglob("*"), key=lambda item: item.stat().st_mtime, reverse=True):
             if not is_video_file(path):
                 continue
-            items.append(cls._serialize_upload_item(path, analysis_index=analysis_index))
+            items.append(cls._serialize_upload_item(path, upload_dir=upload_dir, analysis_index=analysis_index))
         return items
 
     @classmethod
-    def _resolve_upload_path(cls, raw_path: str) -> Path | None:
+    def _resolve_upload_path(cls, raw_path: str, upload_dir: Path) -> Path | None:
         candidate = Path(raw_path)
         if not candidate.is_absolute():
             candidate = (RUNTIME_ROOT / candidate).resolve(strict=False)
         try:
             resolved = candidate.resolve(strict=False)
-            resolved.relative_to(UPLOADS_DIR.resolve())
+            resolved.relative_to(upload_dir.resolve())
         except Exception:
             return None
         return resolved
 
-    def _handle_upload_request(self) -> list[dict[str, Any]]:
+    def _handle_upload_request(self, upload_dir: Path, *, public: bool = False) -> list[dict[str, Any]]:
+        if cgi is None:
+            raise RuntimeError("Uploads require Python 3.12 or an updated multipart parser.")
         content_type = self.headers.get("Content-Type", "")
         if "multipart/form-data" not in content_type.lower():
             raise ValueError("Upload requests must use multipart/form-data.")
+        content_length = int(self.headers.get("Content-Length", "0") or 0)
+        if public and (content_length <= 0 or content_length > PUBLIC_UPLOAD_MAX_BYTES):
+            raise ValueError(f"Each public upload must not exceed {PUBLIC_UPLOAD_MAX_BYTES // (1024 * 1024)} MB.")
+        if public:
+            used = sum(path.stat().st_size for path in upload_dir.rglob("*") if path.is_file())
+            if used + content_length > PUBLIC_UPLOAD_SESSION_MAX_BYTES:
+                raise ValueError("This session has reached its upload storage limit.")
 
         form = cgi.FieldStorage(
             fp=self.rfile,
@@ -575,28 +745,37 @@ class BackendHandler(BaseHTTPRequestHandler):
             file_obj = getattr(field, "file", None)
             if not filename or file_obj is None:
                 continue
+            if public and Path(filename).suffix.lower() not in RuntimeManager.VIDEO_SUFFIXES:
+                raise ValueError("Public uploads accept video files only.")
 
             target_name = self._sanitize_upload_name(filename)
-            target_path = self._allocate_upload_path(target_name)
+            target_path = self._allocate_upload_path(target_name, upload_dir)
             target_path.parent.mkdir(parents=True, exist_ok=True)
             with target_path.open("wb") as handle:
-                shutil.copyfileobj(file_obj, handle)
-            uploaded.append(self._serialize_upload_item(target_path))
+                copied = 0
+                while chunk := file_obj.read(1024 * 1024):
+                    copied += len(chunk)
+                    if public and copied > PUBLIC_UPLOAD_MAX_BYTES:
+                        handle.close()
+                        target_path.unlink(missing_ok=True)
+                        raise ValueError(f"Each public upload must not exceed {PUBLIC_UPLOAD_MAX_BYTES // (1024 * 1024)} MB.")
+                    handle.write(chunk)
+            uploaded.append(self._serialize_upload_item(target_path, upload_dir=upload_dir))
 
         if not uploaded:
             raise ValueError("No valid files were uploaded.")
 
         return uploaded
 
-    def _delete_upload(self, raw_path: str) -> dict[str, Any]:
-        resolved = self._resolve_upload_path(raw_path)
+    def _delete_upload(self, raw_path: str, upload_dir: Path) -> dict[str, Any]:
+        resolved = self._resolve_upload_path(raw_path, upload_dir)
         if resolved is None:
             raise ValueError("Upload path is outside user_temp.")
         if not resolved.exists() or not resolved.is_file():
             raise FileNotFoundError(f"Upload not found: {raw_path}")
         deleted_analysis: list[dict[str, str]] = []
         if is_video_file(resolved):
-            analysis_index = build_analysis_index([UPLOADS_DIR])
+            analysis_index = build_analysis_index([upload_dir])
             for analysis_path in match_analysis_files(resolved, analysis_index=analysis_index):
                 if not analysis_path.exists() or not analysis_path.is_file():
                     continue
@@ -608,7 +787,7 @@ class BackendHandler(BaseHTTPRequestHandler):
                     deleted_analysis.append(
                         {
                             "path": str(analysis_resolved),
-                            "display_path": self._display_upload_path(analysis_path),
+                            "display_path": self._display_upload_path(analysis_path, upload_dir),
                         }
                     )
                 except FileNotFoundError:
@@ -617,22 +796,24 @@ class BackendHandler(BaseHTTPRequestHandler):
         return {
             "deleted": True,
             "path": str(resolved),
-            "display_path": self._display_upload_path(resolved),
+            "display_path": self._display_upload_path(resolved, upload_dir),
             "deleted_analysis_count": len(deleted_analysis),
             "deleted_analysis": deleted_analysis,
         }
 
-    def _stream_events(self, job_id: str, after_sequence: int = 0) -> None:
+    def _stream_events(self, job_id: str, after_sequence: int = 0, owner_id: str | None = None) -> None:
         self.send_response(HTTPStatus.OK)
+        self._send_session_cookie()
         self.send_header("Content-Type", "text/event-stream; charset=utf-8")
         self.send_header("Cache-Control", "no-cache")
         self.send_header("Connection", "keep-alive")
+        self._send_security_headers()
         self.end_headers()
 
         cursor = after_sequence
         try:
             while True:
-                events = SERVICE.runtime_manager.wait_for_events(job_id, after_sequence=cursor, timeout=1.0)
+                events = SERVICE.runtime_manager.wait_for_events(job_id, after_sequence=cursor, timeout=1.0, owner_id=owner_id)
                 if events:
                     for event in events:
                         payload = json.dumps(event, ensure_ascii=False)
@@ -643,7 +824,7 @@ class BackendHandler(BaseHTTPRequestHandler):
                     self.wfile.write(b": ping\n\n")
                     self.wfile.flush()
 
-                job = SERVICE.runtime_manager.get_job(job_id)
+                job = SERVICE.runtime_manager.get_job(job_id, owner_id)
                 if job is None:
                     break
                 if job.record.status in {"completed", "failed", "cancelled", "interrupted"} and not events:
@@ -652,6 +833,127 @@ class BackendHandler(BaseHTTPRequestHandler):
                     break
         except (ConnectionError, BrokenPipeError):
             return
+
+    @property
+    def _public_mode(self) -> bool:
+        return os.environ.get("CRAYOTTER_PUBLIC_MODE", "").strip().lower() in {"1", "true", "yes"}
+
+    def _owner_id(self) -> str:
+        if hasattr(self, "_session_owner"):
+            return self._session_owner
+        for item in self.headers.get("Cookie", "").split(";"):
+            name, _, value = item.strip().partition("=")
+            if name == "crayotter_session" and len(value) >= 32:
+                self._session_owner, self._new_session = value, False
+                return value
+        self._session_owner, self._new_session = secrets.token_urlsafe(32), True
+        return self._session_owner
+
+    def _send_session_cookie(self) -> None:
+        if getattr(self, "_new_session", False):
+            secure = "; Secure" if os.environ.get("CRAYOTTER_COOKIE_SECURE", "").strip().lower() in {"1", "true", "yes"} else ""
+            self.send_header("Set-Cookie", f"crayotter_session={self._session_owner}; Path=/; Max-Age=2592000; HttpOnly; SameSite=Lax{secure}")
+            self._new_session = False
+
+    def _uploads_root(self, owner_id: str) -> Path:
+        if not self._public_mode:
+            return UPLOADS_DIR
+        root = PUBLIC_UPLOADS_DIR / owner_id
+        root.mkdir(parents=True, exist_ok=True)
+        return root
+
+    def _check_public_submission(self, owner_id: str) -> None:
+        if self._public_mode:
+            PUBLIC_TRIAL_GUARD.check_submission(owner_id)
+
+    def _public_config(self) -> dict[str, Any]:
+        config = SERVICE.config_store.load().model_dump()
+        if not self._public_mode:
+            return config
+        operator_api_configured = False
+        for profile in config.get("profiles", {}).values():
+            for key in ("api_key", "video_api_key", "tts_api_key"):
+                operator_api_configured = operator_api_configured or bool(profile.get(key))
+                profile[key] = ""
+        config["public_mode"] = True
+        config["operator_api_configured"] = operator_api_configured
+        return config
+
+    def _public_runtime_overrides(self) -> dict[str, str]:
+        """Read a bounded BYOK profile without persisting browser secrets."""
+        headers = {
+            "api_key": "X-Crayotter-Api-Key",
+            "base_url": "X-Crayotter-Base-Url",
+            "model_name": "X-Crayotter-Model-Name",
+            "video_api_key": "X-Crayotter-Video-Api-Key",
+            "video_base_url": "X-Crayotter-Video-Base-Url",
+            "video_model_name": "X-Crayotter-Video-Model-Name",
+            "tts_api_key": "X-Crayotter-Tts-Api-Key",
+            "tts_base_url": "X-Crayotter-Tts-Base-Url",
+            "tts_model_name": "X-Crayotter-Tts-Model-Name",
+        }
+        result: dict[str, str] = {}
+        for field, header_name in headers.items():
+            value = self.headers.get(header_name, "").strip()
+            if value:
+                if len(value) > 1024 or "\r" in value or "\n" in value:
+                    raise ValueError(f"Invalid {header_name} header.")
+                result[field] = value
+        return result
+
+
+    def _session_token(self) -> str | None:
+        """从请求 Cookie 中读取 auth session token。"""
+        cookie_header = self.headers.get("Cookie", "")
+        if not cookie_header:
+            return None
+        for part in cookie_header.split(";"):
+            part = part.strip()
+            if part.startswith(f"{SESSION_COOKIE_NAME}="):
+                return part.split("=", 1)[1].strip()
+        return None
+
+    def _auth_user(self) -> dict[str, Any] | None:
+        """返回当前登录用户，未登录返回 None。"""
+        token = self._session_token()
+        if not token:
+            return None
+        return auth_service.get_user_by_token(token)
+
+    def _set_session_cookie(self, token: str, *, clear: bool = False) -> None:
+        """设置或清除 auth session cookie。"""
+        if clear:
+            self.send_header(
+                "Set-Cookie",
+                f"{SESSION_COOKIE_NAME}=; Path=/; Max-Age=0; HttpOnly; SameSite=Lax",
+            )
+            return
+        secure = os.environ.get("CRAYOTTER_COOKIE_SECURE", "").strip().lower() in {"1", "true", "yes"}
+        flags = "HttpOnly; SameSite=Lax"
+        if secure:
+            flags += "; Secure"
+        self.send_header(
+            "Set-Cookie",
+            f"{SESSION_COOKIE_NAME}={token}; Path=/; Max-Age={SESSION_COOKIE_MAX_AGE_SECONDS}; {flags}",
+        )
+
+    def _client_ip(self) -> str | None:
+        """优先读取 X-Forwarded-For，否则取 remote address。"""
+        forwarded = self.headers.get("X-Forwarded-For", "")
+        if forwarded:
+            return forwarded.split(",")[0].strip()
+        return self.client_address[0] if self.client_address else None
+
+    def _client_user_agent(self) -> str | None:
+        return self.headers.get("User-Agent") or None
+
+    def _send_security_headers(self) -> None:
+        self.send_header("Cache-Control", "no-store")
+        self.send_header("X-Content-Type-Options", "nosniff")
+        self.send_header("X-Frame-Options", "DENY")
+        self.send_header("Referrer-Policy", "same-origin")
+        self.send_header("Permissions-Policy", "camera=(), microphone=(), geolocation=()")
+        self.send_header("Content-Security-Policy", "default-src 'self'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'")
 
 
 def build_http_server(host: str = "127.0.0.1", port: int = 8765) -> ThreadingHTTPServer:

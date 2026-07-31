@@ -13,6 +13,7 @@ import {
 } from "./components/DashboardUI";
 import { SettingsModal as RedesignedSettingsModal } from "./components/SettingsModal";
 import { ConfirmDialog, ToastViewport } from "./components/FeedbackUI";
+import { LoginPage, RegisterPage } from "./components/AuthPages";
 import { MESSAGES } from "./i18n";
 import {
   getHighestPhase,
@@ -33,8 +34,15 @@ const STORAGE_KEYS = {
 const template = (value, params = {}) =>
   String(value || "").replace(/\{(\w+)\}/g, (_, key) => params[key] ?? "");
 
+let _onUnauthorized = null;
+
+export function setUnauthorizedHandler(handler) {
+  _onUnauthorized = handler;
+}
+
 const request = async (url, options = {}) => {
   const response = await fetch(url, {
+    credentials: "same-origin",
     headers: { "Content-Type": "application/json" },
     ...options,
   });
@@ -45,6 +53,9 @@ const request = async (url, options = {}) => {
       message = body.error || message;
     } catch (_) {
       // ignore non-json errors
+    }
+    if (response.status === 401 && _onUnauthorized) {
+      _onUnauthorized();
     }
     throw new Error(message);
   }
@@ -105,6 +116,9 @@ const summarizeTaskTitle = (value, maxLength = 24) => {
 
 function App() {
   const [language, setLanguage] = useState(() => localStorage.getItem(STORAGE_KEYS.language) || "zh");
+  const [authUser, setAuthUser] = useState(null);
+  const [authView, setAuthView] = useState("login");
+  const [authLoading, setAuthLoading] = useState(true);
   const [jobs, setJobs] = useState([]);
   const [uploads, setUploads] = useState([]);
   const [selectedJobId, setSelectedJobId] = useState(null);
@@ -170,6 +184,28 @@ function App() {
     document.documentElement.lang = language === "en" ? "en-US" : "zh-CN";
     localStorage.setItem(STORAGE_KEYS.language, language);
   }, [language]);
+
+  useEffect(() => {
+    setUnauthorizedHandler(() => {
+      setAuthUser(null);
+      setAuthView("login");
+      notify("error", t("sessionExpired"));
+    });
+
+    const checkSession = async () => {
+      try {
+        const data = await fetch("/api/auth/me", { credentials: "same-origin" }).then((r) =>
+          r.ok ? r.json() : null
+        );
+        setAuthUser(data?.user || null);
+      } catch (_) {
+        setAuthUser(null);
+      } finally {
+        setAuthLoading(false);
+      }
+    };
+    checkSession();
+  }, [notify, t]);
 
   const formatDate = useCallback((value) => {
     if (!value) return "--";
@@ -249,6 +285,17 @@ function App() {
       eventSourceRef.current = null;
     }
   }, []);
+
+  const handleLogout = useCallback(async () => {
+    try {
+      await fetch("/api/auth/logout", { method: "POST", credentials: "same-origin" });
+    } catch (_) {
+      // ignore
+    }
+    setAuthUser(null);
+    setAuthView("login");
+    closeEventStream();
+  }, [closeEventStream]);
 
   const statusLabel = useCallback((status) => {
     const key = {
@@ -880,6 +927,35 @@ function App() {
         : latestEvent
           ? describeEvent(latestEvent).body
           : t("waitingMore");
+
+  if (authLoading) {
+    return (
+      <div className="grid min-h-screen place-items-center bg-app-bg text-app-soft">
+        {t("subtitleConnecting")}
+      </div>
+    );
+  }
+
+  if (!authUser) {
+    if (authView === "register") {
+      return (
+        <RegisterPage
+          t={t}
+          notify={notify}
+          onRegister={(user) => setAuthUser(user)}
+          onSwitchToLogin={() => setAuthView("login")}
+        />
+      );
+    }
+    return (
+      <LoginPage
+        t={t}
+        notify={notify}
+        onLogin={(user) => setAuthUser(user)}
+        onSwitchToRegister={() => setAuthView("register")}
+      />
+    );
+  }
   const currentPhaseCode = getHighestPhase(selectedMeaningfulEvents);
   const currentPhase = selectedJob?.status === "completed"
     ? t("done")
@@ -950,6 +1026,8 @@ function App() {
         setSettingsOpen={setSettingsOpen}
         notify={notify}
         t={t}
+        authUser={authUser}
+        onLogout={handleLogout}
       />
 
       <div className="grid min-h-0 min-w-0 grid-rows-[auto_minmax(0,1fr)]">
