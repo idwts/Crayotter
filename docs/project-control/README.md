@@ -11,6 +11,7 @@
 | [backend-apis.md](./backend-apis.md) | 后端 HTTP 接口与 RuntimeManager 方法 | ⭐⭐⭐ 必读 |
 | [frontend-messages.md](./frontend-messages.md) | 前端所有 API 报文（方法/URL/请求体/响应体） | ⭐⭐⭐ 必读 |
 | [frontend-style.md](./frontend-style.md) | 前端设计系统、组件清单与复用约定 | ⭐⭐ 改造前端前读 |
+| [test-accounts.md](./test-accounts.md) | 测试账号与管理员账号（含明文密码，勿外传） | ⭐ 测试时查阅 |
 | [../worklogs/component-worklog.md](../worklogs/component-worklog.md) | 组件级别工作日志与进度 | ⭐⭐⭐ 必读 |
 
 ## 维护约定
@@ -23,4 +24,4 @@
 
 ## 当前阶段
 
-第一版上线尚未开始代码实现，处于调研与文档准备阶段。详见 [component-worklog.md](../worklogs/component-worklog.md)。
+第一阶段（M3 数据层 + M4 认证系统）已实现并部署到服务器 `8.161.229.68`：PostgreSQL 14 已上线，迁移 001/002 已执行，`/api/auth/*`（register/login/logout/me/password/reset）已上线，前端登录/注册/重置密码页已构建。测试账号见 `test-accounts.md`。详见 [component-worklog.md](../worklogs/component-worklog.md)。

@@ -1,6 +1,6 @@
 # 后端接口表
 
-> 说明：本表汇总当前后端对外暴露的 HTTP 接口与 `RuntimeManager` 内部方法，便于后续鉴权、复用和改造。智能体阅读后应记住：**当前后端是 `http.server.BaseHTTPRequestHandler` 手写路由，所有接口以 `owner_id` 做匿名会话隔离；第一版上线时需要把这些接口迁移到带认证/租户校验的框架（如 FastAPI）并补齐鉴权。**
+> 说明：本表汇总当前后端对外暴露的 HTTP 接口与 `RuntimeManager` 内部方法，便于后续鉴权、复用和改造。智能体阅读后应记住：**当前后端是 `http.server.BaseHTTPRequestHandler` 手写路由；认证接口 `/api/auth/*` 已上线（2026-07-31），使用 `crayotter_auth_session` Cookie（SHA-256 digest session，30 天滚动过期），匿名隔离仍用 `crayotter_session` Cookie 的 `owner_id`；后续需要把业务接口迁移到带租户校验的框架并补齐鉴权。**
 
 ## 1. HTTP 接口总览
 
@@ -12,6 +12,17 @@
 | GET | `/` | 重定向到 `/ui/` | 无 |
 | GET | `/health` | 健康检查 | 无 |
 | GET | `/config` | 公开配置（模型、功能开关等） | 无 |
+
+### 1.1a 认证（Auth，2026-07-31 上线）
+
+| 方法 | 路径 | 说明 | 当前鉴权 |
+|------|------|------|----------|
+| POST | `/api/auth/register` | 注册，返回 `{user, tenant, recovery_codes}` | 无 |
+| POST | `/api/auth/login` | 登录，设置 `crayotter_auth_session` Cookie | 无 |
+| POST | `/api/auth/logout` | 注销当前 session 并清除 Cookie | auth Cookie |
+| GET | `/api/auth/me` | 当前登录用户信息，未登录 401 | auth Cookie |
+| POST | `/api/auth/password` | 登录态改密，成功后吊销全部 session | auth Cookie |
+| POST | `/api/auth/reset` | 一次性恢复码重置密码，成功后吊销全部 session 并清除 Cookie | 无 |
 
 ### 1.2 素材（Uploads）
 
@@ -91,9 +102,10 @@
 
 ## 3. 后续鉴权改造清单
 
+- [x] 增加 `/api/auth/*` 注册、登录、登出、密码、恢复码接口（2026-07-31 上线，含 `/api/auth/reset`）。
 - [ ] 所有接口增加 `tenant_id` / `user_id` 校验。
 - [ ] `/uploads`、`/jobs`、`/files` 等接口拒绝跨租户访问（当前仅 owner_id）。
 - [ ] `/jobs/{job_id}` 及其子资源统一做 404/403 区分。
 - [ ] 上传接口增加租户存储配额校验。
 - [ ] `/config` 接口在 public mode 外开放给管理员。
-- [ ] 增加 `/api/auth/*` 注册、登录、登出、密码、恢复码接口。
+- [ ] 认证接口（register/login/reset）增加频率限制与失败锁定。

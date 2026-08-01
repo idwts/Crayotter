@@ -10,11 +10,13 @@
 | AGENTS.md | Crayotter Project Agent Notes |
 | app/__init__.py | Crayotter application package. |
 | app/backend/__init__.py | Backend service package for the Crayotter desktop workbench. |
+| app/backend/auth.py | 账号认证服务：注册/登录/注销/改密/恢复码重置/Session 管理/审计日志（SHA-256+盐）。 |
 | app/backend/config_store.py | from __future__ import annotations |
+| app/backend/db.py | PostgreSQL 连接池（ThreadedConnectionPool）与租户上下文（RLS set_tenant_id）。 |
 | app/backend/event_bus.py | from __future__ import annotations |
 | app/backend/models.py | from __future__ import annotations |
 | app/backend/runtime_manager.py | from __future__ import annotations |
-| app/backend/server.py | from __future__ import annotations |
+| app/backend/server.py | 手写 HTTP 路由后端：静态资源、uploads/jobs/plans/messages 业务接口 + /api/auth/* 认证接口。 |
 | app/backend/services/__init__.py | from .artifacts import ArtifactQueryService |
 | app/backend/services/artifacts.py | Read-only artifact projection used by the backend API. |
 | app/backend/services/jobs.py | Persistence boundary for backend job summaries and event history. |
@@ -26,6 +28,7 @@
 | app/frontend_src/package-lock.json | JSON 配置文件 |
 | app/frontend_src/package.json | JSON 配置文件 |
 | app/frontend_src/postcss.config.js | export default { |
+| app/frontend_src/src/components/AuthPages.jsx | 认证页面组件：LoginPage/RegisterPage/ResetPasswordPage + Field 复用表单组件。 |
 | app/frontend_src/src/components/DashboardUI.jsx | import React, { useEffect, useRef, useState } from "react"; |
 | app/frontend_src/src/components/FeedbackUI.jsx | import React, { useEffect, useRef } from "react"; |
 | app/frontend_src/src/components/SettingsModal.jsx | import React, { useState } from "react"; |
@@ -49,7 +52,14 @@
 | docs/architecture_cn.md | Crayotter 业务流程、系统架构与模块化设计 |
 | docs/material_source_plugins.md | Material Source Plugin Policy |
 | docs/phase3-rl-4b-2026-06-17.md | Crayotter Phase 3 GRPO 4B 30-Step 训练调试记录 |
+| docs/project-control/README.md | 项目控制表索引与维护约定 |
+| docs/project-control/backend-apis.md | 后端接口表（HTTP 路由 + RuntimeManager 方法清单） |
 | docs/project-control/directory-tree.md | 目录树 |
+| docs/project-control/frontend-messages.md | 前端报文表（前端发起的全部 HTTP/SSE 请求） |
+| docs/project-control/frontend-style.md | 前端风格表（设计 Token、组件清单、复用约定） |
+| docs/project-control/server-survey.md | 服务器现状调研文档 |
+| docs/project-control/test-accounts.md | 测试账号与管理员账号表（含明文密码，勿外传） |
+| docs/worklogs/component-worklog.md | 组件级别 worklog（第一版上线各组件状态/决策/阻塞） |
 | docs/reading_log.md | Crayotter-main 项目阅读笔记 |
 | docs/real_platform_smoke_tests.md | Real Platform Download Smoke Tests |
 | docs/rl_guide.md | Crayotter Phase 3 RL 训练指南 |
@@ -60,6 +70,8 @@
 | docs/wsl_setup/setup_wsl_cuda.sh | Shell 脚本 |
 | export_train_test.py | Export train and test fixture datasets separately for verl. |
 | LICENSE | Required Notice: Copyright 2026 Crayotter Contributors. |
+| migrations/001_initial_schema.sql | 初始迁移：tenants/users/sessions/recovery_codes/jobs/uploads/artifacts/audit_logs 8 表 + RLS + updated_at 触发器。 |
+| migrations/002_add_user_role.sql | 迁移 002：users 表新增 role 字段（user/admin）。 |
 | packaging/build_windows.ps1 | PowerShell 脚本 |
 | packaging/crayotter.spec | from pathlib import Path |
 | packaging/prepare_windows_assets.py | from __future__ import annotations |
@@ -194,6 +206,7 @@
 | script/workflow/tool_catalog.py | Tool groups exposed to each workflow phase. |
 | script/workflow/topology.py | Declarative LangGraph topology for the Crayotter workflow. |
 | tests/test_analyze_video_retry.py | import importlib |
+| tests/test_auth_api.py | 认证 API 功能/冲突测试：register/login/me/password/logout/reset 15 项（需运行中的后端 + PostgreSQL）。 |
 | tests/test_backend_logs.py | from __future__ import annotations |
 | tests/test_browser_auth.py | from __future__ import annotations |
 | tests/test_editing_plan.py | from __future__ import annotations |
@@ -213,6 +226,7 @@
 | tests/test_windows_subprocess.py | from __future__ import annotations |
 | tests/test_workflow_modules.py | from __future__ import annotations |
 | tools/build_hgpo_reference_archive.py | Create a provenance-preserving, secret-redacted local HGPO code archive. |
+| tools/create_test_accounts.py | 生成 10 个测试账号 + 1 个管理员账号（随机强密码），输出 docs/project-control/test-accounts.md。 |
 | website/index.html | <!DOCTYPE html> |
 | website/paper/assets/paper.css | .paper-hero { |
 | website/paper/index.html | <!DOCTYPE html> |

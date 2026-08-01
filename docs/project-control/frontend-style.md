@@ -59,11 +59,25 @@
 
 | 组件 | 文件 | 说明 |
 |------|------|------|
-| `App` | `main.jsx` | 根组件，包含路由视图、全局状态、请求封装 |
+| `App` | `main.jsx` | 根组件，包含路由视图、全局状态、请求封装、登录态管理（`authUser`/`authView`） |
 | `WorkbenchView` | `DashboardUI.jsx` | 工作台主视图（三栏布局） |
 | `JobsView` | `DashboardUI.jsx` | 任务列表视图 |
 | `MaterialsView` | `DashboardUI.jsx` | 素材库视图 |
 | `ArtifactsView` | `DashboardUI.jsx` | 产物库视图 |
+| `LoginPage` | `AuthPages.jsx` | 登录页（含"忘记密码？"入口） |
+| `RegisterPage` | `AuthPages.jsx` | 注册页（成功后展示一次性恢复码） |
+| `ResetPasswordPage` | `AuthPages.jsx` | 恢复码重置密码页 |
+
+### 4.1a 认证页复用元素（AuthPages.jsx）
+
+| 元素 | 说明 |
+|------|------|
+| `Field` | 表单字段组件：label + `.input` + 可选密码可见性切换（Eye/EyeOff）+ 错误提示（`text-app-danger`） |
+| `cx` | 类名拼接工具（filter(Boolean).join） |
+| 布局约定 | `grid min-h-screen place-items-center bg-app-bg p-4` 居中容器 + `max-w-md rounded-2xl bg-app-surface p-8 shadow-sm` 卡片 |
+| 提交按钮 | `.primary-button flex w-full items-center justify-center gap-2` + `Loader2` 旋转动画（busy 态） |
+| 切换链接 | `text-app-brand hover:underline` 文字按钮（登录/注册/重置互跳） |
+| 品牌 | `brand-mascot.png` 16×16 居中置于标题上方 |
 
 ### 4.2 布局组件
 
@@ -114,14 +128,20 @@
 | 发送 | `Send` |
 | 警告 | `AlertTriangle` / `AlertCircle` |
 | 成功 | `Check` / `CheckCircle2` |
+| 退出登录 | `LogOut` |
+| 密码可见性 | `Eye` / `EyeOff` |
+| 加载中 | `Loader2` |
 
-## 6. 新增账号体系页面建议
+## 6. 账号体系页面（已实现，2026-07-31）
 
-- **登录/注册页**：使用 `app.bg` 背景、`app.surface` 卡片、`app.brand` 主按钮、`.input` 输入框。
-- **账号管理**：复用 `SettingsModal` 的左右分栏布局与 `.settings-section-stage` 样式。
-- **管理员后台**：复用 `ContextPanel` + `DetailsTab` 模式展示用户/任务列表。
-- **Toast 反馈**：复用 `ToastViewport` 与 `notify(type, message)` 机制。
-- **确认弹窗**：复用 `ConfirmDialog` 处理危险操作（删除账号、重置密码）。
+- **登录/注册/重置密码页**（`AuthPages.jsx`）：已按本表约定实现——`app.bg` 背景、`app.surface` 卡片、`.primary-button` 主按钮、`.input` 输入框、`Field` 复用组件。
+- **登录态管理**（`main.jsx`）：启动时 `GET /api/auth/me` 检查 session；`authView` 在 login/register/reset 间切换；401 通过 `setUnauthorizedHandler` 统一跳登录页。
+- **侧边栏入口**（`DashboardUI.jsx AppSidebar`）：展示 `authUser.username`，提供 `LogOut` 退出按钮。
+- **后续建议**：
+  - **账号管理**：复用 `SettingsModal` 的左右分栏布局与 `.settings-section-stage` 样式，新增改密入口（调用 `POST /api/auth/password`）。
+  - **管理员后台**：复用 `ContextPanel` + `DetailsTab` 模式展示用户/任务列表。
+  - **Toast 反馈**：复用 `ToastViewport` 与 `notify(type, message)` 机制。
+  - **确认弹窗**：复用 `ConfirmDialog` 处理危险操作（删除账号、重置密码）。
 
 ## 7. 响应式断点
 

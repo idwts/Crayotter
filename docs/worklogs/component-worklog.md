@@ -39,46 +39,49 @@
 - **阻塞/风险**：
   - Let's Encrypt 对 IP 证书支持有限，可能需要 ZeroSSL 或自签过渡。
 
+### 组件名：账号认证（注册/登录/注销/改密/恢复码）
+- **负责人**：待定
+- **状态**：已完成（服务器已验证）
+- **关联文档**：[backend-apis.md](../project-control/backend-apis.md)、[frontend-messages.md](../project-control/frontend-messages.md)
+- **已做**：
+  - [x] 梳理现有 owner_id Cookie 机制
+  - [x] 后端新增 `/api/auth/*` 接口（register/login/logout/me/password/reset）
+  - [x] 密码 SHA-256 + 随机盐哈希
+  - [x] 服务端 Session 与 Cookie 设置（`crayotter_auth_session`，30 天滚动过期）
+  - [x] 恢复码注册下发、一次性使用、重置后吊销全部 session
+  - [x] 15 项 API 测试在服务器通过（tests/test_auth_api.py）
+- **待做**：
+  - [ ] 认证接口频率限制与失败锁定
+- **关键决策**：
+  - auth Cookie 与匿名 `crayotter_session` 分离，互不干扰。
+  - 审计中发现 reset 缺少密码强度校验，已补齐（与 change_password 一致 ≥8 位）。
+  - `_write_json` 重构为 `set_auth_token/clear_auth` 参数，修复 Set-Cookie 在 send_response 前发出的 HTTP 响应损坏 bug。
+- **阻塞/风险**：
+  - 无。
+
 ### 组件名：PostgreSQL 部署
 - **负责人**：待定
-- **状态**：未开始
+- **状态**：已完成
 - **已做**：
   - [x] 调研：服务器未安装 PostgreSQL
-- **待做**：
-  - [ ] 安装 PostgreSQL
-  - [ ] 创建业务库与低权限账号
-  - [ ] 配置仅本地监听
-  - [ ] 执行初始迁移脚本
+  - [x] 安装 PostgreSQL 14（服务器 8.161.229.68）
+  - [x] 创建 `crayotter` 业务库与账号
+  - [x] 执行迁移 001/002（表结构 + role 字段）
+  - [x] systemd `crayotter.service` 注入 `CRAYOTTER_DATABASE_URL`
 - **阻塞/风险**：
   - 无
 
 ### 组件名：表结构设计
 - **负责人**：待定
-- **状态**：未开始
+- **状态**：已完成
 - **关联文档**：[balanced-control-plane.md](../../balanced-control-plane.md)
 - **已做**：
   - [x] 第一版规划已确定 8 张表
-- **待做**：
-  - [ ] 设计并创建 users/tenants/sessions/recovery_codes/jobs/uploads/artifacts/audit_logs
-  - [ ] 配置 RLS
-  - [ ] 编写迁移脚本
+  - [x] 设计并创建 users/tenants/sessions/recovery_codes/jobs/uploads/artifacts/audit_logs
+  - [x] 配置 RLS（current_app_tenant_id + tenant_isolation policies）
+  - [x] 编写迁移脚本 001（初始）/002（users.role）
 - **阻塞/风险**：
   - 无
-
-### 组件名：账号认证（注册/登录/注销/改密/恢复码）
-- **负责人**：待定
-- **状态**：未开始
-- **关联文档**：[backend-apis.md](./backend-apis.md)、[frontend-messages.md](./frontend-messages.md)
-- **已做**：
-  - [x] 梳理现有 owner_id Cookie 机制
-- **待做**：
-  - [ ] 后端新增 `/api/auth/*` 接口
-  - [ ] 密码 SHA-256 + 随机盐哈希
-  - [ ] 服务端 Session 与 Cookie 设置
-  - [ ] 前端新增登录/注册页面
-  - [ ] 注册恢复码生成与展示
-- **阻塞/风险**：
-  - 需要 PostgreSQL 就绪后才能联调。
 
 ### 组件名：RuntimeManager 租户化
 - **负责人**：待定
@@ -95,16 +98,19 @@
 
 ### 组件名：前端账号流程
 - **负责人**：待定
-- **状态**：未开始
-- **关联文档**：[frontend-style.md](./frontend-style.md)
+- **状态**：已完成（服务器已验证）
+- **关联文档**：[frontend-style.md](../project-control/frontend-style.md)
 - **已做**：
   - [x] 梳理现有组件与样式系统
+  - [x] 新增 LoginPage / RegisterPage / ResetPasswordPage（AuthPages.jsx）
+  - [x] 401 统一处理（setUnauthorizedHandler → 跳登录页）
+  - [x] 新增导航入口（侧边栏用户名展示、退出按钮）
+  - [x] 登录页"忘记密码？"入口 → 恢复码重置密码页面
+  - [x] 注册成功页展示一次性恢复码
 - **待做**：
-  - [ ] 新增 LoginPage / RegisterPage / AccountPage
-  - [ ] 401 统一处理
-  - [ ] 新增导航入口（账号、退出）
+  - [ ] 新增 AccountPage（账号信息/改密入口）
 - **阻塞/风险**：
-  - 需与后端 `/api/auth/*` 同步开发。
+  - 无
 
 ### 组件名：Docker Worker（用户任务受限容器）
 - **负责人**：待定
@@ -152,3 +158,4 @@
 | 日期 | 记录人 | 变更 |
 |------|--------|------|
 | 2026-07-31 | Claude | 初始化组件 worklog，记录第一版上线前各组件状态。 |
+| 2026-07-31 | Claude | PostgreSQL 部署、表结构设计、账号认证、前端账号流程标记为已完成；新增 `/api/auth/reset` 恢复码重置密码（后端审计修复密码强度校验 + 前端忘记密码入口）；记录 `_write_json` Set-Cookie 顺序 bug 修复。 |

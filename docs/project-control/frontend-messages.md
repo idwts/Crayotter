@@ -1,6 +1,57 @@
 # 前端报文表
 
-> 说明：本表汇总 `app/frontend_src/src/main.jsx` 及辅助模块中所有前端发起的 HTTP/SSE 请求，便于后续鉴权、Mock、调试和接口改造。智能体阅读后应记住：**前端通过全局 `request(url, options)` 调用后端，依赖后端 Cookie 自动携带 `owner_id`；当前无显式登录态管理，所有状态存在 `localStorage`，第一版上线时需要接入 `/api/auth/*` 并改造为 session-based。**
+> 说明：本表汇总 `app/frontend_src/src/main.jsx` 及辅助模块中所有前端发起的 HTTP/SSE 请求，便于后续鉴权、Mock、调试和接口改造。智能体阅读后应记住：**前端通过全局 `request(url, options)` 调用后端，自动携带 Cookie；登录态由 `crayotter_auth_session` Cookie 维护（`authUser` 状态 + 401 统一跳登录页），匿名任务隔离仍依赖 `crayotter_session`；认证页面组件在 `AuthPages.jsx`（Login/Register/ResetPassword）。**
+
+## 0. 认证报文（2026-07-31 上线）
+
+### 0.1 注册
+
+| 项目 | 内容 |
+|------|------|
+| 方法 | `POST` |
+| URL | `/api/auth/register` |
+| 请求体 | `{ username, password }` |
+| 响应 201 | `{ user, tenant, recovery_codes }` |
+| 调用位置 | AuthPages.jsx `RegisterPage.submit` |
+
+### 0.2 登录
+
+| 项目 | 内容 |
+|------|------|
+| 方法 | `POST` |
+| URL | `/api/auth/login` |
+| 请求体 | `{ username, password }` |
+| 响应 200 | `{ user, expires_at }`，`Set-Cookie: crayotter_auth_session` |
+| 调用位置 | AuthPages.jsx `LoginPage.submit` |
+
+### 0.3 恢复码重置密码
+
+| 项目 | 内容 |
+|------|------|
+| 方法 | `POST` |
+| URL | `/api/auth/reset` |
+| 请求体 | `{ username, recovery_code, new_password }` |
+| 响应 200 | `{ ok: true }`，后端吊销该用户全部 session 并清除 Cookie |
+| 错误 | 400：恢复码无效/已使用/新密码少于 8 位 |
+| 调用位置 | AuthPages.jsx `ResetPasswordPage.submit` |
+
+### 0.4 查询当前登录用户
+
+| 项目 | 内容 |
+|------|------|
+| 方法 | `GET` |
+| URL | `/api/auth/me` |
+| 响应 200 | `{ user }`；未登录 401 |
+| 调用位置 | main.jsx `checkSession`（应用启动时） |
+
+### 0.5 注销
+
+| 项目 | 内容 |
+|------|------|
+| 方法 | `POST` |
+| URL | `/api/auth/logout` |
+| 响应 200 | `{ ok: true }`，清除 auth Cookie |
+| 调用位置 | main.jsx 侧边栏退出按钮处理函数 |
 
 ## 1. 通用请求封装
 
@@ -198,8 +249,9 @@
 
 ## 7. 后续鉴权/改造要点
 
-- [ ] 登录后所有请求携带 Session Cookie；401 统一跳转登录页。
+- [x] 登录后所有请求携带 Session Cookie；401 统一跳转登录页（已实现）。
+- [x] 新增 `/api/auth/register`、`/api/auth/login`、`/api/auth/logout`、`/api/auth/me`、`/api/auth/password`、`/api/auth/reset` 等接口对接（已实现）。
 - [ ] `/config` 前端已读取，后续可能需要区分公开/管理员配置。
 - [ ] 上传大文件需要前端分片或调整 Nginx `client_max_body_size`。
 - [ ] SSE 连接在登录态过期时应自动重连或跳转。
-- [ ] 新增 `/api/auth/register`、`/api/auth/login`、`/api/auth/logout`、`/api/auth/me`、`/api/auth/password` 等接口对接。
+- [ ] 认证接口前端增加提交频率限制提示（后端限流待实现）。
