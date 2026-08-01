@@ -65,6 +65,7 @@ def main() -> int:
     status, data = request(base, "POST", "/api/auth/register", {"username": username, "password": password})
     assert status == 201, f"register failed: {status} {data}"
     assert "user" in data and "recovery_codes" in data, f"register response malformed: {data}"
+    recovery_code = data["recovery_codes"][0]
     print(f"[PASS] /api/auth/register created user {username}")
 
     # 4. 重复注册应失败
@@ -111,6 +112,35 @@ def main() -> int:
     status, data = request(base, "POST", "/api/auth/logout", jar=jar)
     assert status == 200, f"logout failed: {status} {data}"
     print("[PASS] /api/auth/logout succeeded")
+
+    # 11. 恢复码重置密码：短密码应被拒绝
+    status, data = request(base, "POST", "/api/auth/reset", {
+        "username": username, "recovery_code": recovery_code, "new_password": "short",
+    })
+    assert status == 400, f"short new password should be rejected: {status} {data}"
+    print("[PASS] /api/auth/reset rejects short new password")
+
+    # 12. 恢复码重置密码：成功
+    reset_password = "ResetPass789!"
+    status, data = request(base, "POST", "/api/auth/reset", {
+        "username": username, "recovery_code": recovery_code, "new_password": reset_password,
+    })
+    assert status == 200, f"reset by recovery code failed: {status} {data}"
+    print("[PASS] /api/auth/reset succeeded with recovery code")
+
+    # 13. 旧密码（改后的）失效，重置密码可登录
+    status, data = request(base, "POST", "/api/auth/login", {"username": username, "password": new_password})
+    assert status == 400, f"old password should fail after reset: {status} {data}"
+    status, data = request(base, "POST", "/api/auth/login", {"username": username, "password": reset_password})
+    assert status == 200, f"login with reset password failed: {status} {data}"
+    print("[PASS] password reset invalidated old password")
+
+    # 14. 恢复码一次性：二次使用应失败
+    status, data = request(base, "POST", "/api/auth/reset", {
+        "username": username, "recovery_code": recovery_code, "new_password": "AnotherPass000!",
+    })
+    assert status == 400, f"used recovery code should fail: {status} {data}"
+    print("[PASS] recovery code is single-use")
 
     print("\nAll tests passed.")
     return 0

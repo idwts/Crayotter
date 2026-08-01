@@ -13,7 +13,7 @@ import {
 } from "./components/DashboardUI";
 import { SettingsModal as RedesignedSettingsModal } from "./components/SettingsModal";
 import { ConfirmDialog, ToastViewport } from "./components/FeedbackUI";
-import { LoginPage, RegisterPage } from "./components/AuthPages";
+import { LoginPage, RegisterPage, ResetPasswordPage } from "./components/AuthPages";
 import { MESSAGES } from "./i18n";
 import {
   getHighestPhase,
@@ -947,12 +947,23 @@ function App() {
         />
       );
     }
+    if (authView === "reset") {
+      return (
+        <ResetPasswordPage
+          t={t}
+          notify={notify}
+          onDone={() => setAuthView("login")}
+          onBackToLogin={() => setAuthView("login")}
+        />
+      );
+    }
     return (
       <LoginPage
         t={t}
         notify={notify}
         onLogin={(user) => setAuthUser(user)}
         onSwitchToRegister={() => setAuthView("register")}
+        onSwitchToReset={() => setAuthView("reset")}
       />
     );
   }

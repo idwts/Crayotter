@@ -49,7 +49,7 @@ function Field({
   );
 }
 
-export function LoginPage({ onLogin, onSwitchToRegister, t, notify }) {
+export function LoginPage({ onLogin, onSwitchToRegister, onSwitchToReset, t, notify }) {
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [showPassword, setShowPassword] = useState(false);
@@ -131,6 +131,132 @@ export function LoginPage({ onLogin, onSwitchToRegister, t, notify }) {
             className="font-medium text-app-brand hover:underline"
           >
             {t("registerNow")}
+          </button>
+        </div>
+        <div className="mt-2 text-center text-sm">
+          <button
+            type="button"
+            onClick={onSwitchToReset}
+            className="text-app-soft hover:text-app-brand hover:underline"
+          >
+            {t("forgotPassword")}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+export function ResetPasswordPage({ onDone, onBackToLogin, t, notify }) {
+  const [username, setUsername] = useState("");
+  const [recoveryCode, setRecoveryCode] = useState("");
+  const [newPassword, setNewPassword] = useState("");
+  const [confirmPassword, setConfirmPassword] = useState("");
+  const [showPassword, setShowPassword] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [errors, setErrors] = useState({});
+
+  const validate = () => {
+    const next = {};
+    if (!username.trim()) next.username = t("fieldRequired");
+    if (!recoveryCode.trim()) next.recoveryCode = t("fieldRequired");
+    if (!newPassword) next.newPassword = t("fieldRequired");
+    else if (newPassword.length < 8) next.newPassword = t("passwordTooShort");
+    if (newPassword !== confirmPassword) next.confirmPassword = t("passwordMismatch");
+    setErrors(next);
+    return Object.keys(next).length === 0;
+  };
+
+  const submit = async (e) => {
+    e.preventDefault();
+    if (!validate()) return;
+    setBusy(true);
+    try {
+      const response = await fetch("/api/auth/reset", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          username: username.trim(),
+          recovery_code: recoveryCode.trim(),
+          new_password: newPassword,
+        }),
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error || t("resetFailed"));
+      notify("success", t("resetSuccess"));
+      onDone();
+    } catch (error) {
+      notify("error", error.message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="grid min-h-screen place-items-center bg-app-bg p-4">
+      <div className="w-full max-w-md rounded-2xl bg-app-surface p-8 shadow-sm">
+        <div className="mb-8 flex flex-col items-center">
+          <img src={brandMascotImage} alt="" className="mb-4 h-16 w-16" />
+          <h1 className="text-2xl font-bold text-app-ink">{t("resetTitle")}</h1>
+          <p className="mt-1 text-sm text-app-soft">{t("resetSubtitle")}</p>
+        </div>
+        <form onSubmit={submit} className="grid gap-5">
+          <Field
+            id="reset-username"
+            label={t("username")}
+            value={username}
+            onChange={setUsername}
+            placeholder={t("usernamePlaceholder")}
+            error={errors.username}
+            required
+          />
+          <Field
+            id="reset-recovery-code"
+            label={t("recoveryCode")}
+            value={recoveryCode}
+            onChange={setRecoveryCode}
+            placeholder={t("recoveryCodePlaceholder")}
+            error={errors.recoveryCode}
+            required
+          />
+          <Field
+            id="reset-new-password"
+            label={t("newPassword")}
+            type={showPassword ? "text" : "password"}
+            value={newPassword}
+            onChange={setNewPassword}
+            placeholder={t("newPasswordPlaceholder")}
+            error={errors.newPassword}
+            required
+            showToggle
+            onToggle={() => setShowPassword((v) => !v)}
+          />
+          <Field
+            id="reset-confirm-password"
+            label={t("confirmPassword")}
+            type={showPassword ? "text" : "password"}
+            value={confirmPassword}
+            onChange={setConfirmPassword}
+            placeholder={t("confirmPasswordPlaceholder")}
+            error={errors.confirmPassword}
+            required
+          />
+          <button
+            type="submit"
+            disabled={busy}
+            className="primary-button flex w-full items-center justify-center gap-2"
+          >
+            {busy && <Loader2 size={18} className="animate-spin" />}
+            {t("resetButton")}
+          </button>
+        </form>
+        <div className="mt-6 text-center text-sm text-app-soft">
+          <button
+            type="button"
+            onClick={onBackToLogin}
+            className="font-medium text-app-brand hover:underline"
+          >
+            {t("backToLogin")}
           </button>
         </div>
       </div>

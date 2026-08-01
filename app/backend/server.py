@@ -283,6 +283,17 @@ class BackendHandler(BaseHTTPRequestHandler):
                 self._write_json(HTTPStatus.OK, {"ok": True}, clear_auth=True)
                 return
 
+            if path == "/api/auth/reset":
+                payload = self._read_json()
+                auth_service.reset_password_by_recovery_code(
+                    str(payload.get("username") or ""),
+                    str(payload.get("recovery_code") or ""),
+                    str(payload.get("new_password") or ""),
+                    ip_address=self._client_ip(),
+                )
+                self._write_json(HTTPStatus.OK, {"ok": True}, clear_auth=True)
+                return
+
             if path == "/uploads":
                 items = self._handle_upload_request(self._uploads_root(owner_id), public=self._public_mode)
                 self._write_json(HTTPStatus.CREATED, {"items": items})

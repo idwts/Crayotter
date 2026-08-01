@@ -361,6 +361,9 @@ def reset_password_by_recovery_code(
     ip_address: str | None = None,
 ) -> bool:
     """使用一次性恢复码重置密码。"""
+    if len(new_password) < 8:
+        raise ValueError("新密码至少 8 位")
+
     normalized = username.strip().lower()
     code_digest = _sha256(recovery_code)
 
