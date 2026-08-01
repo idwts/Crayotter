@@ -7,7 +7,7 @@ import threading
 import time
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any, Literal, Mapping
 
 from pydantic import BaseModel, Field, ValidationError, field_validator
 
@@ -192,6 +192,7 @@ def validate_editing_plan(
     *,
     allowed_source_paths: list[str] | None = None,
     require_sources_exist: bool = True,
+    source_durations: Mapping[str, float] | None = None,
 ) -> PlanValidationReport:
     issues: list[PlanValidationIssue] = []
     allowed = {
@@ -216,6 +217,30 @@ def validate_editing_plan(
                 issues.append(PlanValidationIssue(code="unknown_source", message="分镜引用了未登记素材。", scene_id=scene.scene_id))
             if require_sources_exist and not Path(resolved).is_file():
                 issues.append(PlanValidationIssue(code="missing_source", message="分镜引用的素材文件不存在。", scene_id=scene.scene_id))
+            source_duration = float((source_durations or {}).get(resolved, 0.0) or 0.0)
+            if source_duration > 0:
+                if scene.source_start >= source_duration:
+                    issues.append(
+                        PlanValidationIssue(
+                            code="source_start_out_of_bounds",
+                            message=(
+                                f"素材入点 {scene.source_start:.3f}s 已超过真实时长 "
+                                f"{source_duration:.3f}s。"
+                            ),
+                            scene_id=scene.scene_id,
+                        )
+                    )
+                elif scene.source_end > source_duration + 0.001:
+                    issues.append(
+                        PlanValidationIssue(
+                            code="source_end_out_of_bounds",
+                            message=(
+                                f"素材出点 {scene.source_end:.3f}s 已超过真实时长 "
+                                f"{source_duration:.3f}s。"
+                            ),
+                            scene_id=scene.scene_id,
+                        )
+                    )
         if scene.source_end <= scene.source_start:
             issues.append(PlanValidationIssue(code="invalid_source_time", message="素材入点/出点不合法。", scene_id=scene.scene_id))
         if scene.source_end - scene.source_start < 0.5:

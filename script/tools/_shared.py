@@ -74,6 +74,14 @@ from model_runtime import (
     fail_fast_model_errors,
     raise_model_failure,
 )
+try:
+    from analysis_timeline import normalize_analysis_payload
+except ImportError:
+    from script.analysis_timeline import normalize_analysis_payload
+try:
+    from media_consistency import probe_media as _probe_media
+except ImportError:
+    from script.media_consistency import probe_media as _probe_media
 
 configure_runtime_environment()
 
@@ -285,6 +293,9 @@ def _restore_cached_analysis(
     try:
         payload = json.loads(cache_path.read_text(encoding="utf-8"))
         payload["source_video"] = str(source_video)
+        source_duration = _get_source_duration_seconds(source_video)
+        if source_duration > 0:
+            payload, _ = normalize_analysis_payload(payload, source_duration)
         output_path = _analysis_output_path(source_video)
         _persist_analysis_payload(output_path, payload)
         emit_benchmark_event(
@@ -911,11 +922,28 @@ def _ensure_analysis_semantic_index(
     analysis_path: Path,
     payload: dict[str, Any],
 ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    original_payload = json.dumps(payload, ensure_ascii=False, sort_keys=True)
     semantic_segments = payload.get("semantic_segments", [])
     if not isinstance(semantic_segments, list) or not semantic_segments:
         semantic_segments = _extract_semantic_segments_from_analysis(str(payload.get("analysis_text", "")))
 
     semantic_segments = _prepare_semantic_segments(semantic_segments)
+    payload["semantic_segments"] = semantic_segments
+    if not isinstance(payload.get("segments"), list) or not payload.get("segments"):
+        payload["segments"] = _extract_time_segments_from_analysis(
+            str(payload.get("analysis_text", ""))
+        )
+
+    source_duration = float(payload.get("source_duration_seconds", 0.0) or 0.0)
+    source_video = Path(str(payload.get("source_video", "") or ""))
+    if source_duration <= 0 and source_video.is_file():
+        source_duration = _get_source_duration_seconds(source_video)
+    if source_duration > 0:
+        normalized, _ = normalize_analysis_payload(payload, source_duration)
+        payload.clear()
+        payload.update(normalized)
+        semantic_segments = list(payload.get("semantic_segments", []))
+
     semantic_index = _build_semantic_index_meta(semantic_segments)
 
     original_segments = payload.get("semantic_segments", [])
@@ -925,7 +953,8 @@ def _ensure_analysis_semantic_index(
     payload["semantic_segments"] = semantic_segments
     payload["semantic_index"] = semantic_index
 
-    if semantic_segments != original_segments or semantic_index != original_index:
+    current_payload = json.dumps(payload, ensure_ascii=False, sort_keys=True)
+    if current_payload != original_payload:
         _persist_analysis_payload(analysis_path, payload)
 
     return semantic_segments, semantic_index
@@ -964,6 +993,7 @@ def _save_analysis_json(
         output_path = _analysis_output_path(source_video)
         semantic_segments = _extract_semantic_segments_from_analysis(analysis_text)
         semantic_segments = _prepare_semantic_segments(semantic_segments)
+        source_duration = _get_source_duration_seconds(source_video)
         payload = {
             "source_video": str(source_video),
             "analysis_video": str(analysis_video),
@@ -976,6 +1006,17 @@ def _save_analysis_json(
             "analysis_text": analysis_text,
             "saved_at": datetime.now().isoformat(),
         }
+        if source_duration > 0:
+            payload, correction = normalize_analysis_payload(payload, source_duration)
+            if correction["clamped_count"] or correction["dropped_count"]:
+                logger.warning(
+                    "⚠️ 多模态分析时间戳越过源视频 EOF，已修正: source=%s duration=%.3fs "
+                    "clamped=%d dropped=%d",
+                    source_video.name,
+                    source_duration,
+                    correction["clamped_count"],
+                    correction["dropped_count"],
+                )
         if not _persist_analysis_payload(output_path, payload):
             return None
         return output_path
@@ -1007,6 +1048,19 @@ def _get_video_meta(video_path: str) -> dict[str, Any]:
         "width": width,
         "height": height,
     }
+
+
+def _get_source_duration_seconds(video_path: str | Path) -> float:
+    """Use ffprobe as the authority, with OpenCV only as a compatibility fallback."""
+    try:
+        duration = float(_probe_media(video_path).duration_seconds)
+        if duration > 0:
+            return duration
+    except Exception as exc:
+        logger.warning("⚠️ ffprobe 获取素材时长失败，回退 OpenCV: %s: %s", video_path, exc)
+    return float(
+        _get_video_meta(str(video_path)).get("duration_seconds", 0.0) or 0.0
+    )
 
 def _to_file_url(path: Path) -> str:
     return path.resolve().as_uri()

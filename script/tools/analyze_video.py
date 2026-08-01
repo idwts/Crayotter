@@ -337,7 +337,14 @@ def analyze_video(
         # 仅 Omni 模型才提取音频
         audio_path = _extract_audio_for_analysis(resolved_video) if is_omni else None
 
-        goal_line = f"分析目标: {analysis_goal}\n"
+        source_duration = _shared._get_source_duration_seconds(resolved_video)
+        duration_constraint = (
+            f"源视频经本地探测的真实时长为 {source_duration:.3f} 秒；"
+            f"所有时间范围必须位于 0 到 {source_duration:.3f} 秒内，严禁描述 EOF 之后的内容。\n"
+            if source_duration > 0
+            else ""
+        )
+        goal_line = f"分析目标: {analysis_goal}\n{duration_constraint}"
         if is_omni:
             analysis_prompt = _ANALYSIS_PROMPT_OMNI.format(goal_line=goal_line)
         else:

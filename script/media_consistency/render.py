@@ -5,7 +5,7 @@ from pathlib import Path
 import subprocess
 from typing import Callable
 
-from .probe import MediaProbe
+from .probe import MediaProbe, probe_media
 from .profile import MediaProfile
 
 
@@ -63,13 +63,23 @@ def build_canonical_render_command(
         raise ValueError("HDR input requires explicit allow_hdr_tonemap=True")
     if request.start_seconds < 0:
         raise ValueError("start_seconds cannot be negative")
+    source_duration = float(request.probe.duration_seconds)
+    if source_duration <= 0:
+        raise ValueError("source duration must be positive")
+    available_duration = source_duration - float(request.start_seconds)
+    if available_duration <= 0.001:
+        raise ValueError(
+            "render start is outside source duration: "
+            f"start={request.start_seconds:.3f}s, source={source_duration:.3f}s"
+        )
     duration = (
         float(request.duration_seconds)
         if request.duration_seconds is not None
-        else max(0.0, request.probe.duration_seconds - request.start_seconds)
+        else available_duration
     )
     if duration <= 0:
         raise ValueError("render duration must be positive")
+    duration = min(duration, available_duration)
     if not 0 <= int(request.crf) <= 51:
         raise ValueError("crf must be between 0 and 51")
 
@@ -140,6 +150,7 @@ def build_canonical_render_command(
 
 
 Runner = Callable[..., subprocess.CompletedProcess[str]]
+Probe = Callable[[str | Path], MediaProbe]
 
 
 def render_canonical_media(
@@ -147,6 +158,7 @@ def render_canonical_media(
     *,
     ffmpeg_bin: str = "ffmpeg",
     runner: Runner = subprocess.run,
+    probe_fn: Probe = probe_media,
     timeout_seconds: float = 1200.0,
 ) -> Path:
     """Execute a pre-specified canonical render without registering artifacts."""
@@ -168,4 +180,10 @@ def render_canonical_media(
         raise RuntimeError(f"canonical render failed: {detail}")
     if not output.is_file() or output.stat().st_size <= 0:
         raise RuntimeError("canonical render produced no output file")
+    try:
+        output_probe = probe_fn(output)
+    except Exception as exc:
+        raise RuntimeError(f"canonical render produced invalid media: {exc}") from exc
+    if output_probe.duration_seconds <= 0.001:
+        raise RuntimeError("canonical render produced a zero-duration video")
     return output

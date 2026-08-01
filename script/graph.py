@@ -48,6 +48,7 @@ if str(SCRIPT_DIR) not in sys.path:
 
 from app.media_index import build_analysis_index, iter_analysis_files, iter_video_files, match_analysis_files
 from app.steering import SteeringCoordinator, classify_guidance
+from analysis_timeline import bounded_analysis_detail, normalize_analysis_payload
 from editing_plan import (
     EditingPlan,
     EditingPlanStore,
@@ -792,6 +793,19 @@ def _register_plan_artifact(plan: EditingPlan, kind: str = "editing_plan") -> No
     )
 
 
+def _probe_source_durations(source_paths: list[str]) -> dict[str, float]:
+    durations: dict[str, float] = {}
+    for source in source_paths:
+        if not source:
+            continue
+        resolved = str(Path(source).resolve(strict=False))
+        try:
+            durations[resolved] = float(probe_media(resolved).duration_seconds)
+        except Exception as exc:
+            graph_logger.warning("素材时长探测失败: %s: %s", resolved, exc)
+    return durations
+
+
 def _fallback_editing_plan(state: AgentState) -> EditingPlan:
     source_paths = [str(path.resolve()) for path in _iter_source_videos()]
     analysis_paths = [str(path.resolve()) for path in _iter_analysis_json_files()]
@@ -915,7 +929,11 @@ def validate_editing_plan_node(state: AgentState) -> dict[str, Any]:
     plan = store.current()
     if plan is None:
         raise RuntimeError("缺少可校验的剪辑计划")
-    report = validate_editing_plan(plan, allowed_source_paths=plan.source_video_paths)
+    report = validate_editing_plan(
+        plan,
+        allowed_source_paths=plan.source_video_paths,
+        source_durations=_probe_source_durations(plan.source_video_paths),
+    )
     report_path = store.root / f"editing_plan_{plan.version}_validation.json"
     report_path.write_text(json.dumps(report.model_dump(), ensure_ascii=False, indent=2), encoding="utf-8")
     if not report.ok:
@@ -1705,7 +1723,20 @@ def _build_full_analysis_context() -> str:
             continue
 
         source_video = str(data.get("source_video", ""))
+        source_duration = float(data.get("source_duration_seconds", 0.0) or 0.0)
+        source_path = Path(source_video).resolve(strict=False) if source_video else None
+        if source_path is not None and source_path.is_file():
+            try:
+                source_duration = float(probe_media(source_path).duration_seconds)
+            except Exception as exc:
+                graph_logger.warning("素材时长探测失败，沿用分析元数据: %s: %s", source_path, exc)
+
+        correction = {"clamped_count": 0, "dropped_count": 0}
+        if source_duration > 0:
+            data, correction = normalize_analysis_payload(data, source_duration)
         analysis_text = str(data.get("analysis_text", ""))
+        if correction["clamped_count"] or correction["dropped_count"]:
+            analysis_text = bounded_analysis_detail(data)
         segments = data.get("segments", [])
 
         seg_lines: list[str] = []
@@ -1726,6 +1757,15 @@ def _build_full_analysis_context() -> str:
             f"📽️ 源视频: {source_video}",
             f"   分析文件: {fp.name}",
         ]
+        if source_duration > 0:
+            block_parts.append(
+                f"   ffprobe 真实时长: {source_duration:.3f}s（所有素材入出点必须位于此范围内）"
+            )
+        if correction["clamped_count"] or correction["dropped_count"]:
+            block_parts.append(
+                "   ⚠️ 已忽略多模态模型在 EOF 之后生成的描述："
+                f"夹紧 {correction['clamped_count']} 段，丢弃 {correction['dropped_count']} 段"
+            )
         if seg_lines:
             block_parts.append(
                 f"   推荐片段 ({len(seg_lines)} 段, 总可用时长 {video_seg_duration:.1f}s):"
@@ -4354,6 +4394,61 @@ def _parse_json_object(text: str) -> dict[str, Any]:
     return json.loads(content)
 
 
+def _normalize_controlled_clip_bounds(
+    plan: ControlledEditPlan,
+    allowed_source_paths: list[str],
+) -> float:
+    """Resolve source paths, clamp partial EOF overlap, and reject empty cuts."""
+    available = {
+        str(Path(path).resolve(strict=False))
+        for path in allowed_source_paths
+        if path
+    }
+    source_durations = _probe_source_durations(sorted(available))
+    total = 0.0
+    for clip in plan.clips:
+        resolved = str(Path(clip.source_path).resolve(strict=False))
+        if resolved not in available:
+            raise RuntimeError(f"Phase 3 计划引用未知素材: {clip.source_path}")
+        clip.source_path = resolved
+        source_duration = float(source_durations.get(resolved, 0.0) or 0.0)
+        if source_duration <= 0:
+            raise RuntimeError(f"Phase 3 无法获取素材真实时长: {resolved}")
+        if clip.start >= source_duration - 0.001:
+            raise RuntimeError(
+                "Phase 3 计划裁剪入点越过源视频 EOF: "
+                f"source={Path(resolved).name}, start={clip.start:.3f}s, "
+                f"duration={source_duration:.3f}s"
+            )
+        if clip.end > source_duration:
+            original_end = clip.end
+            clip.end = source_duration
+            graph_logger.warning(
+                "Phase 3 裁剪出点越过 EOF，已夹紧: source=%s start=%.3fs end=%.3fs -> %.3fs",
+                Path(resolved).name,
+                clip.start,
+                original_end,
+                clip.end,
+            )
+            _emit_orchestration_event(
+                "phase3_clip_bounds_clamped",
+                {
+                    "source": resolved,
+                    "start_seconds": clip.start,
+                    "requested_end_seconds": original_end,
+                    "actual_end_seconds": clip.end,
+                },
+            )
+        if clip.end <= clip.start or clip.end - clip.start < 0.5:
+            raise RuntimeError(
+                "Phase 3 计划包含无效裁剪区间: "
+                f"source={Path(resolved).name}, start={clip.start:.3f}s, "
+                f"end={clip.end:.3f}s"
+            )
+        total += clip.end - clip.start
+    return total
+
+
 def _build_controlled_edit_plan(state: AgentState) -> ControlledEditPlan:
     registry = _artifact_registry()
     scheduler = _resource_scheduler(registry)
@@ -4418,16 +4513,7 @@ def _build_controlled_edit_plan(state: AgentState) -> ControlledEditPlan:
             and not _user_explicitly_requested_high_resolution(state.user_request)
         ):
             plan.resolution = "720p"
-        available = {str(Path(path).resolve()) for path in source_paths}
-        total = 0.0
-        for clip in plan.clips:
-            resolved = str(Path(clip.source_path).resolve())
-            if resolved not in available:
-                raise RuntimeError(f"Phase 3 计划引用未知素材: {clip.source_path}")
-            clip.source_path = resolved
-            if clip.end <= clip.start or clip.end - clip.start < 0.5:
-                raise RuntimeError("Phase 3 计划包含无效裁剪区间")
-            total += clip.end - clip.start
+        total = _normalize_controlled_clip_bounds(plan, source_paths)
         target = state.target_duration_seconds or total
         transition_overlap = (
             (0.3 if target <= 30 else 0.6) * max(0, len(plan.clips) - 1)
@@ -5097,6 +5183,10 @@ def _run_controlled_editor(state: AgentState) -> str:
         if approved_plan is not None
         else _build_controlled_edit_plan(state)
     )
+    _normalize_controlled_clip_bounds(
+        plan,
+        [str(path.resolve(strict=False)) for path in _iter_source_videos()],
+    )
     plan_version = approved_plan.version if approved_plan is not None else ""
     registry = _artifact_registry()
     media_profile = _media_profile_for_state(state)
@@ -5201,6 +5291,9 @@ def _run_controlled_editor(state: AgentState) -> str:
                     max(60.0, _budget_snapshot(state).get("remaining_seconds", 1200.0)),
                 ),
             )
+            output_probe = probe_media(output_path)
+            if output_probe.duration_seconds <= 0.001:
+                raise RuntimeError(f"裁剪输出时长无效，拒绝登记制品: {output_path}")
             path = str(output_path.resolve())
             return TaskExecutionResult(
                 data={"path": path},
@@ -5216,6 +5309,7 @@ def _run_controlled_editor(state: AgentState) -> str:
                             "execution_step_id": task.arguments.get("execution_step_id", task.id),
                             "media_profile_version": media_profile.version,
                             "source_probe": source_probe.to_dict(),
+                            "output_probe": output_probe.to_dict(),
                         },
                     )
                 ],

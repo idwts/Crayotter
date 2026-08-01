@@ -49,6 +49,46 @@ class EditingPlanTests(unittest.TestCase):
             self.assertFalse(report.ok)
             self.assertTrue(any(issue.code == "unknown_source" for issue in report.issues))
 
+    def test_validate_rejects_source_timestamps_past_real_duration(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            source = Path(tmp) / "source.mp4"
+            source.write_bytes(b"video")
+            plan = self._sample_plan(source)
+            plan.scenes[0].source_start = 9.0
+            plan.scenes[0].source_end = 11.0
+
+            report = validate_editing_plan(
+                plan,
+                allowed_source_paths=[str(source.resolve())],
+                source_durations={str(source.resolve()): 7.45},
+            )
+
+            self.assertFalse(report.ok)
+            self.assertIn(
+                "source_start_out_of_bounds",
+                {issue.code for issue in report.issues},
+            )
+
+    def test_validate_rejects_source_end_past_real_duration(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            source = Path(tmp) / "source.mp4"
+            source.write_bytes(b"video")
+            plan = self._sample_plan(source)
+            plan.scenes[0].source_start = 6.0
+            plan.scenes[0].source_end = 9.0
+
+            report = validate_editing_plan(
+                plan,
+                allowed_source_paths=[str(source.resolve())],
+                source_durations={str(source.resolve()): 7.45},
+            )
+
+            self.assertFalse(report.ok)
+            self.assertIn(
+                "source_end_out_of_bounds",
+                {issue.code for issue in report.issues},
+            )
+
     def test_apply_patch_creates_new_version_and_diff(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             source = Path(tmp) / "source.mp4"

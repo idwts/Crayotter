@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import subprocess
+import tempfile
 import unittest
+from pathlib import Path
 
 from script.media_consistency import (
     CanonicalRenderRequest,
@@ -9,6 +12,7 @@ from script.media_consistency import (
     build_quality_analysis_commands,
     parse_ffprobe_payload,
     parse_quality_analysis_outputs,
+    render_canonical_media,
     resolve_media_profile,
     validate_final_media,
     validate_technical_media,
@@ -145,6 +149,58 @@ class CanonicalRenderCommandTests(unittest.TestCase):
             )
         )
         self.assertIn("tonemap=tonemap=hable", " ".join(command))
+
+    def test_render_range_is_clamped_to_source_eof(self) -> None:
+        profile = resolve_media_profile(30)
+        probe = parse_ffprobe_payload(_probe_payload())
+        command = build_canonical_render_command(
+            CanonicalRenderRequest(
+                "input.mp4",
+                "output.mp4",
+                profile,
+                probe,
+                start_seconds=28,
+                duration_seconds=5,
+            )
+        )
+        self.assertEqual(command[command.index("-t") + 1], "2.000")
+
+    def test_render_start_past_source_eof_is_rejected(self) -> None:
+        profile = resolve_media_profile(30)
+        probe = parse_ffprobe_payload(_probe_payload())
+        with self.assertRaisesRegex(ValueError, "outside source duration"):
+            build_canonical_render_command(
+                CanonicalRenderRequest(
+                    "input.mp4",
+                    "output.mp4",
+                    profile,
+                    probe,
+                    start_seconds=31,
+                    duration_seconds=2,
+                )
+            )
+
+    def test_successful_ffmpeg_exit_still_rejects_unprobeable_output(self) -> None:
+        profile = resolve_media_profile(30)
+        probe = parse_ffprobe_payload(_probe_payload())
+        with tempfile.TemporaryDirectory() as tmp:
+            source = Path(tmp) / "input.mp4"
+            output = Path(tmp) / "output.mp4"
+            source.write_bytes(b"source")
+
+            def fake_runner(command, **kwargs):
+                output.write_bytes(b"empty-container")
+                return subprocess.CompletedProcess(command, 0, "", "")
+
+            def failing_probe(path):
+                raise ValueError("ffprobe payload has no video stream")
+
+            with self.assertRaisesRegex(RuntimeError, "invalid media"):
+                render_canonical_media(
+                    CanonicalRenderRequest(source, output, profile, probe),
+                    runner=fake_runner,
+                    probe_fn=failing_probe,
+                )
 
 
 class MediaValidationTests(unittest.TestCase):
