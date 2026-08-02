@@ -50,12 +50,18 @@
   - [x] 服务端 Session 与 Cookie 设置（`crayotter_auth_session`，30 天滚动过期）
   - [x] 恢复码注册下发、一次性使用、重置后吊销全部 session
   - [x] 15 项 API 测试在服务器通过（tests/test_auth_api.py）
+  - [x] remember-me 持久登录（selector:validator 轮换 + 盗用检测，`crayotter_remember` Cookie，migration 003）
+  - [x] 服务端偏好同步 `/api/auth/preferences`（浏览器历史动作记忆：语言/侧栏/视图/任务草稿）
+  - [x] 注册成功自动建立会话（前端注册后直入工作台）
+  - [x] 24 项 API 测试 + 13 步 E2E 截图验证（本地与服务器双端通过）
 - **待做**：
   - [ ] 认证接口频率限制与失败锁定
 - **关键决策**：
   - auth Cookie 与匿名 `crayotter_session` 分离，互不干扰。
   - 审计中发现 reset 缺少密码强度校验，已补齐（与 change_password 一致 ≥8 位）。
-  - `_write_json` 重构为 `set_auth_token/clear_auth` 参数，修复 Set-Cookie 在 send_response 前发出的 HTTP 响应损坏 bug。
+  - `_write_json` 重构为 `set_auth_token/clear_auth/set_remember_token/clear_remember` 参数，修复 Set-Cookie 在 send_response 前发出的 HTTP 响应损坏 bug。
+  - remember token 采用 OWASP selector:validator 模型：DB 仅存 validator digest，每次使用轮换；乐观锁 UPDATE + 10s `last_used_at` 宽限区分并发竞争与盗用（Jaspan 模式），确认盗用吊销该用户全部 token 并审计。
+  - 密码永不在浏览器持久化；"记住用户名"仅存 localStorage 用户名。
 - **阻塞/风险**：
   - 无。
 
@@ -159,3 +165,4 @@
 |------|--------|------|
 | 2026-07-31 | Claude | 初始化组件 worklog，记录第一版上线前各组件状态。 |
 | 2026-07-31 | Claude | PostgreSQL 部署、表结构设计、账号认证、前端账号流程标记为已完成；新增 `/api/auth/reset` 恢复码重置密码（后端审计修复密码强度校验 + 前端忘记密码入口）；记录 `_write_json` Set-Cookie 顺序 bug 修复。 |
+| 2026-08-02 | Claude | cookie 机制上线：remember-me 持久登录（OWASP selector:validator 轮换 + 乐观锁并发控制 + 10s 宽限盗用检测，migration 003）+ `/api/auth/preferences` 服务端历史动作记忆（语言/侧栏/视图/任务草稿等 1s 防抖同步）；前端记住我/记住用户名复选框；注册成功自动建立会话；修复 main.jsx checkSession TDZ 白屏 bug；同步服务器新版 runtime_manager/models（owner_id 隔离）回 git；本地+服务器双端 24 项功能测试与 13 步 E2E 截图验证全过。 |

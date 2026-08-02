@@ -59,13 +59,13 @@
 
 | 组件 | 文件 | 说明 |
 |------|------|------|
-| `App` | `main.jsx` | 根组件，包含路由视图、全局状态、请求封装、登录态管理（`authUser`/`authView`） |
+| `App` | `main.jsx` | 根组件，包含路由视图、全局状态、请求封装、登录态管理（`authUser`/`authView`）与服务端偏好同步（登录后 GET `/api/auth/preferences` 应用语言/侧栏/视图/任务草稿等，状态变更 1s 防抖 POST 回写，`prefsApplyingRef` 防回环） |
 | `WorkbenchView` | `DashboardUI.jsx` | 工作台主视图（三栏布局） |
 | `JobsView` | `DashboardUI.jsx` | 任务列表视图 |
 | `MaterialsView` | `DashboardUI.jsx` | 素材库视图 |
 | `ArtifactsView` | `DashboardUI.jsx` | 产物库视图 |
-| `LoginPage` | `AuthPages.jsx` | 登录页（含"忘记密码？"入口） |
-| `RegisterPage` | `AuthPages.jsx` | 注册页（成功后展示一次性恢复码） |
+| `LoginPage` | `AuthPages.jsx` | 登录页（含"忘记密码？"入口、"记住我（30 天免登录）"与"记住用户名"复选框；记住用户名存 localStorage `crayotter.rememberedUsername`，密码永不落盘） |
+| `RegisterPage` | `AuthPages.jsx` | 注册页（成功后展示一次性恢复码；2026-08-02 起注册成功自动建立会话直接进入工作台） |
 | `ResetPasswordPage` | `AuthPages.jsx` | 恢复码重置密码页 |
 
 ### 4.1a 认证页复用元素（AuthPages.jsx）

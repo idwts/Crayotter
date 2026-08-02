@@ -11,7 +11,7 @@
 | 方法 | `POST` |
 | URL | `/api/auth/register` |
 | 请求体 | `{ username, password }` |
-| 响应 201 | `{ user, tenant, recovery_codes }` |
+| 响应 201 | `{ user, tenant, recovery_codes }`；2026-08-02 起同时 `Set-Cookie: crayotter_auth_session`（注册即登录） |
 | 调用位置 | AuthPages.jsx `RegisterPage.submit` |
 
 ### 0.2 登录
@@ -20,8 +20,8 @@
 |------|------|
 | 方法 | `POST` |
 | URL | `/api/auth/login` |
-| 请求体 | `{ username, password }` |
-| 响应 200 | `{ user, expires_at }`，`Set-Cookie: crayotter_auth_session` |
+| 请求体 | `{ username, password, remember_me }` |
+| 响应 200 | `{ user, expires_at }`，`Set-Cookie: crayotter_auth_session`；`remember_me=true` 时追加 `Set-Cookie: crayotter_remember`（30 天，HttpOnly+SameSite=Lax） |
 | 调用位置 | AuthPages.jsx `LoginPage.submit` |
 
 ### 0.3 恢复码重置密码
@@ -41,7 +41,7 @@
 |------|------|
 | 方法 | `GET` |
 | URL | `/api/auth/me` |
-| 响应 200 | `{ user }`；未登录 401 |
+| 响应 200 | `{ user }`；未登录 401；携带有效 remember Cookie 时自动续期返回 `{ user, renewed: true }` 并重置两个 Cookie |
 | 调用位置 | main.jsx `checkSession`（应用启动时） |
 
 ### 0.5 注销
@@ -50,8 +50,27 @@
 |------|------|
 | 方法 | `POST` |
 | URL | `/api/auth/logout` |
-| 响应 200 | `{ ok: true }`，清除 auth Cookie |
+| 响应 200 | `{ ok: true }`，清除 auth + remember Cookie 并吊销对应 remember token |
 | 调用位置 | main.jsx 侧边栏退出按钮处理函数 |
+
+### 0.6 读取服务端偏好
+
+| 项目 | 内容 |
+|------|------|
+| 方法 | `GET` |
+| URL | `/api/auth/preferences` |
+| 响应 200 | `{ preferences: {...} }`；未登录 401 |
+| 调用位置 | main.jsx 偏好同步 effect（`authUser` 变化后拉取并应用语言/侧栏/视图/任务草稿等） |
+
+### 0.7 合并更新服务端偏好
+
+| 项目 | 内容 |
+|------|------|
+| 方法 | `POST` |
+| URL | `/api/auth/preferences` |
+| 请求体 | `{ preferences: { key: value, ... } }`（合并语义；键禁 `__` 前缀且 ≤64 字符，整体 ≤16KB） |
+| 响应 200 | `{ preferences: {...} }`（合并后全量） |
+| 调用位置 | main.jsx 偏好同步 effect（受控状态变更后 1s 防抖回写，`prefsApplyingRef` 防回环） |
 
 ## 1. 通用请求封装
 
@@ -251,6 +270,7 @@
 
 - [x] 登录后所有请求携带 Session Cookie；401 统一跳转登录页（已实现）。
 - [x] 新增 `/api/auth/register`、`/api/auth/login`、`/api/auth/logout`、`/api/auth/me`、`/api/auth/password`、`/api/auth/reset` 等接口对接（已实现）。
+- [x] remember-me 登录（`remember_me` 字段 + `crayotter_remember` Cookie 自动续期）与 `/api/auth/preferences` 服务端偏好同步（2026-08-02 已实现，含 E2E 截图验证）。
 - [ ] `/config` 前端已读取，后续可能需要区分公开/管理员配置。
 - [ ] 上传大文件需要前端分片或调整 Nginx `client_max_body_size`。
 - [ ] SSE 连接在登录态过期时应自动重连或跳转。

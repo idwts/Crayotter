@@ -1,6 +1,6 @@
 # 后端接口表
 
-> 说明：本表汇总当前后端对外暴露的 HTTP 接口与 `RuntimeManager` 内部方法，便于后续鉴权、复用和改造。智能体阅读后应记住：**当前后端是 `http.server.BaseHTTPRequestHandler` 手写路由；认证接口 `/api/auth/*` 已上线（2026-07-31），使用 `crayotter_auth_session` Cookie（SHA-256 digest session，30 天滚动过期），匿名隔离仍用 `crayotter_session` Cookie 的 `owner_id`；后续需要把业务接口迁移到带租户校验的框架并补齐鉴权。**
+> 说明：本表汇总当前后端对外暴露的 HTTP 接口与 `RuntimeManager` 内部方法，便于后续鉴权、复用和改造。智能体阅读后应记住：**当前后端是 `http.server.BaseHTTPRequestHandler` 手写路由；认证接口 `/api/auth/*` 已上线（2026-07-31），使用 `crayotter_auth_session` Cookie（SHA-256 digest session，30 天滚动过期）+ 可选 `crayotter_remember` 持久登录 Cookie（2026-08-02 上线，selector:validator 轮换），匿名隔离仍用 `crayotter_session` Cookie 的 `owner_id`；后续需要把业务接口迁移到带租户校验的框架并补齐鉴权。**
 
 ## 1. HTTP 接口总览
 
@@ -13,16 +13,20 @@
 | GET | `/health` | 健康检查 | 无 |
 | GET | `/config` | 公开配置（模型、功能开关等） | 无 |
 
-### 1.1a 认证（Auth，2026-07-31 上线）
+### 1.1a 认证（Auth，2026-07-31 上线；2026-08-02 增加 remember-me 与偏好同步）
 
 | 方法 | 路径 | 说明 | 当前鉴权 |
 |------|------|------|----------|
-| POST | `/api/auth/register` | 注册，返回 `{user, tenant, recovery_codes}` | 无 |
-| POST | `/api/auth/login` | 登录，设置 `crayotter_auth_session` Cookie | 无 |
-| POST | `/api/auth/logout` | 注销当前 session 并清除 Cookie | auth Cookie |
-| GET | `/api/auth/me` | 当前登录用户信息，未登录 401 | auth Cookie |
-| POST | `/api/auth/password` | 登录态改密，成功后吊销全部 session | auth Cookie |
-| POST | `/api/auth/reset` | 一次性恢复码重置密码，成功后吊销全部 session 并清除 Cookie | 无 |
+| POST | `/api/auth/register` | 注册，返回 `{user, tenant, recovery_codes}`；2026-08-02 起注册成功自动建立会话并设置 auth Cookie | 无 |
+| POST | `/api/auth/login` | 登录，设置 `crayotter_auth_session` Cookie；`remember_me=true` 时额外设置 `crayotter_remember` Cookie（selector:validator，30 天，HttpOnly+SameSite=Lax，HTTPS 下 Secure） | 无 |
+| POST | `/api/auth/logout` | 注销当前 session、吊销对应 remember token 并清除 Cookie | auth Cookie |
+| GET | `/api/auth/me` | 当前登录用户信息，未登录 401；无 session 但携带有效 remember Cookie 时自动轮换续期（返回 `{user, renewed: true}` 并重置两个 Cookie） | auth/remember Cookie |
+| POST | `/api/auth/password` | 登录态改密，成功后吊销全部 session 与全部 remember token | auth Cookie |
+| POST | `/api/auth/reset` | 一次性恢复码重置密码，成功后吊销全部 session 与 remember token 并清除 Cookie | 无 |
+| GET | `/api/auth/preferences` | 读取当前用户服务端偏好（JSONB） | auth Cookie |
+| POST | `/api/auth/preferences` | 合并更新偏好 `{preferences: {...}}`，键禁 `__` 前缀且 ≤64 字符，整体 ≤16KB | auth Cookie |
+
+> Remember-me 安全设计（对齐 OWASP Remember Me Cheat Sheet）：DB 仅存 validator 的 SHA-256 digest；每次使用即轮换（乐观锁 `WHERE selector AND validator_digest`，并发下只有一个请求成功）；10 秒 `last_used_at` 宽限窗口区分并发竞争与真正盗用（Jaspan 模式）；确认盗用后吊销该用户全部 remember token 并写 `user.remember_reuse_detected` 审计；每用户最多 10 个 token（LRU 淘汰）；改密/重置/注销均吊销。数据表见 `migrations/003_remember_tokens_preferences.sql`。
 
 ### 1.2 素材（Uploads）
 
@@ -103,6 +107,7 @@
 ## 3. 后续鉴权改造清单
 
 - [x] 增加 `/api/auth/*` 注册、登录、登出、密码、恢复码接口（2026-07-31 上线，含 `/api/auth/reset`）。
+- [x] remember-me 持久登录（selector:validator 轮换 + 盗用检测）与服务端偏好同步 `/api/auth/preferences`（2026-08-02 上线，migration 003）。
 - [ ] 所有接口增加 `tenant_id` / `user_id` 校验。
 - [ ] `/uploads`、`/jobs`、`/files` 等接口拒绝跨租户访问（当前仅 owner_id）。
 - [ ] `/jobs/{job_id}` 及其子资源统一做 404/403 区分。

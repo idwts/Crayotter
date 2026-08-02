@@ -28,7 +28,7 @@
 | app/frontend_src/package-lock.json | JSON 配置文件 |
 | app/frontend_src/package.json | JSON 配置文件 |
 | app/frontend_src/postcss.config.js | export default { |
-| app/frontend_src/src/components/AuthPages.jsx | 认证页面组件：LoginPage/RegisterPage/ResetPasswordPage + Field 复用表单组件。 |
+| app/frontend_src/src/components/AuthPages.jsx | 认证页面组件：LoginPage（记住我/记住用户名）/RegisterPage/ResetPasswordPage + Field 复用表单组件。 |
 | app/frontend_src/src/components/DashboardUI.jsx | import React, { useEffect, useRef, useState } from "react"; |
 | app/frontend_src/src/components/FeedbackUI.jsx | import React, { useEffect, useRef } from "react"; |
 | app/frontend_src/src/components/SettingsModal.jsx | import React, { useState } from "react"; |
@@ -72,6 +72,7 @@
 | LICENSE | Required Notice: Copyright 2026 Crayotter Contributors. |
 | migrations/001_initial_schema.sql | 初始迁移：tenants/users/sessions/recovery_codes/jobs/uploads/artifacts/audit_logs 8 表 + RLS + updated_at 触发器。 |
 | migrations/002_add_user_role.sql | 迁移 002：users 表新增 role 字段（user/admin）。 |
+| migrations/003_remember_tokens_preferences.sql | 迁移 003：remember_tokens 表（selector 主键/validator_digest/过期与审计字段）+ users.preferences JSONB 列。 |
 | packaging/build_windows.ps1 | PowerShell 脚本 |
 | packaging/crayotter.spec | from pathlib import Path |
 | packaging/prepare_windows_assets.py | from __future__ import annotations |
@@ -206,7 +207,8 @@
 | script/workflow/tool_catalog.py | Tool groups exposed to each workflow phase. |
 | script/workflow/topology.py | Declarative LangGraph topology for the Crayotter workflow. |
 | tests/test_analyze_video_retry.py | import importlib |
-| tests/test_auth_api.py | 认证 API 功能/冲突测试：register/login/me/password/logout/reset 15 项（需运行中的后端 + PostgreSQL）。 |
+| tests/test_auth_api.py | 认证 API 功能/冲突测试：register/login/me/password/logout/reset + remember-me 轮换/盗用检测 + preferences 24 项（需运行中的后端 + PostgreSQL）。 |
+| tests/test_e2e_auth_frontend.py | 认证前端 E2E：Playwright(msedge) 13 步截图验证登录/注册/记住我/浏览器重启自动续期/偏好恢复/恢复码重置（截图输出 docs/worklogs/e2e-shots）。 |
 | tests/test_backend_logs.py | from __future__ import annotations |
 | tests/test_browser_auth.py | from __future__ import annotations |
 | tests/test_editing_plan.py | from __future__ import annotations |
