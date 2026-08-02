@@ -56,6 +56,9 @@ PUBLIC_UPLOADS_DIR = runtime_path("public_uploads")
 # Session cookie 配置（注意：与现有匿名 owner_id 的 crayotter_session 区分）
 SESSION_COOKIE_NAME = "crayotter_auth_session"
 SESSION_COOKIE_MAX_AGE_SECONDS = 30 * 24 * 60 * 60  # 30 days
+# 持久登录（remember-me）cookie：selector:validator，DB 仅存 validator digest，使用即轮换
+REMEMBER_COOKIE_NAME = "crayotter_remember"
+REMEMBER_COOKIE_MAX_AGE_SECONDS = 30 * 24 * 60 * 60  # 30 days
 PUBLIC_UPLOADS_DIR.mkdir(parents=True, exist_ok=True)
 MAX_JSON_BODY_BYTES = int(os.environ.get("CRAYOTTER_MAX_JSON_BODY_BYTES", "65536"))
 PUBLIC_UPLOAD_MAX_BYTES = int(os.environ.get("CRAYOTTER_PUBLIC_UPLOAD_MAX_BYTES", str(500 * 1024 * 1024)))
@@ -120,9 +123,28 @@ class BackendHandler(BaseHTTPRequestHandler):
             if path == "/api/auth/me":
                 user = self._auth_user()
                 if user is None:
-                    self._write_json(HTTPStatus.UNAUTHORIZED, {"error": "Not authenticated"})
+                    # 无有效 session 时尝试 remember token 自动续期（含轮换与盗窃检测）
+                    renewed = self._renew_from_remember()
+                    if renewed is None:
+                        self._write_json(HTTPStatus.UNAUTHORIZED, {"error": "Not authenticated"})
+                        return
+                    user = renewed["user"]
+                    self._write_json(
+                        HTTPStatus.OK,
+                        {"user": user, "renewed": True},
+                        set_auth_token=renewed["session_token"],
+                        set_remember_token=renewed["remember_token"],
+                    )
                     return
                 self._write_json(HTTPStatus.OK, {"user": user})
+                return
+
+            if path == "/api/auth/preferences":
+                user = self._auth_user()
+                if user is None:
+                    self._write_json(HTTPStatus.UNAUTHORIZED, {"error": "Not authenticated"})
+                    return
+                self._write_json(HTTPStatus.OK, {"preferences": auth_service.get_preferences(user["id"])})
                 return
 
             if path == "/config":
@@ -243,7 +265,13 @@ class BackendHandler(BaseHTTPRequestHandler):
                     ip_address=self._client_ip(),
                     user_agent=self._client_user_agent(),
                 )
-                self._write_json(HTTPStatus.CREATED, result)
+                # 注册成功后自动建立会话，前端可直接进入工作台
+                session_token, _ = auth_service.create_session(
+                    result["user"]["id"],
+                    ip_address=self._client_ip(),
+                    user_agent=self._client_user_agent(),
+                )
+                self._write_json(HTTPStatus.CREATED, result, set_auth_token=session_token)
                 return
 
             if path == "/api/auth/login":
@@ -251,6 +279,7 @@ class BackendHandler(BaseHTTPRequestHandler):
                 result = auth_service.login(
                     str(payload.get("username") or ""),
                     str(payload.get("password") or ""),
+                    remember_me=bool(payload.get("remember_me")),
                     ip_address=self._client_ip(),
                     user_agent=self._client_user_agent(),
                 )
@@ -258,6 +287,7 @@ class BackendHandler(BaseHTTPRequestHandler):
                     HTTPStatus.OK,
                     {"user": result["user"], "expires_at": result["expires_at"]},
                     set_auth_token=result["token"],
+                    set_remember_token=result.get("remember_token"),
                 )
                 return
 
@@ -265,7 +295,8 @@ class BackendHandler(BaseHTTPRequestHandler):
                 token = self._session_token()
                 if token:
                     auth_service.logout(token, ip_address=self._client_ip())
-                self._write_json(HTTPStatus.OK, {"ok": True}, clear_auth=True)
+                auth_service.revoke_remember_token(self._remember_cookie())
+                self._write_json(HTTPStatus.OK, {"ok": True}, clear_auth=True, clear_remember=True)
                 return
 
             if path == "/api/auth/password":
@@ -291,7 +322,17 @@ class BackendHandler(BaseHTTPRequestHandler):
                     str(payload.get("new_password") or ""),
                     ip_address=self._client_ip(),
                 )
-                self._write_json(HTTPStatus.OK, {"ok": True}, clear_auth=True)
+                self._write_json(HTTPStatus.OK, {"ok": True}, clear_auth=True, clear_remember=True)
+                return
+
+            if path == "/api/auth/preferences":
+                user = self._auth_user()
+                if user is None:
+                    self._write_json(HTTPStatus.UNAUTHORIZED, {"error": "Not authenticated"})
+                    return
+                payload = self._read_json()
+                merged = auth_service.update_preferences(user["id"], payload.get("preferences") or {})
+                self._write_json(HTTPStatus.OK, {"preferences": merged})
                 return
 
             if path == "/uploads":
@@ -465,15 +506,21 @@ class BackendHandler(BaseHTTPRequestHandler):
         *,
         set_auth_token: str | None = None,
         clear_auth: bool = False,
+        set_remember_token: str | None = None,
+        clear_remember: bool = False,
     ) -> None:
         body = json.dumps(payload, ensure_ascii=False, indent=2).encode("utf-8")
         self.send_response(status)
         self._send_session_cookie()
-        # 显式设置/清除 auth session cookie（必须在 send_response 之后、end_headers 之前）
+        # 显式设置/清除 cookie（必须在 send_response 之后、end_headers 之前）
         if set_auth_token:
             self._set_session_cookie(set_auth_token)
         if clear_auth:
             self._set_session_cookie("", clear=True)
+        if set_remember_token:
+            self._set_remember_cookie(set_remember_token)
+        if clear_remember:
+            self._set_remember_cookie("", clear=True)
         # 若已登录且无显式操作时，刷新 auth session cookie 以滚动过期时间；数据库未就绪时静默跳过。
         if not set_auth_token and not clear_auth:
             try:
@@ -930,6 +977,54 @@ class BackendHandler(BaseHTTPRequestHandler):
         if not token:
             return None
         return auth_service.get_user_by_token(token)
+
+    def _remember_cookie(self) -> str | None:
+        """从请求 Cookie 中读取 remember token。"""
+        cookie_header = self.headers.get("Cookie", "")
+        if not cookie_header:
+            return None
+        for part in cookie_header.split(";"):
+            part = part.strip()
+            if part.startswith(f"{REMEMBER_COOKIE_NAME}="):
+                return part.split("=", 1)[1].strip()
+        return None
+
+    def _renew_from_remember(self) -> dict[str, Any] | None:
+        """用 remember token 自动续期：轮换 remember 并创建新 session。"""
+        renewed = auth_service.verify_and_rotate_remember_token(
+            self._remember_cookie(),
+            ip_address=self._client_ip(),
+            user_agent=self._client_user_agent(),
+        )
+        if renewed is None:
+            return None
+        session_token, _ = auth_service.create_session(
+            renewed["user"]["id"],
+            ip_address=self._client_ip(),
+            user_agent=self._client_user_agent(),
+        )
+        return {
+            "user": renewed["user"],
+            "session_token": session_token,
+            "remember_token": renewed["new_token"],
+        }
+
+    def _set_remember_cookie(self, token: str, *, clear: bool = False) -> None:
+        """设置或清除 remember cookie。"""
+        if clear:
+            self.send_header(
+                "Set-Cookie",
+                f"{REMEMBER_COOKIE_NAME}=; Path=/; Max-Age=0; HttpOnly; SameSite=Lax",
+            )
+            return
+        secure = os.environ.get("CRAYOTTER_COOKIE_SECURE", "").strip().lower() in {"1", "true", "yes"}
+        flags = "HttpOnly; SameSite=Lax"
+        if secure:
+            flags += "; Secure"
+        self.send_header(
+            "Set-Cookie",
+            f"{REMEMBER_COOKIE_NAME}={token}; Path=/; Max-Age={REMEMBER_COOKIE_MAX_AGE_SECONDS}; {flags}",
+        )
 
     def _set_session_cookie(self, token: str, *, clear: bool = False) -> None:
         """设置或清除 auth session cookie。"""

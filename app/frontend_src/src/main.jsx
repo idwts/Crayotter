@@ -29,7 +29,20 @@ const STORAGE_KEYS = {
   lastMode: "crayotter.lastMode",
   currentView: "crayotter.currentView",
   contextTab: "crayotter.contextTab",
+  lastJobId: "crayotter.lastJobId",
+  taskDraft: "crayotter.taskDraft",
 };
+
+// 登录后在服务端同步的历史动作记忆（preferences JSONB，跨设备）
+const PREFERENCE_KEYS = [
+  "language",
+  "sidebarCollapsed",
+  "lastMode",
+  "currentView",
+  "contextTab",
+  "lastJobId",
+  "taskDraft",
+];
 
 const template = (value, params = {}) =>
   String(value || "").replace(/\{(\w+)\}/g, (_, key) => params[key] ?? "");
@@ -141,7 +154,7 @@ function App() {
   const [activeContextTab, setActiveContextTab] = useState(() => localStorage.getItem(STORAGE_KEYS.contextTab) || "details");
   const [configMessage, setConfigMessage] = useState("");
   const [mode, setMode] = useState(() => localStorage.getItem(STORAGE_KEYS.lastMode) || "demo");
-  const [taskText, setTaskText] = useState("");
+  const [taskText, setTaskText] = useState(() => localStorage.getItem(STORAGE_KEYS.taskDraft) || "");
   const [toasts, setToasts] = useState([]);
   const [confirmDialog, setConfirmDialog] = useState(null);
   const [configForm, setConfigForm] = useState({
@@ -184,28 +197,6 @@ function App() {
     document.documentElement.lang = language === "en" ? "en-US" : "zh-CN";
     localStorage.setItem(STORAGE_KEYS.language, language);
   }, [language]);
-
-  useEffect(() => {
-    setUnauthorizedHandler(() => {
-      setAuthUser(null);
-      setAuthView("login");
-      notify("error", t("sessionExpired"));
-    });
-
-    const checkSession = async () => {
-      try {
-        const data = await fetch("/api/auth/me", { credentials: "same-origin" }).then((r) =>
-          r.ok ? r.json() : null
-        );
-        setAuthUser(data?.user || null);
-      } catch (_) {
-        setAuthUser(null);
-      } finally {
-        setAuthLoading(false);
-      }
-    };
-    checkSession();
-  }, [notify, t]);
 
   const formatDate = useCallback((value) => {
     if (!value) return "--";
@@ -250,6 +241,28 @@ function App() {
     const timer = window.setTimeout(() => dismissToast(id), type === "error" ? 6500 : 2000);
     toastTimersRef.current.set(id, timer);
   }, [dismissToast]);
+
+  useEffect(() => {
+    setUnauthorizedHandler(() => {
+      setAuthUser(null);
+      setAuthView("login");
+      notify("error", t("sessionExpired"));
+    });
+
+    const checkSession = async () => {
+      try {
+        const data = await fetch("/api/auth/me", { credentials: "same-origin" }).then((r) =>
+          r.ok ? r.json() : null
+        );
+        setAuthUser(data?.user || null);
+      } catch (_) {
+        setAuthUser(null);
+      } finally {
+        setAuthLoading(false);
+      }
+    };
+    checkSession();
+  }, [notify, t]);
 
   const confirmAction = useCallback((options, action) => new Promise((resolve) => {
     setConfirmDialog({ ...options, action, resolve, busy: false });
@@ -667,6 +680,71 @@ function App() {
   useEffect(() => {
     localStorage.setItem(STORAGE_KEYS.contextTab, activeContextTab);
   }, [activeContextTab]);
+
+  useEffect(() => {
+    if (selectedJobId) localStorage.setItem(STORAGE_KEYS.lastJobId, selectedJobId);
+  }, [selectedJobId]);
+
+  useEffect(() => {
+    localStorage.setItem(STORAGE_KEYS.taskDraft, taskText);
+  }, [taskText]);
+
+  // ---- 服务端历史动作记忆（preferences）同步 ----
+  const prefsApplyingRef = useRef(false);
+  const prefsPushTimerRef = useRef(null);
+
+  // 登录成功后：拉取服务端 preferences 并应用（仅填充当前为空/默认的状态）
+  useEffect(() => {
+    if (!authUser) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const data = await request("/api/auth/preferences");
+        const prefs = data?.preferences || {};
+        if (cancelled || typeof prefs !== "object") return;
+        prefsApplyingRef.current = true;
+        if (typeof prefs.language === "string" && prefs.language) setLanguage(prefs.language);
+        if (typeof prefs.sidebarCollapsed === "boolean") setSidebarCollapsed(prefs.sidebarCollapsed);
+        if (typeof prefs.lastMode === "string" && prefs.lastMode) setMode(prefs.lastMode);
+        if (typeof prefs.currentView === "string" && prefs.currentView) setCurrentView(prefs.currentView);
+        if (typeof prefs.contextTab === "string" && prefs.contextTab) setActiveContextTab(prefs.contextTab);
+        if (typeof prefs.lastJobId === "string" && prefs.lastJobId) setSelectedJobId(prefs.lastJobId);
+        if (typeof prefs.taskDraft === "string" && prefs.taskDraft && !taskText) setTaskText(prefs.taskDraft);
+        // 等应用期间的 localStorage effect 落定后再放行推送
+        window.setTimeout(() => { prefsApplyingRef.current = false; }, 0);
+      } catch (_) {
+        // 偏好同步失败不阻塞主流程
+      }
+    })();
+    return () => { cancelled = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [authUser]);
+
+  // 历史动作变化：debounce 推送到服务端 preferences（仅登录态）
+  useEffect(() => {
+    if (!authUser || prefsApplyingRef.current) return;
+    const patch = {
+      language,
+      sidebarCollapsed,
+      lastMode: mode,
+      currentView,
+      contextTab: activeContextTab,
+      ...(selectedJobId ? { lastJobId: selectedJobId } : {}),
+      taskDraft: taskText,
+    };
+    if (prefsPushTimerRef.current) window.clearTimeout(prefsPushTimerRef.current);
+    prefsPushTimerRef.current = window.setTimeout(() => {
+      fetch("/api/auth/preferences", {
+        method: "POST",
+        credentials: "same-origin",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ preferences: patch }),
+      }).catch(() => {});
+    }, 1000);
+    return () => {
+      if (prefsPushTimerRef.current) window.clearTimeout(prefsPushTimerRef.current);
+    };
+  }, [authUser, language, sidebarCollapsed, mode, currentView, activeContextTab, selectedJobId, taskText]);
 
   const uploadAnalysisBadgeLabel = (item) => (item?.has_analysis ? t("analysisReady") : t("analysisMissing"));
   const uploadAnalysisHint = (item) => {

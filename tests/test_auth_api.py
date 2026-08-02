@@ -40,6 +40,13 @@ def request(
         return exc.code, json.loads(payload) if payload.strip() else {}
 
 
+def get_cookie_value(jar: CookieJar, name: str) -> str | None:
+    for cookie in jar:
+        if cookie.name == name:
+            return cookie.value
+    return None
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--base-url", default="http://127.0.0.1:8765")
@@ -141,6 +148,103 @@ def main() -> int:
     })
     assert status == 400, f"used recovery code should fail: {status} {data}"
     print("[PASS] recovery code is single-use")
+
+    # ================= remember-me + preferences 专项（第二用户） =================
+    import time as _time
+    username2 = f"remember_{uuid.uuid4().hex[:8]}"
+    password2 = "RememberPass123!"
+    status, data = request(base, "POST", "/api/auth/register", {"username": username2, "password": password2})
+    assert status == 201, f"register user2 failed: {status} {data}"
+    print(f"[PASS] /api/auth/register created user {username2}")
+
+    # 15. remember_me=false 登录：不应设置 remember cookie
+    jar = CookieJar()
+    status, data = request(base, "POST", "/api/auth/login", {"username": username2, "password": password2}, jar=jar)
+    assert status == 200, f"login failed: {status} {data}"
+    assert get_cookie_value(jar, "crayotter_remember") is None, "remember cookie should not be set"
+    print("[PASS] login without remember_me sets no remember cookie")
+
+    # 16. remember_me=true 登录：设置 remember cookie
+    status, data = request(base, "POST", "/api/auth/login", {
+        "username": username2, "password": password2, "remember_me": True,
+    }, jar=jar)
+    assert status == 200, f"remember login failed: {status} {data}"
+    remember_v1 = get_cookie_value(jar, "crayotter_remember")
+    assert remember_v1 and ":" in remember_v1, f"remember cookie malformed: {remember_v1}"
+    print("[PASS] login with remember_me sets remember cookie")
+
+    # 17. 模拟浏览器重开：仅携带 remember cookie，me 自动续期并轮换
+    renew_headers = {"Cookie": f"crayotter_remember={remember_v1}"}
+    status, data = request(base, "GET", "/api/auth/me", headers=renew_headers, jar=jar)
+    assert status == 200 and data.get("renewed") is True, f"renew failed: {status} {data}"
+    assert data["user"]["username"] == username2
+    remember_v2 = get_cookie_value(jar, "crayotter_remember")
+    assert remember_v2 and remember_v2 != remember_v1, "remember token should rotate"
+    print("[PASS] /api/auth/me auto-renews from remember cookie with rotation")
+
+    # 18. 并发宽限：立即重放旧 token → 401 但不吊销（新 token 仍可用）
+    status, data = request(base, "GET", "/api/auth/me", headers={"Cookie": f"crayotter_remember={remember_v1}"})
+    assert status == 401, f"stale token should 401: {status} {data}"
+    status, data = request(base, "GET", "/api/auth/me", headers={"Cookie": f"crayotter_remember={remember_v2}"}, jar=jar)
+    assert status == 200, f"new token should still work: {status} {data}"
+    remember_v3 = get_cookie_value(jar, "crayotter_remember") or remember_v2
+    print("[PASS] stale token within grace window does not trigger revocation")
+
+    # 19. 盗窃检测：静默期后重放旧 token → 吊销全部 remember tokens
+    _time.sleep(11)
+    status, data = request(base, "GET", "/api/auth/me", headers={"Cookie": f"crayotter_remember={remember_v2}"})
+    assert status == 401, f"replayed token should 401: {status} {data}"
+    status, data = request(base, "GET", "/api/auth/me", headers={"Cookie": f"crayotter_remember={remember_v3}"})
+    assert status == 401, f"all tokens should be revoked after reuse detection: {status} {data}"
+    print("[PASS] reuse detection revokes all remember tokens")
+
+    # 20. preferences：登录后 PUT/GET 合并更新
+    jar = CookieJar()
+    status, data = request(base, "POST", "/api/auth/login", {"username": username2, "password": password2}, jar=jar)
+    assert status == 200, f"re-login failed: {status} {data}"
+    status, data = request(base, "POST", "/api/auth/preferences", {"preferences": {"lastMode": "real", "taskDraft": "hello"}}, jar=jar)
+    assert status == 200 and data["preferences"]["lastMode"] == "real", f"preferences put failed: {status} {data}"
+    status, data = request(base, "POST", "/api/auth/preferences", {"preferences": {"currentView": "jobs"}}, jar=jar)
+    assert status == 200 and data["preferences"]["lastMode"] == "real" and data["preferences"]["currentView"] == "jobs", \
+        f"preferences merge failed: {status} {data}"
+    status, data = request(base, "GET", "/api/auth/preferences", jar=jar)
+    assert status == 200 and data["preferences"]["taskDraft"] == "hello", f"preferences get failed: {status} {data}"
+    print("[PASS] /api/auth/preferences merge update and read")
+
+    # 21. preferences：非法 key 拒绝；未登录 401
+    status, data = request(base, "POST", "/api/auth/preferences", {"preferences": {"__evil__": 1}}, jar=jar)
+    assert status == 400, f"invalid preference key should 400: {status} {data}"
+    status, data = request(base, "GET", "/api/auth/preferences")
+    assert status == 401, f"preferences without auth should 401: {status} {data}"
+    print("[PASS] preferences rejects invalid key and requires auth")
+
+    # 22. 改密后 remember token 被吊销
+    jar2 = CookieJar()
+    status, data = request(base, "POST", "/api/auth/login", {
+        "username": username2, "password": password2, "remember_me": True,
+    }, jar=jar2)
+    assert status == 200, f"login failed: {status} {data}"
+    remember_v4 = get_cookie_value(jar2, "crayotter_remember")
+    status, data = request(base, "POST", "/api/auth/password", {
+        "old_password": password2, "new_password": "RememberPass456!",
+    }, jar=jar2)
+    assert status == 200, f"change password failed: {status} {data}"
+    status, data = request(base, "GET", "/api/auth/me", headers={"Cookie": f"crayotter_remember={remember_v4}"})
+    assert status == 401, f"remember token should be revoked after password change: {status} {data}"
+    print("[PASS] password change revokes remember tokens")
+
+    # 23. logout 吊销 remember token
+    jar3 = CookieJar()
+    status, data = request(base, "POST", "/api/auth/login", {
+        "username": username2, "password": "RememberPass456!", "remember_me": True,
+    }, jar=jar3)
+    assert status == 200, f"login failed: {status} {data}"
+    remember_v5 = get_cookie_value(jar3, "crayotter_remember")
+    status, data = request(base, "POST", "/api/auth/logout", jar=jar3)
+    assert status == 200, f"logout failed: {status} {data}"
+    status, data = request(base, "GET", "/api/auth/me", headers={"Cookie": f"crayotter_remember={remember_v5}"})
+    assert status == 401, f"remember token should be revoked after logout: {status} {data}"
+    print("[PASS] logout revokes remember token")
 
     print("\nAll tests passed.")
     return 0

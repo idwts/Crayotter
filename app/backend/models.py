@@ -85,7 +85,7 @@ class AppConfig(BaseModel):
 
 
 class JobRequest(BaseModel):
-    task: str = Field(min_length=1)
+    task: str = Field(min_length=1, max_length=6000)
     mode: Literal["agent", "demo"] = "agent"
     profile: str | None = None
     enable_phase2_research: bool | None = None
@@ -111,6 +111,7 @@ class RuntimeEvent(BaseModel):
 
 class JobRecord(BaseModel):
     job_id: str
+    owner_id: str = Field(default="", exclude=True, repr=False)
     task: str
     title: str = ""
     mode: Literal["agent", "demo"]

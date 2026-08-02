@@ -15,12 +15,7 @@ from .config_store import JOBS_DIR, ConfigStore
 from .event_bus import EventBus
 from .models import AppConfig, JobRecord, JobRequest, RuntimeEvent, TERMINAL_JOB_STATUSES, utc_now_iso
 from .task_titles import summarize_task_title
-from .services import (
-    ArtifactQueryService,
-    JobRepository,
-    PlanReviewService,
-    WorkerSupervisor,
-)
+from app.media_metadata import video_duration_seconds
 from app.runtime_paths import configure_runtime_environment, get_bundle_root, get_runtime_root, is_frozen
 from app.steering import SteeringCoordinator, SteeringStore, classify_guidance
 from script.editing_plan import (
@@ -61,36 +56,46 @@ class ManagedJob:
         self.lock = threading.RLock()
         self.last_activity_monotonic = time.monotonic()
         self.stall_timeout_seconds = max(10, int(stall_timeout_seconds))
+        self.request: JobRequest | None = None
+        self.config: AppConfig | None = None
+        self.resume_requested = False
+        self.has_ephemeral_credentials = False
+        self.materials_dir: Path | None = None
 
 
 class RuntimeManager:
     AGENT_STALL_TIMEOUT_SECONDS = 600
+    VIDEO_SUFFIXES = {".mp4", ".webm", ".mov", ".mkv", ".avi", ".m4v", ".mpeg", ".mpg"}
+    TEXT_SUFFIXES = {".txt", ".md", ".json", ".jsonl", ".log"}
+    _media_metadata_cache: dict[tuple[str, int, int], float | None] = {}
+    _media_metadata_lock = threading.RLock()
 
     def __init__(self, config_store: ConfigStore) -> None:
         self.config_store = config_store
         self._jobs: dict[str, ManagedJob] = {}
         self._lock = threading.RLock()
-        self._job_repository = JobRepository(JOBS_DIR)
-        self._artifact_query = ArtifactQueryService(get_runtime_root())
-        self._plan_reviews = PlanReviewService()
-        self._worker_supervisor = WorkerSupervisor()
         self._load_existing_jobs()
 
-    def list_jobs(self) -> list[dict[str, Any]]:
+    def list_jobs(self, owner_id: str | None = None) -> list[dict[str, Any]]:
         with self._lock:
             jobs = sorted(
                 self._jobs.values(),
                 key=lambda item: item.record.created_at,
                 reverse=True,
             )
+            if owner_id is not None:
+                jobs = [job for job in jobs if job.record.owner_id == owner_id]
             return [job.record.model_dump() for job in jobs]
 
-    def get_job(self, job_id: str) -> ManagedJob | None:
+    def get_job(self, job_id: str, owner_id: str | None = None) -> ManagedJob | None:
         with self._lock:
-            return self._jobs.get(job_id)
+            job = self._jobs.get(job_id)
+            if job is None or (owner_id is not None and job.record.owner_id != owner_id):
+                return None
+            return job
 
-    def get_job_detail(self, job_id: str) -> dict[str, Any]:
-        job = self.get_job(job_id)
+    def get_job_detail(self, job_id: str, owner_id: str | None = None) -> dict[str, Any]:
+        job = self.get_job(job_id, owner_id)
         if job is None:
             raise KeyError(job_id)
         with job.lock:
@@ -101,14 +106,14 @@ class RuntimeManager:
             detail["artifacts"] = self._collect_artifacts(job)
             return detail
 
-    def list_job_artifacts(self, job_id: str) -> list[dict[str, Any]]:
-        job = self.get_job(job_id)
+    def list_job_artifacts(self, job_id: str, owner_id: str | None = None) -> list[dict[str, Any]]:
+        job = self.get_job(job_id, owner_id)
         if job is None:
             raise KeyError(job_id)
         return self._collect_artifacts(job)
 
-    def get_current_plan(self, job_id: str) -> dict[str, Any]:
-        job = self.get_job(job_id)
+    def get_current_plan(self, job_id: str, owner_id: str | None = None) -> dict[str, Any]:
+        job = self.get_job(job_id, owner_id)
         if job is None:
             raise KeyError(job_id)
         plan = self._plan_store(job).current()
@@ -122,8 +127,8 @@ class RuntimeManager:
             else None,
         }
 
-    def get_plan(self, job_id: str, version: str) -> dict[str, Any]:
-        job = self.get_job(job_id)
+    def get_plan(self, job_id: str, version: str, owner_id: str | None = None) -> dict[str, Any]:
+        job = self.get_job(job_id, owner_id)
         if job is None:
             raise KeyError(job_id)
         plan = self._plan_store(job).get_plan(version)
@@ -131,14 +136,14 @@ class RuntimeManager:
             raise KeyError(f"{job_id}/plans/{version}")
         return {"plan": plan.model_dump()}
 
-    def get_plan_diff(self, job_id: str, from_version: str, to_version: str) -> dict[str, Any]:
-        job = self.get_job(job_id)
+    def get_plan_diff(self, job_id: str, from_version: str, to_version: str, owner_id: str | None = None) -> dict[str, Any]:
+        job = self.get_job(job_id, owner_id)
         if job is None:
             raise KeyError(job_id)
         return {"diff": self._plan_store(job).diff(from_version, to_version).model_dump()}
 
-    def apply_plan_feedback(self, job_id: str, version: str, feedback: str) -> dict[str, Any]:
-        job = self.get_job(job_id)
+    def apply_plan_feedback(self, job_id: str, version: str, feedback: str, owner_id: str | None = None) -> dict[str, Any]:
+        job = self.get_job(job_id, owner_id)
         if job is None:
             raise KeyError(job_id)
         text = str(feedback or "").strip()
@@ -211,8 +216,8 @@ class RuntimeManager:
             "validation": report.model_dump(),
         }
 
-    def approve_plan(self, job_id: str, version: str) -> dict[str, Any]:
-        job = self.get_job(job_id)
+    def approve_plan(self, job_id: str, version: str, owner_id: str | None = None) -> dict[str, Any]:
+        job = self.get_job(job_id, owner_id)
         if job is None:
             raise KeyError(job_id)
         store = self._plan_store(job)
@@ -234,8 +239,8 @@ class RuntimeManager:
         )
         return {"plan": plan.model_dump(), "approved_path": str(store.approved_path)}
 
-    def reject_plan(self, job_id: str, version: str) -> dict[str, Any]:
-        job = self.get_job(job_id)
+    def reject_plan(self, job_id: str, version: str, owner_id: str | None = None) -> dict[str, Any]:
+        job = self.get_job(job_id, owner_id)
         if job is None:
             raise KeyError(job_id)
         plan = self._plan_store(job).reject(version)
@@ -244,8 +249,23 @@ class RuntimeManager:
             self.cancel_job(job_id)
         return {"plan": plan.model_dump(), "status": job.record.status}
 
-    def create_job(self, request: JobRequest) -> dict[str, Any]:
+    def create_job(
+        self,
+        request: JobRequest,
+        owner_id: str = "",
+        runtime_overrides: dict[str, str] | None = None,
+        material_root: Path | None = None,
+    ) -> dict[str, Any]:
         config = self.config_store.load()
+        if runtime_overrides:
+            # Public BYOK credentials are job-scoped memory only.  Do not call
+            # ConfigStore.save and never serialize these values into a record,
+            # summary, event, or runtime profile file.
+            config = config.model_copy(deep=True)
+            profile = config.get_profile(request.profile)
+            for field, value in runtime_overrides.items():
+                if hasattr(profile, field) and value:
+                    setattr(profile, field, value)
         if request.mode == "demo" and not config.allow_demo_jobs:
             raise ValueError("Demo jobs are disabled in configuration.")
 
@@ -272,21 +292,12 @@ class RuntimeManager:
         stall_timeout_seconds = max(10, int(config.agent_stall_timeout_seconds or self.AGENT_STALL_TIMEOUT_SECONDS))
 
         with self._lock:
-            running = [
-                job.record.job_id
-                for job in self._jobs.values()
-                if job.record.status in {"queued", "running"}
-            ]
-            if running:
-                raise RuntimeError(
-                    f"Another job is already running: {running[0]}. Phase A only supports one running job."
-                )
-
             job_id = self._new_job_id()
             job_dir = JOBS_DIR / job_id
             job_dir.mkdir(parents=True, exist_ok=True)
             record = JobRecord(
                 job_id=job_id,
+                owner_id=owner_id,
                 task=request.task,
                 title=summarize_task_title(request.task),
                 mode=request.mode,
@@ -313,6 +324,28 @@ class RuntimeManager:
                 job_dir=job_dir,
                 stall_timeout_seconds=stall_timeout_seconds,
             )
+            job.request = request
+            job.config = config
+            job.has_ephemeral_credentials = bool(runtime_overrides)
+            if material_root is not None:
+                source_root = material_root.resolve(strict=False)
+                # The upstream worker clears CRAYOTTER_TASK_WORKSPACE before
+                # it starts.  Keep uploaded user material beside that
+                # workspace, not inside it, so task preparation cannot delete
+                # the just-staged session files.
+                target_root = job_dir / "user_temp"
+                for source in source_root.rglob("*"):
+                    if not source.is_file() or source.is_symlink():
+                        continue
+                    resolved = source.resolve(strict=False)
+                    try:
+                        relative = resolved.relative_to(source_root)
+                    except ValueError:
+                        continue
+                    destination = target_root / relative
+                    destination.parent.mkdir(parents=True, exist_ok=True)
+                    shutil.copy2(resolved, destination)
+                job.materials_dir = target_root
             self._jobs[job_id] = job
 
         self._write_summary(job)
@@ -322,25 +355,22 @@ class RuntimeManager:
             {"task": request.task, "title": record.title, "mode": request.mode},
         )
 
-        worker = threading.Thread(
-            target=self._run_job,
-            args=(job, request, config),
-            name=f"job-{job_id}",
-            daemon=True,
-        )
-        job.thread = worker
-        worker.start()
+        self._publish(job, "job_queued", {"message": "Job accepted and waiting for a worker."})
+        self._start_next_job()
         return record.model_dump()
 
-    def cancel_job(self, job_id: str) -> dict[str, Any]:
-        job = self.get_job(job_id)
+    def cancel_job(self, job_id: str, owner_id: str | None = None) -> dict[str, Any]:
+        job = self.get_job(job_id, owner_id)
         if job is None:
             raise KeyError(job_id)
 
         job.cancel_requested.set()
         self._publish(job, "cancel_requested", {"message": "Cancellation was requested."})
 
-        if job.record.mode == "agent":
+        if job.record.status == "queued":
+            self._mark_cancelled(job)
+            self._start_next_job()
+        elif job.record.mode == "agent":
             self._mark_cancelled(job)
             process = job.process
             if process is not None and process.poll() is None:
@@ -355,8 +385,8 @@ class RuntimeManager:
             "note": "Cancellation requested.",
         }
 
-    def resume_job(self, job_id: str) -> dict[str, Any]:
-        job = self.get_job(job_id)
+    def resume_job(self, job_id: str, owner_id: str | None = None) -> dict[str, Any]:
+        job = self.get_job(job_id, owner_id)
         if job is None:
             raise KeyError(job_id)
         with self._lock:
@@ -396,20 +426,16 @@ class RuntimeManager:
             self._write_summary(job)
 
         self._publish(job, "job_resume_requested", {"job_id": job_id})
-        worker = threading.Thread(
-            target=self._run_job,
-            args=(job, request, config, True),
-            name=f"job-resume-{job_id}",
-            daemon=True,
-        )
-        job.thread = worker
-        worker.start()
+        job.request = request
+        job.config = config
+        job.resume_requested = True
+        self._start_next_job()
         return job.record.model_dump()
 
-    def delete_job(self, job_id: str) -> dict[str, Any]:
+    def delete_job(self, job_id: str, owner_id: str | None = None) -> dict[str, Any]:
         with self._lock:
             job = self._jobs.get(job_id)
-            if job is None:
+            if job is None or (owner_id is not None and job.record.owner_id != owner_id):
                 raise KeyError(job_id)
             if job.record.status in {"queued", "running"}:
                 raise RuntimeError("Queued or running jobs cannot be deleted. Stop the job first.")
@@ -418,23 +444,23 @@ class RuntimeManager:
         shutil.rmtree(job.job_dir, ignore_errors=False)
         return {"job_id": job_id, "deleted": True}
 
-    def list_events(self, job_id: str, after_sequence: int = 0) -> list[dict[str, Any]]:
-        job = self.get_job(job_id)
+    def list_events(self, job_id: str, after_sequence: int = 0, owner_id: str | None = None) -> list[dict[str, Any]]:
+        job = self.get_job(job_id, owner_id)
         if job is None:
             raise KeyError(job_id)
         return job.bus.list_from(after_sequence=after_sequence)
 
-    def events_log_text(self, job_id: str) -> str:
-        return format_events_as_log(self.list_events(job_id))
+    def events_log_text(self, job_id: str, owner_id: str | None = None) -> str:
+        return format_events_as_log(self.list_events(job_id, owner_id=owner_id))
 
-    def list_messages(self, job_id: str) -> list[dict[str, Any]]:
-        job = self.get_job(job_id)
+    def list_messages(self, job_id: str, owner_id: str | None = None) -> list[dict[str, Any]]:
+        job = self.get_job(job_id, owner_id)
         if job is None:
             raise KeyError(job_id)
         return job.steering_store.list_messages()
 
-    def add_message(self, job_id: str, content: str) -> dict[str, Any]:
-        job = self.get_job(job_id)
+    def add_message(self, job_id: str, content: str, owner_id: str | None = None) -> dict[str, Any]:
+        job = self.get_job(job_id, owner_id)
         if job is None:
             raise KeyError(job_id)
         if job.record.status in {"failed", "cancelled"}:
@@ -509,8 +535,8 @@ class RuntimeManager:
             worker.start()
         return message
 
-    def pause_job(self, job_id: str, mode: str = "next_safe_point") -> dict[str, Any]:
-        job = self.get_job(job_id)
+    def pause_job(self, job_id: str, mode: str = "next_safe_point", owner_id: str | None = None) -> dict[str, Any]:
+        job = self.get_job(job_id, owner_id)
         if job is None:
             raise KeyError(job_id)
         if job.record.status != "running":
@@ -522,8 +548,8 @@ class RuntimeManager:
         self._publish(job, "pause_requested", control)
         return control
 
-    def approve_job(self, job_id: str, token: str) -> dict[str, Any]:
-        job = self.get_job(job_id)
+    def approve_job(self, job_id: str, token: str, owner_id: str | None = None) -> dict[str, Any]:
+        job = self.get_job(job_id, owner_id)
         if job is None:
             raise KeyError(job_id)
         control = job.steering_store.approve(token)
@@ -534,8 +560,8 @@ class RuntimeManager:
         )
         return control
 
-    def wait_for_events(self, job_id: str, after_sequence: int = 0, timeout: float = 1.0) -> list[dict[str, Any]]:
-        job = self.get_job(job_id)
+    def wait_for_events(self, job_id: str, after_sequence: int = 0, timeout: float = 1.0, owner_id: str | None = None) -> list[dict[str, Any]]:
+        job = self.get_job(job_id, owner_id)
         if job is None:
             raise KeyError(job_id)
         return job.bus.wait_for_events(after_sequence=after_sequence, timeout=timeout)
@@ -547,7 +573,6 @@ class RuntimeManager:
         config: AppConfig,
         resume: bool = False,
     ) -> None:
-        self._mark_running(job)
         try:
             if request.mode == "demo":
                 self._run_demo_job(job, request)
@@ -555,6 +580,36 @@ class RuntimeManager:
                 self._run_agent_job(job, request, config, resume=resume)
         except Exception as exc:
             self._mark_failed(job, str(exc))
+        finally:
+            if job.has_ephemeral_credentials:
+                (job.job_dir / "runtime_profile.json").unlink(missing_ok=True)
+            self._start_next_job()
+
+    def _start_next_job(self) -> None:
+        """Run exactly one public-trial job at a time in creation order."""
+        with self._lock:
+            if any(job.record.status == "running" for job in self._jobs.values()):
+                return
+            queued = sorted(
+                (job for job in self._jobs.values() if job.record.status == "queued" and job.request and job.config),
+                key=lambda job: job.record.created_at,
+            )
+            if not queued:
+                return
+            job = queued[0]
+            request = job.request
+            config = job.config
+            resume = job.resume_requested
+            job.resume_requested = False
+            self._mark_running(job)
+            worker = threading.Thread(
+                target=self._run_job,
+                args=(job, request, config, resume),
+                name=f"job-{job.record.job_id}",
+                daemon=True,
+            )
+            job.thread = worker
+            worker.start()
 
     def _run_demo_job(self, job: ManagedJob, request: JobRequest) -> None:
         steering = SteeringCoordinator(
@@ -704,7 +759,7 @@ class RuntimeManager:
         child_env["CRAYOTTER_RUNTIME_ROOT"] = str(runtime_root)
         child_env["CRAYOTTER_BUNDLE_ROOT"] = str(bundle_root)
         child_env["CRAYOTTER_TASK_WORKSPACE"] = str(job.job_dir / "workspace")
-        child_env["CRAYOTTER_USER_WORKSPACE"] = str(runtime_root / "user_temp")
+        child_env["CRAYOTTER_USER_WORKSPACE"] = str(job.materials_dir or (runtime_root / "user_temp"))
         child_env["CRAYOTTER_PERSIST_WORKSPACE"] = "true"
         child_env["CRAYOTTER_JOB_ID"] = job.record.job_id
         child_env["CRAYOTTER_REVISION"] = str(job.record.revision)
@@ -856,7 +911,25 @@ class RuntimeManager:
 
     @staticmethod
     def _terminate_process_tree(process: subprocess.Popen[str]) -> None:
-        WorkerSupervisor.terminate_process_tree(process)
+        if process.poll() is not None:
+            return
+        try:
+            if os.name == "nt":
+                subprocess.run(
+                    ["taskkill", "/PID", str(process.pid), "/T", "/F"],
+                    capture_output=True,
+                    text=True,
+                    timeout=5,
+                )
+            else:
+                process.terminate()
+                process.wait(timeout=2)
+        except Exception:
+            try:
+                process.kill()
+                process.wait(timeout=2)
+            except Exception:
+                pass
 
     def _mark_running(self, job: ManagedJob) -> None:
         with job.lock:
@@ -955,8 +1028,9 @@ class RuntimeManager:
             self._write_summary(job)
         return stored
 
-    def _plan_store(self, job: ManagedJob) -> EditingPlanStore:
-        return self._plan_reviews.store_for_workspace(job.job_dir / "workspace")
+    @staticmethod
+    def _plan_store(job: ManagedJob) -> EditingPlanStore:
+        return EditingPlanStore(job.job_dir / "workspace")
 
     def _generate_plan_patch(
         self,
@@ -1044,24 +1118,174 @@ class RuntimeManager:
         with path.open("a", encoding="utf-8") as handle:
             handle.write(json.dumps(event, ensure_ascii=False) + "\n")
 
-    def _write_summary(self, job: ManagedJob) -> None:
-        self._job_repository.save(job.record, job.job_dir)
+    @staticmethod
+    def _write_summary(job: ManagedJob) -> None:
+        payload = job.record.model_dump()
+        payload["job_dir"] = str(job.job_dir)
+        job.summary_path.write_text(
+            json.dumps(payload, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
 
     @staticmethod
     def _new_job_id() -> str:
         return f"job_{time.strftime('%Y%m%d_%H%M%S')}_{uuid.uuid4().hex[:6]}"
 
-    def _collect_artifacts(self, job: ManagedJob) -> list[dict[str, Any]]:
-        return self._artifact_query.collect(job)
+    @staticmethod
+    def _artifact_kind(suffix: str) -> str:
+        if suffix in RuntimeManager.VIDEO_SUFFIXES:
+            return "video"
+        if suffix in RuntimeManager.TEXT_SUFFIXES:
+            return "text"
+        return "file"
+
+    @classmethod
+    def _video_duration_seconds(cls, path: Path, stat: os.stat_result) -> float | None:
+        key = (str(path), stat.st_mtime_ns, stat.st_size)
+        with cls._media_metadata_lock:
+            if key in cls._media_metadata_cache:
+                return cls._media_metadata_cache[key]
+
+        try:
+            parsed = video_duration_seconds(path)
+            duration = round(parsed, 2) if parsed is not None else None
+        except (OSError, TypeError, ValueError):
+            duration = None
+
+        with cls._media_metadata_lock:
+            stale_keys = [cached for cached in cls._media_metadata_cache if cached[0] == str(path)]
+            for stale_key in stale_keys:
+                cls._media_metadata_cache.pop(stale_key, None)
+            cls._media_metadata_cache[key] = duration
+        return duration
+
+    @classmethod
+    def _collect_artifacts(cls, job: ManagedJob) -> list[dict[str, Any]]:
+        runtime_root = get_runtime_root()
+        results: list[dict[str, Any]] = []
+        seen: set[str] = set()
+        registry_metadata: dict[str, dict[str, Any]] = {}
+
+        candidate_paths: list[Path] = []
+        for path_str in job.record.output_files:
+            if path_str:
+                candidate_paths.append(Path(path_str))
+        output_dir = job.job_dir / "output"
+        if output_dir.exists():
+            for path in sorted(output_dir.rglob("*")):
+                if path.is_file():
+                    candidate_paths.append(path)
+        manifest_path = job.job_dir / "workspace" / ".crayotter" / "artifact_manifest.json"
+        if manifest_path.exists():
+            try:
+                manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+                for artifact in manifest.get("artifacts", []):
+                    raw_path = str(artifact.get("path") or "")
+                    if not raw_path:
+                        continue
+                    registry_metadata[str(Path(raw_path).resolve(strict=False))] = dict(artifact)
+                    candidate_paths.append(Path(raw_path))
+            except Exception:
+                pass
+
+        for path in candidate_paths:
+            try:
+                resolved = path.resolve(strict=False)
+            except Exception:
+                resolved = path
+            key = str(resolved)
+            registry_item = registry_metadata.get(key, {})
+            if key in seen:
+                continue
+            seen.add(key)
+            exists = resolved.exists() and resolved.is_file()
+            if not exists:
+                if registry_item:
+                    metadata = dict(registry_item.get("metadata", {}))
+                    artifact_revision = int(metadata.get("revision", 1) or 1)
+                    metadata["revision"] = artifact_revision
+                    metadata["current"] = artifact_revision == job.record.revision
+                    results.append(
+                        {
+                            "path": str(resolved),
+                            "display_path": str(resolved),
+                            "name": resolved.name,
+                            "suffix": resolved.suffix.lower(),
+                            "kind": registry_item.get("kind", "file"),
+                            "size_bytes": 0,
+                            "duration_seconds": None,
+                            "artifact_id": registry_item.get("id", ""),
+                            "producer_task_id": registry_item.get("producer_task_id", ""),
+                            "phase": registry_item.get("phase", ""),
+                            "valid": False,
+                            "metadata": metadata,
+                            "revision": artifact_revision,
+                            "is_current": metadata["current"],
+                        }
+                    )
+                continue
+            try:
+                relative = resolved.relative_to(runtime_root)
+                display_path = str(relative)
+            except Exception:
+                display_path = str(resolved)
+            suffix = resolved.suffix.lower()
+            stat = resolved.stat()
+            kind = str(registry_item.get("kind") or cls._artifact_kind(suffix))
+            metadata = dict(registry_item.get("metadata", {}))
+            artifact_revision = int(metadata.get("revision", 1) or 1)
+            metadata["revision"] = artifact_revision
+            metadata["current"] = artifact_revision == job.record.revision
+            results.append(
+                {
+                    "path": str(resolved),
+                    "display_path": display_path,
+                    "name": resolved.name,
+                    "suffix": suffix,
+                    "kind": kind,
+                    "size_bytes": stat.st_size,
+                    "duration_seconds": (
+                        cls._video_duration_seconds(resolved, stat)
+                        if suffix in cls.VIDEO_SUFFIXES
+                        else None
+                    ),
+                    "artifact_id": registry_item.get("id", ""),
+                    "producer_task_id": registry_item.get("producer_task_id", ""),
+                    "phase": registry_item.get("phase", ""),
+                    "valid": bool(registry_item.get("valid", True)),
+                    "metadata": metadata,
+                    "revision": artifact_revision,
+                    "is_current": metadata["current"],
+                }
+            )
+        return sorted(results, key=lambda item: item["display_path"])
 
     def _load_existing_jobs(self) -> None:
-        for persisted in self._job_repository.load_all():
-            record = persisted.record
-            job = ManagedJob(record=record, job_dir=persisted.job_dir)
-            job.bus.seed(persisted.events)
-            if record.status not in TERMINAL_JOB_STATUSES and record.status != "interrupted":
-                record.status = "interrupted"
-                record.completed_at = None
-                record.error = record.error or "Backend restarted before the task finished."
-                self._write_summary(job)
-            self._jobs[record.job_id] = job
+        if not JOBS_DIR.exists():
+            return
+
+        for job_dir in sorted(JOBS_DIR.iterdir()):
+            if not job_dir.is_dir():
+                continue
+            summary_path = job_dir / "summary.json"
+            if not summary_path.exists():
+                continue
+            try:
+                payload = json.loads(summary_path.read_text(encoding="utf-8"))
+                record = JobRecord.model_validate(payload)
+                job = ManagedJob(record=record, job_dir=job_dir)
+                if job.events_path.exists():
+                    seeded_events: list[dict[str, Any]] = []
+                    for line in job.events_path.read_text(encoding="utf-8").splitlines():
+                        if not line.strip():
+                            continue
+                        seeded_events.append(json.loads(line))
+                    job.bus.seed(seeded_events)
+                if record.status not in TERMINAL_JOB_STATUSES and record.status != "interrupted":
+                    record.status = "interrupted"
+                    record.completed_at = None
+                    record.error = record.error or "Backend restarted before the task finished."
+                    self._write_summary(job)
+                self._jobs[record.job_id] = job
+            except Exception:
+                continue

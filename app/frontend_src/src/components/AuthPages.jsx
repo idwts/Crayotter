@@ -49,10 +49,16 @@ function Field({
   );
 }
 
+const REMEMBERED_USERNAME_KEY = "crayotter.rememberedUsername";
+
 export function LoginPage({ onLogin, onSwitchToRegister, onSwitchToReset, t, notify }) {
-  const [username, setUsername] = useState("");
+  const [username, setUsername] = useState(() => localStorage.getItem(REMEMBERED_USERNAME_KEY) || "");
   const [password, setPassword] = useState("");
   const [showPassword, setShowPassword] = useState(false);
+  const [rememberMe, setRememberMe] = useState(false);
+  const [rememberUsername, setRememberUsername] = useState(() =>
+    Boolean(localStorage.getItem(REMEMBERED_USERNAME_KEY))
+  );
   const [busy, setBusy] = useState(false);
   const [errors, setErrors] = useState({});
 
@@ -72,10 +78,20 @@ export function LoginPage({ onLogin, onSwitchToRegister, onSwitchToReset, t, not
       const response = await fetch("/api/auth/login", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ username: username.trim(), password }),
+        body: JSON.stringify({
+          username: username.trim(),
+          password,
+          remember_me: rememberMe,
+        }),
       });
       const data = await response.json();
       if (!response.ok) throw new Error(data.error || t("loginFailed"));
+      // 记住用户名（非机密，仅存 localStorage）；密码绝不落地浏览器存储
+      if (rememberUsername) {
+        localStorage.setItem(REMEMBERED_USERNAME_KEY, username.trim());
+      } else {
+        localStorage.removeItem(REMEMBERED_USERNAME_KEY);
+      }
       onLogin(data.user);
     } catch (error) {
       notify("error", error.message);
@@ -114,6 +130,26 @@ export function LoginPage({ onLogin, onSwitchToRegister, onSwitchToReset, t, not
             showToggle
             onToggle={() => setShowPassword((v) => !v)}
           />
+          <div className="grid gap-2 text-sm text-app-soft">
+            <label className="flex items-center gap-2 cursor-pointer">
+              <input
+                type="checkbox"
+                checked={rememberMe}
+                onChange={(e) => setRememberMe(e.target.checked)}
+                className="h-4 w-4 accent-app-brand"
+              />
+              {t("rememberMe")}
+            </label>
+            <label className="flex items-center gap-2 cursor-pointer">
+              <input
+                type="checkbox"
+                checked={rememberUsername}
+                onChange={(e) => setRememberUsername(e.target.checked)}
+                className="h-4 w-4 accent-app-brand"
+              />
+              {t("rememberUsername")}
+            </label>
+          </div>
           <button
             type="submit"
             disabled={busy}

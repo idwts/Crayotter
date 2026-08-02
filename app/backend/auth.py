@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import hashlib
 import hmac
+import json
 import logging
 import secrets
 from datetime import datetime, timedelta, timezone
@@ -27,6 +28,16 @@ SESSION_TOKEN_BYTES = 32
 SESSION_DAYS = 30
 RECOVERY_CODE_COUNT = 8
 MAX_SESSIONS_PER_USER = 10
+
+# 持久登录（remember-me）配置，对齐 OWASP Remember Me Cheat Sheet：
+# - cookie 值 = "selector:validator"；selector 定位记录，validator 校验身份。
+# - 数据库只存 validator 的 SHA-256 digest；每次成功使用立即轮换 validator。
+# - selector 命中但 digest 不匹配视为令牌被盗（reuse detection），吊销该用户全部 remember tokens。
+REMEMBER_SELECTOR_BYTES = 12
+REMEMBER_VALIDATOR_BYTES = 32
+REMEMBER_DAYS = 30
+MAX_REMEMBER_TOKENS_PER_USER = 10
+MAX_PREFERENCES_BYTES = 16 * 1024  # preferences JSONB 上限 16KB
 
 
 def _sha256(value: str | bytes) -> str:
@@ -161,10 +172,11 @@ def login(
     username: str,
     password: str,
     *,
+    remember_me: bool = False,
     ip_address: str | None = None,
     user_agent: str | None = None,
 ) -> dict[str, Any]:
-    """用户登录。返回 session token 和用户信息。"""
+    """用户登录。返回 session token 和用户信息；remember_me=True 时附带持久 remember token。"""
     normalized = username.strip().lower()
 
     with db.get_connection() as conn:
@@ -236,7 +248,7 @@ def login(
                 ip_address=ip_address,
             )
 
-    return {
+    result: dict[str, Any] = {
         "token": token,
         "expires_at": expires_at.isoformat(),
         "user": {
@@ -245,6 +257,37 @@ def login(
             "username": user["username"],
         },
     }
+    if remember_me:
+        result["remember_token"] = issue_remember_token(
+            user_id,
+            ip_address=ip_address,
+            user_agent=user_agent,
+        )
+        result["remember_expires_days"] = REMEMBER_DAYS
+    return result
+
+
+def create_session(
+    user_id: str,
+    *,
+    ip_address: str | None = None,
+    user_agent: str | None = None,
+) -> tuple[str, str]:
+    """为用户创建新 session，返回 (token, expires_at ISO)。"""
+    token = secrets.token_hex(SESSION_TOKEN_BYTES)
+    token_digest = _derive_token_digest(token)
+    expires_at = datetime.now(timezone.utc) + timedelta(days=SESSION_DAYS)
+
+    with db.get_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                INSERT INTO sessions (token_digest, user_id, expires_at, ip_address, user_agent)
+                VALUES (%s, %s, %s, %s::inet, %s)
+                """,
+                (token_digest, user_id, expires_at, ip_address, user_agent),
+            )
+    return token, expires_at.isoformat()
 
 
 def logout(token: str, *, ip_address: str | None = None) -> bool:
@@ -272,6 +315,227 @@ def logout(token: str, *, ip_address: str | None = None) -> bool:
                 ip_address=ip_address,
             )
     return True
+
+
+# ---------------------------------------------------------------------------
+# 持久登录（remember-me）令牌：selector:validator 双段 + 轮换 + 盗窃检测
+# ---------------------------------------------------------------------------
+
+def issue_remember_token(
+    user_id: str,
+    *,
+    ip_address: str | None = None,
+    user_agent: str | None = None,
+) -> str:
+    """签发持久 remember token，返回 "selector:validator" 明文（仅存 digest）。"""
+    selector = secrets.token_hex(REMEMBER_SELECTOR_BYTES)
+    validator = secrets.token_hex(REMEMBER_VALIDATOR_BYTES)
+    expires_at = datetime.now(timezone.utc) + timedelta(days=REMEMBER_DAYS)
+
+    with db.get_connection() as conn:
+        with conn.cursor() as cur:
+            # 限制单用户 remember token 数量（最旧的先删）
+            cur.execute(
+                """
+                SELECT selector FROM remember_tokens
+                WHERE user_id = %s AND expires_at > now()
+                ORDER BY created_at DESC
+                """,
+                (user_id,),
+            )
+            rows = cur.fetchall()
+            if len(rows) >= MAX_REMEMBER_TOKENS_PER_USER:
+                to_delete = [r["selector"] for r in rows[MAX_REMEMBER_TOKENS_PER_USER - 1 :]]
+                cur.executemany(
+                    "DELETE FROM remember_tokens WHERE selector = %s",
+                    [(s,) for s in to_delete],
+                )
+
+            cur.execute(
+                """
+                INSERT INTO remember_tokens (selector, user_id, validator_digest, expires_at, ip_address, user_agent)
+                VALUES (%s, %s, %s, %s, %s::inet, %s)
+                """,
+                (selector, user_id, _sha256(validator), expires_at, ip_address, user_agent),
+            )
+    return f"{selector}:{validator}"
+
+
+def parse_remember_token(token: str | None) -> tuple[str, str] | None:
+    """解析 "selector:validator"，非法格式返回 None。"""
+    if not token or ":" not in token:
+        return None
+    selector, _, validator = token.partition(":")
+    if len(selector) != REMEMBER_SELECTOR_BYTES * 2 or len(validator) != REMEMBER_VALIDATOR_BYTES * 2:
+        return None
+    return selector, validator
+
+
+def verify_and_rotate_remember_token(
+    token: str | None,
+    *,
+    ip_address: str | None = None,
+    user_agent: str | None = None,
+) -> dict[str, Any] | None:
+    """验证 remember token。成功时轮换 validator 并返回 {user, new_token}。
+
+    盗窃检测：selector 命中但 validator digest 不匹配 → 吊销该用户全部
+    remember tokens 并审计，随后按无效处理（返回 None）。
+
+    并发安全（Jaspan 持久登录模式的已知 race）：浏览器重开时可能并发多个
+    请求携带同一旧 validator。轮换 UPDATE 采用乐观锁（WHERE 旧 digest），
+    失败按并发处理；digest 不匹配但 10 秒内刚被轮换过也按并发处理，
+    不误报盗窃。只有"陈旧 token 在静默期后重放"才判定被盗。
+    """
+    parsed = parse_remember_token(token)
+    if parsed is None:
+        return None
+    selector, validator = parsed
+    now = datetime.now(timezone.utc)
+
+    with db.get_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT rt.user_id, rt.validator_digest, rt.expires_at, rt.last_used_at,
+                       u.tenant_id, u.username, u.status
+                FROM remember_tokens rt
+                JOIN users u ON rt.user_id = u.id
+                WHERE rt.selector = %s
+                """,
+                (selector,),
+            )
+            row = cur.fetchone()
+            if row is None:
+                return None
+
+            old_digest = row["validator_digest"]
+            if not hmac.compare_digest(old_digest, _sha256(validator)):
+                last_used = row["last_used_at"]
+                if last_used is not None and (now - last_used).total_seconds() < 10:
+                    # 并发重开：另一个请求刚轮换过，按并发处理（不吊销、不签发）
+                    return None
+                # reuse detection：令牌疑似被盗，吊销该用户全部 remember tokens
+                cur.execute(
+                    "DELETE FROM remember_tokens WHERE user_id = %s",
+                    (row["user_id"],),
+                )
+                _audit_with_conn(
+                    conn,
+                    action="user.remember_reuse_detected",
+                    actor_id=row["user_id"],
+                    target_type="remember_token",
+                    target_id=selector[:16],
+                    ip_address=ip_address,
+                )
+                return None
+
+            if row["expires_at"] <= now or row["status"] != "active":
+                cur.execute("DELETE FROM remember_tokens WHERE selector = %s", (selector,))
+                return None
+
+            # 轮换 validator（缩小被盗窗口）；乐观锁防并发双轮换
+            new_validator = secrets.token_hex(REMEMBER_VALIDATOR_BYTES)
+            new_expires_at = now + timedelta(days=REMEMBER_DAYS)
+            cur.execute(
+                """
+                UPDATE remember_tokens
+                SET validator_digest = %s, expires_at = %s, last_used_at = now(),
+                    ip_address = %s::inet, user_agent = %s
+                WHERE selector = %s AND validator_digest = %s
+                """,
+                (_sha256(new_validator), new_expires_at, ip_address, user_agent, selector, old_digest),
+            )
+            if cur.rowcount != 1:
+                # 并发：另一个请求已完成轮换，本次按无效处理
+                return None
+
+    return {
+        "user": {
+            "id": row["user_id"],
+            "tenant_id": row["tenant_id"],
+            "username": row["username"],
+        },
+        "new_token": f"{selector}:{new_validator}",
+    }
+
+
+def revoke_remember_token(token: str | None) -> bool:
+    """吊销指定 remember token（登出时调用）。"""
+    parsed = parse_remember_token(token)
+    if parsed is None:
+        return False
+    selector, _ = parsed
+    with db.get_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "DELETE FROM remember_tokens WHERE selector = %s RETURNING user_id",
+                (selector,),
+            )
+            return cur.fetchone() is not None
+
+
+def revoke_all_remember_tokens(user_id: str) -> None:
+    """改密、重置密码、盗窃检测后吊销该用户全部 remember tokens。"""
+    with db.get_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "DELETE FROM remember_tokens WHERE user_id = %s",
+                (user_id,),
+            )
+
+
+# ---------------------------------------------------------------------------
+# per-user 历史动作记忆（preferences JSONB）
+# ---------------------------------------------------------------------------
+
+def get_preferences(user_id: str) -> dict[str, Any]:
+    """读取用户偏好（历史动作记忆），不存在时返回空 dict。"""
+    with db.get_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT preferences FROM users WHERE id = %s AND status = 'active'",
+                (user_id,),
+            )
+            row = cur.fetchone()
+    if row is None:
+        raise KeyError("user not found")
+    prefs = row["preferences"]
+    return dict(prefs) if isinstance(prefs, dict) else {}
+
+
+def update_preferences(user_id: str, patch: dict[str, Any]) -> dict[str, Any]:
+    """浅合并更新用户偏好并返回合并结果。仅接受 dict，大小受限。"""
+    if not isinstance(patch, dict):
+        raise ValueError("preferences must be an object")
+    # 顶层 key 白名单式约束：禁止 __ 开头与过长 key，防止注入奇怪结构
+    for key in patch:
+        if not isinstance(key, str) or key.startswith("__") or len(key) > 64:
+            raise ValueError(f"invalid preference key: {key!r}")
+
+    with db.get_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                UPDATE users
+                SET preferences = preferences || %s::jsonb
+                WHERE id = %s AND status = 'active'
+                RETURNING preferences
+                """,
+                (psycopg2.extras.Json(patch), user_id),
+            )
+            row = cur.fetchone()
+            if row is None:
+                raise KeyError("user not found")
+            merged = row["preferences"] if isinstance(row["preferences"], dict) else {}
+            if len(json.dumps(merged, ensure_ascii=False)) > MAX_PREFERENCES_BYTES:
+                # 超限则只保留本次 patch 内容，避免无限膨胀
+                cur.execute(
+                    "UPDATE users SET preferences = %s::jsonb WHERE id = %s RETURNING preferences",
+                    (psycopg2.extras.Json(patch), user_id),
+                )
+                merged = cur.fetchone()["preferences"]
+    return dict(merged) if isinstance(merged, dict) else {}
 
 
 def revoke_all_user_sessions(user_id: str, *, ip_address: str | None = None) -> None:
@@ -343,6 +607,7 @@ def change_password(
             )
 
         revoke_all_user_sessions(user_id, ip_address=ip_address)
+        revoke_all_remember_tokens(user_id)
         _audit_with_conn(
             conn,
             action="user.change_password",
@@ -405,6 +670,7 @@ def reset_password_by_recovery_code(
             )
 
         revoke_all_user_sessions(user_id, ip_address=ip_address)
+        revoke_all_remember_tokens(user_id)
         _audit_with_conn(
             conn,
             action="user.reset_password",
