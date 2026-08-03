@@ -83,6 +83,7 @@
 
 | 组件 | 文件 | 说明 |
 |------|------|------|
+| `SettingsModal` | `SettingsModal.jsx` | 设置弹窗；公开模式下“API 密钥”页签变为“API 来源”二选一（平台配额/我的 API）+ BYOK 表单（密钥留空=保持不变，掩码占位提示），高级页签在公开模式隐藏 |
 | `AppSidebar` | `DashboardUI.jsx` | 左侧导航栏，支持折叠 |
 | `AppTopbar` | `DashboardUI.jsx` | 顶部工具栏 |
 | `MobileDrawer` | `DashboardUI.jsx` | 移动端抽屉导航 |

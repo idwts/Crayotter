@@ -62,6 +62,34 @@
 | 响应 200 | `{ preferences: {...} }`；未登录 401 |
 | 调用位置 | main.jsx 偏好同步 effect（`authUser` 变化后拉取并应用语言/侧栏/视图/任务草稿等） |
 
+### 0.8 读取我的 API 配置
+
+| 项目 | 内容 |
+|------|------|
+| 方法 | `GET` |
+| URL | `/api/auth/model-config` |
+| 响应 200 | `{ model_config: { use_own_key, has_api_key, api_key_preview, base_url, model_name, ...(video/tts 同构), updated_at } }`；密钥只回掩码预览；未登录 401 |
+| 调用位置 | main.jsx 登录后 effect（恢复“我的 API”表单） |
+
+### 0.9 保存我的 API 配置
+
+| 项目 | 内容 |
+|------|------|
+| 方法 | `PUT` |
+| URL | `/api/auth/model-config` |
+| 请求体 | `{ use_own_key?, api_key?, base_url?, model_name?, video_*?, tts_*? }`；密钥字段留空不下发=保持不变 |
+| 响应 200 | `{ model_config }`（掩码视图）；400：use_own_key 无 key / base_url 非 http(s) / 字段非法 |
+| 调用位置 | main.jsx `saveUserModelConfig`（设置弹窗公开模式保存按钮） |
+
+### 0.10 清除我的 API 配置
+
+| 项目 | 内容 |
+|------|------|
+| 方法 | `DELETE` |
+| URL | `/api/auth/model-config` |
+| 响应 200 | `{ ok: true }` |
+| 调用位置 | main.jsx `clearUserModelConfig`（“清除我的配置”按钮） |
+
 ### 0.7 合并更新服务端偏好
 
 | 项目 | 内容 |
@@ -271,6 +299,7 @@
 - [x] 登录后所有请求携带 Session Cookie；401 统一跳转登录页（已实现）。
 - [x] 新增 `/api/auth/register`、`/api/auth/login`、`/api/auth/logout`、`/api/auth/me`、`/api/auth/password`、`/api/auth/reset` 等接口对接（已实现）。
 - [x] remember-me 登录（`remember_me` 字段 + `crayotter_remember` Cookie 自动续期）与 `/api/auth/preferences` 服务端偏好同步（2026-08-02 已实现，含 E2E 截图验证）。
+- [x] “API 来源”二选一（平台配额/我的 API）+ `/api/auth/model-config` 三接口对接（2026-08-04 已实现，含 E2E 截图与真实 agent 冒烟）。
 - [ ] `/config` 前端已读取，后续可能需要区分公开/管理员配置。
 - [ ] 上传大文件需要前端分片或调整 Nginx `client_max_body_size`。
 - [ ] SSE 连接在登录态过期时应自动重连或跳转。

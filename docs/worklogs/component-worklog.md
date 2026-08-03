@@ -166,3 +166,4 @@
 | 2026-07-31 | Claude | 初始化组件 worklog，记录第一版上线前各组件状态。 |
 | 2026-07-31 | Claude | PostgreSQL 部署、表结构设计、账号认证、前端账号流程标记为已完成；新增 `/api/auth/reset` 恢复码重置密码（后端审计修复密码强度校验 + 前端忘记密码入口）；记录 `_write_json` Set-Cookie 顺序 bug 修复。 |
 | 2026-08-02 | Claude | cookie 机制上线：remember-me 持久登录（OWASP selector:validator 轮换 + 乐观锁并发控制 + 10s 宽限盗用检测，migration 003）+ `/api/auth/preferences` 服务端历史动作记忆（语言/侧栏/视图/任务草稿等 1s 防抖同步）；前端记住我/记住用户名复选框；注册成功自动建立会话；修复 main.jsx checkSession TDZ 白屏 bug；同步服务器新版 runtime_manager/models（owner_id 隔离）回 git；本地+服务器双端 24 项功能测试与 13 步 E2E 截图验证全过。 |
+| 2026-08-04 | Claude | 主服务接入服务器：平台 dashscope key 运营者配置（/srv/crayotter/.env，公开视图只暴露 operator_api_configured）、补装 yt-dlp 修复下载失败；BYOK 持久化（migration 004 user_model_configs，Fernet 加密，`/api/auth/model-config` GET/PUT/DELETE，`POST /jobs` 按用户密钥覆盖且不占公开配额）；前端设置弹窗“API 来源”二选一 + 我的 API 表单；修复 Fernet key 路径解析跨进程不一致 bug；31 项功能测试双端全过、BYOK E2E 7 步截图全过、真实 agent 冒烟通过 Phase 1（LLM 规划+检索+下载+视频分析全链路）。 |

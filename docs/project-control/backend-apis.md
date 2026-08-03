@@ -25,6 +25,11 @@
 | POST | `/api/auth/reset` | 一次性恢复码重置密码，成功后吊销全部 session 与 remember token 并清除 Cookie | 无 |
 | GET | `/api/auth/preferences` | 读取当前用户服务端偏好（JSONB） | auth Cookie |
 | POST | `/api/auth/preferences` | 合并更新偏好 `{preferences: {...}}`，键禁 `__` 前缀且 ≤64 字符，整体 ≤16KB | auth Cookie |
+| GET | `/api/auth/model-config` | 读取“我的 API”配置视图（密钥只回 `****后4位` 掩码与 has_ 标志，绝不回传明文/密文） | auth Cookie |
+| PUT | `/api/auth/model-config` | 合并保存我的 API 配置；密钥字段缺省=保持、空串=清除、有值=覆写（Fernet 加密落库）；`use_own_key=true` 必须先有 api_key；base_url 必须 http(s) | auth Cookie |
+| DELETE | `/api/auth/model-config` | 清除我的 API 配置，回到平台配额 | auth Cookie |
+
+> BYOK（2026-08-04 上线，migration 004）：用户可二选一——平台配额（运营者在服务端 `.env` 配置 `CRAYOTTER_API_KEY`，公开模式 3 jobs/小时限流）或“我的 API”（Fernet 加密存 `user_model_configs`，任务创建时解密为 `runtime_overrides` 注入 worker，运行结束删除 `runtime_profile.json`；使用自有 key 的登录用户不占用平台公开配额）。匿名用户仍可走请求头 BYOK（`X-Crayotter-*`，不落库）。`/config` 公开视图始终掩码所有 profile 密钥并只暴露 `operator_api_configured` 布尔位。
 
 > Remember-me 安全设计（对齐 OWASP Remember Me Cheat Sheet）：DB 仅存 validator 的 SHA-256 digest；每次使用即轮换（乐观锁 `WHERE selector AND validator_digest`，并发下只有一个请求成功）；10 秒 `last_used_at` 宽限窗口区分并发竞争与真正盗用（Jaspan 模式）；确认盗用后吊销该用户全部 remember token 并写 `user.remember_reuse_detected` 审计；每用户最多 10 个 token（LRU 淘汰）；改密/重置/注销均吊销。数据表见 `migrations/003_remember_tokens_preferences.sql`。
 
@@ -108,6 +113,7 @@
 
 - [x] 增加 `/api/auth/*` 注册、登录、登出、密码、恢复码接口（2026-07-31 上线，含 `/api/auth/reset`）。
 - [x] remember-me 持久登录（selector:validator 轮换 + 盗用检测）与服务端偏好同步 `/api/auth/preferences`（2026-08-02 上线，migration 003）。
+- [x] 主服务接入服务器 + BYOK：`/api/auth/model-config` 三个接口、`POST /jobs` 按用户密钥覆盖、平台 key 运营者配置（2026-08-04 上线，migration 004，含真实 agent 冒烟）。
 - [ ] 所有接口增加 `tenant_id` / `user_id` 校验。
 - [ ] `/uploads`、`/jobs`、`/files` 等接口拒绝跨租户访问（当前仅 owner_id）。
 - [ ] `/jobs/{job_id}` 及其子资源统一做 404/403 区分。

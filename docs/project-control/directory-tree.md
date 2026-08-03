@@ -11,6 +11,7 @@
 | app/__init__.py | Crayotter application package. |
 | app/backend/__init__.py | Backend service package for the Crayotter desktop workbench. |
 | app/backend/auth.py | 账号认证服务：注册/登录/注销/改密/恢复码重置/Session 管理/审计日志（SHA-256+盐）。 |
+| app/backend/model_config.py | 用户级模型配置（BYOK 持久化）：Fernet 加解密、掩码视图、合并更新、任务运行时覆盖。密钥来源 CRAYOTTER_BYOK_SECRET 或 runtime_root/secrets/byok_fernet.key（0600 自动生成）。 |
 | app/backend/config_store.py | from __future__ import annotations |
 | app/backend/db.py | PostgreSQL 连接池（ThreadedConnectionPool）与租户上下文（RLS set_tenant_id）。 |
 | app/backend/event_bus.py | from __future__ import annotations |
@@ -73,6 +74,7 @@
 | migrations/001_initial_schema.sql | 初始迁移：tenants/users/sessions/recovery_codes/jobs/uploads/artifacts/audit_logs 8 表 + RLS + updated_at 触发器。 |
 | migrations/002_add_user_role.sql | 迁移 002：users 表新增 role 字段（user/admin）。 |
 | migrations/003_remember_tokens_preferences.sql | 迁移 003：remember_tokens 表（selector 主键/validator_digest/过期与审计字段）+ users.preferences JSONB 列。 |
+| migrations/004_user_model_configs.sql | 迁移 004：user_model_configs 表（BYOK 持久化，密钥列为 Fernet 密文）。 |
 | packaging/build_windows.ps1 | PowerShell 脚本 |
 | packaging/crayotter.spec | from pathlib import Path |
 | packaging/prepare_windows_assets.py | from __future__ import annotations |
@@ -209,6 +211,7 @@
 | tests/test_analyze_video_retry.py | import importlib |
 | tests/test_auth_api.py | 认证 API 功能/冲突测试：register/login/me/password/logout/reset + remember-me 轮换/盗用检测 + preferences 24 项（需运行中的后端 + PostgreSQL）。 |
 | tests/test_e2e_auth_frontend.py | 认证前端 E2E：Playwright(msedge) 13 步截图验证登录/注册/记住我/浏览器重启自动续期/偏好恢复/恢复码重置（截图输出 docs/worklogs/e2e-shots）。 |
+| tests/test_e2e_byok_frontend.py | BYOK E2E：设置弹窗 API 来源切换、我的 API 保存/掩码重开、真实 agent 任务提交与 LLM 链路验证（截图输出 docs/worklogs/e2e-shots-byok）。 |
 | tests/test_backend_logs.py | from __future__ import annotations |
 | tests/test_browser_auth.py | from __future__ import annotations |
 | tests/test_editing_plan.py | from __future__ import annotations |
