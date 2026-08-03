@@ -48,7 +48,12 @@ if str(SCRIPT_DIR) not in sys.path:
 
 from app.media_index import build_analysis_index, iter_analysis_files, iter_video_files, match_analysis_files
 from app.steering import SteeringCoordinator, classify_guidance
-from analysis_timeline import bounded_analysis_detail, normalize_analysis_payload
+from analysis_timeline import (
+    bounded_analysis_detail,
+    normalize_analysis_payload,
+    sample_timeline_segments,
+    timeline_covered_duration_seconds,
+)
 from editing_plan import (
     EditingPlan,
     EditingPlanStore,
@@ -58,7 +63,7 @@ from editing_plan import (
 )
 from memory_reference import INJECTION_MEMORY_CHAR_LIMIT, load_memory_reference
 from tools import ALL_TOOLS, MEMORY_EXPERIENCE_DIR, USER_WORKSPACE, WORKSPACE
-from tools._shared import _tts_generate, run_subprocess
+from tools._shared import VIDEO_ANALYSIS_VERSION, _tts_generate, run_subprocess
 from tools.narration_pipeline import compose_prepared_narration, narration_audio_path
 from model_runtime import (
     ModelCallError,
@@ -810,11 +815,20 @@ def _fallback_editing_plan(state: AgentState) -> EditingPlan:
     source_paths = [str(path.resolve()) for path in _iter_source_videos()]
     analysis_paths = [str(path.resolve()) for path in _iter_analysis_json_files()]
     target = state.target_duration_seconds or _extract_target_duration_seconds(state.user_request) or 30.0
-    scene_count = max(1, min(6, len(source_paths) or 1))
+    scene_count = max(1, min(6, int(math.ceil(target / 5.0))))
     scene_duration = max(2.0, target / scene_count)
+    source_durations = _probe_source_durations(source_paths)
     scenes: list[EditingScene] = []
     for index in range(scene_count):
         source = source_paths[index % len(source_paths)] if source_paths else ""
+        source_duration = float(source_durations.get(source, 0.0) or 0.0)
+        position = index / max(1, scene_count - 1)
+        source_start = max(0.0, (source_duration - scene_duration) * position)
+        source_end = (
+            min(source_duration, source_start + scene_duration)
+            if source_duration > 0
+            else source_start + scene_duration
+        )
         start = round(index * scene_duration, 3)
         end = round(start + scene_duration, 3)
         scenes.append(
@@ -824,8 +838,8 @@ def _fallback_editing_plan(state: AgentState) -> EditingPlan:
                 end=end,
                 narrative_purpose=f"分镜 {index + 1}: 承接用户需求并展示核心素材",
                 source_path=source,
-                source_start=0.0,
-                source_end=scene_duration,
+                source_start=round(source_start, 3),
+                source_end=round(source_end, 3),
                 crop="fit_center_crop",
                 transition="crossfade" if index else "",
             )
@@ -1738,6 +1752,7 @@ def _build_full_analysis_context() -> str:
         if correction["clamped_count"] or correction["dropped_count"]:
             analysis_text = bounded_analysis_detail(data)
         segments = data.get("segments", [])
+        semantic_segments = data.get("semantic_segments", [])
 
         seg_lines: list[str] = []
         video_seg_duration = 0.0
@@ -1749,7 +1764,17 @@ def _build_full_analysis_context() -> str:
                     if s is not None and e is not None:
                         dur = round(float(e) - float(s), 2)
                         video_seg_duration += dur
-                        seg_lines.append(f"    t={s}s ~ t={e}s  (时长 {dur}s)")
+            sampled_segments = sample_timeline_segments(
+                segments,
+                40,
+                source_duration if source_duration > 0 else None,
+            )
+            for seg in sampled_segments:
+                s = seg.get("start")
+                e = seg.get("end")
+                seg_lines.append(
+                    f"    t={s}s ~ t={e}s  (时长 {round(float(e) - float(s), 2)}s)"
+                )
 
         total_available_duration += video_seg_duration
 
@@ -1768,11 +1793,27 @@ def _build_full_analysis_context() -> str:
             )
         if seg_lines:
             block_parts.append(
-                f"   推荐片段 ({len(seg_lines)} 段, 总可用时长 {video_seg_duration:.1f}s):"
+                f"   推荐片段（时间均匀抽样 {len(seg_lines)}/{len(segments)} 段, "
+                f"总可用时长 {video_seg_duration:.1f}s）:"
             )
-            block_parts.extend(seg_lines[:40])
-        if analysis_text:
-            block_parts.append(f"   分析详情:\n{analysis_text[:3000]}")
+            block_parts.extend(seg_lines)
+        if analysis_text or semantic_segments:
+            detail_source = (
+                semantic_segments
+                if isinstance(semantic_segments, list) and semantic_segments
+                else segments
+            )
+            sampled_detail = sample_timeline_segments(
+                detail_source if isinstance(detail_source, list) else [],
+                32,
+                source_duration if source_duration > 0 else None,
+            )
+            detail = bounded_analysis_detail({"semantic_segments": sampled_detail})
+            if not detail:
+                detail = analysis_text
+                if len(detail) > 3000:
+                    detail = f"{detail[:1450]}\n...(中间内容省略)...\n{detail[-1450:]}"
+            block_parts.append(f"   分析详情:\n   （时间均匀抽样）\n{detail}")
         blocks.append("\n".join(block_parts))
 
     summary = (
@@ -2844,23 +2885,33 @@ def _run_phase1_downloads(
     ]
 
 
+def _current_analysis_for(
+    video_path: Path,
+    analysis_index: dict[str, list[Path]],
+) -> Path | None:
+    for analysis_path in match_analysis_files(video_path, analysis_index=analysis_index):
+        try:
+            payload = json.loads(analysis_path.read_text(encoding="utf-8"))
+        except Exception:
+            continue
+        if payload.get("analysis_version") == VIDEO_ANALYSIS_VERSION:
+            return analysis_path
+    return None
+
+
 def _run_phase1_analyses(
     state: AgentState,
     scheduler: ResourceScheduler,
 ) -> list[str]:
     analysis_index = build_analysis_index([WORKSPACE, USER_WORKSPACE])
     source_videos = _iter_source_videos()
-    pending = [
-        path
+    current = {
+        path: _current_analysis_for(path, analysis_index)
         for path in source_videos
-        if not match_analysis_files(path, analysis_index=analysis_index)
-    ]
+    }
+    pending = [path for path, analysis_path in current.items() if analysis_path is None]
     if not pending:
-        return [
-            str(matches[0].resolve())
-            for video_path in source_videos
-            if (matches := match_analysis_files(video_path, analysis_index=analysis_index))
-        ]
+        return [str(path.resolve()) for path in current.values() if path is not None]
 
     tasks = [
         TaskSpec(
@@ -2868,7 +2919,7 @@ def _run_phase1_analyses(
             phase="phase1",
             kind="video_analysis",
             tool_name="analyze_video",
-            description=f"分析素材 {path.name}",
+            description=f"分析素材 {path.name} ({VIDEO_ANALYSIS_VERSION})",
             arguments={
                 "video_path": str(path.resolve()),
                 "analysis_goal": state.user_request,
@@ -2892,10 +2943,9 @@ def _run_phase1_analyses(
         raw = str(_TOOL_NAME_MAP["analyze_video"].invoke(task.arguments))
         video_path = Path(str(task.arguments["video_path"]))
         index = build_analysis_index([WORKSPACE, USER_WORKSPACE])
-        matches = match_analysis_files(video_path, analysis_index=index)
-        if not matches:
+        analysis_path = _current_analysis_for(video_path, index)
+        if analysis_path is None:
             raise RuntimeError(f"视频分析未生成 JSON: {raw[:500]}")
-        analysis_path = matches[0]
         return TaskExecutionResult(
             data={"analysis_path": str(analysis_path.resolve())},
             artifacts=[
@@ -2917,9 +2967,9 @@ def _run_phase1_analyses(
     )
     refreshed_index = build_analysis_index([WORKSPACE, USER_WORKSPACE])
     completed_paths = [
-        str(matches[0].resolve())
+        str(analysis_path.resolve())
         for video_path in source_videos
-        if (matches := match_analysis_files(video_path, analysis_index=refreshed_index))
+        if (analysis_path := _current_analysis_for(video_path, refreshed_index))
     ]
     required_successes = max(1, math.ceil(len(source_videos) * 2 / 3))
     failed_states = [item for item in states.values() if item.status == "failed"]
@@ -3141,7 +3191,9 @@ def _material_gap_metrics(state: AgentState) -> dict[str, Any]:
     quality_pass_count = 0
     scene_signatures: set[str] = set()
     segment_count = 0
+    timeline_coverages: list[float] = []
     for video in analyzed:
+        detected_duration = 0.0
         try:
             import cv2
 
@@ -3149,7 +3201,9 @@ def _material_gap_metrics(state: AgentState) -> dict[str, Any]:
             width = int(capture.get(cv2.CAP_PROP_FRAME_WIDTH))
             height = int(capture.get(cv2.CAP_PROP_FRAME_HEIGHT))
             fps = float(capture.get(cv2.CAP_PROP_FPS) or 0.0)
+            frame_count = float(capture.get(cv2.CAP_PROP_FRAME_COUNT) or 0.0)
             capture.release()
+            detected_duration = frame_count / fps if fps > 0 else 0.0
             if height > width:
                 portrait += 1
             elif width > 0 and height > 0:
@@ -3165,18 +3219,24 @@ def _material_gap_metrics(state: AgentState) -> dict[str, Any]:
             payload = json.loads(matches[0].read_text(encoding="utf-8"))
         except Exception:
             continue
+        source_duration = float(
+            payload.get("source_duration_seconds", 0.0) or detected_duration or 0.0
+        )
+        if source_duration > 0:
+            payload, _ = normalize_analysis_payload(payload, source_duration)
+            validation = payload.get("timeline_validation", {})
+            timeline_coverages.append(
+                float(validation.get("bucket_coverage_ratio", 0.0) or 0.0)
+            )
         topic_text_parts.append(str(payload.get("analysis_text", "")))
         segments = payload.get("semantic_segments") or payload.get("segments") or []
         if isinstance(segments, list):
+            usable_seconds += timeline_covered_duration_seconds(
+                segments,
+                source_duration if source_duration > 0 else None,
+            )
             for segment in segments:
                 if not isinstance(segment, dict):
-                    continue
-                try:
-                    usable_seconds += max(
-                        0.0,
-                        float(segment.get("end", 0)) - float(segment.get("start", 0)),
-                    )
-                except Exception:
                     continue
                 segment_count += 1
                 signature_text = str(
@@ -3211,17 +3271,31 @@ def _material_gap_metrics(state: AgentState) -> dict[str, Any]:
         if state.processing_budget is not None
         else material_budget_for_duration(target)
     )
-    required_sources = material_budget.source_min
     quality_floor_ratio = quality_pass_count / max(1, len(analyzed))
     duplicate_ratio = 1.0 - (len(scene_signatures) / max(1, segment_count))
+    duration_coverage_ratio = usable_seconds / target
+    timeline_coverage_ratio = (
+        sum(timeline_coverages) / len(timeline_coverages)
+        if timeline_coverages
+        else 0.0
+    )
+    single_source_complete = (
+        len(source_videos) == 1
+        and len(analyzed) == 1
+        and duration_coverage_ratio >= material_budget.coverage_ratio
+        and timeline_coverage_ratio >= 0.75
+    )
+    required_sources = 1 if single_source_complete else material_budget.source_min
     return {
         "source_count": len(source_videos),
         "analyzed_count": len(analyzed),
         "analysis_complete_ratio": len(analyzed) / max(1, len(source_videos)),
         "usable_seconds": round(usable_seconds, 2),
         "target_seconds": round(target, 2),
-        "duration_coverage_ratio": round(usable_seconds / target, 3),
+        "duration_coverage_ratio": round(duration_coverage_ratio, 3),
         "required_duration_coverage_ratio": material_budget.coverage_ratio,
+        "timeline_coverage_ratio": round(timeline_coverage_ratio, 3),
+        "required_timeline_coverage_ratio": 0.75,
         "topic_coverage_ratio": round(topic_coverage, 3),
         "orientation_match_ratio": round(orientation_ratio, 3),
         "required_sources": required_sources,

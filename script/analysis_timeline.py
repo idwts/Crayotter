@@ -15,6 +15,123 @@ def _finite_number(value: Any) -> float | None:
     return number if math.isfinite(number) else None
 
 
+def sample_timeline_segments(
+    segments: list[dict[str, Any]],
+    limit: int,
+    duration_seconds: float | None = None,
+) -> list[dict[str, Any]]:
+    """Select chronologically distributed segments instead of a prefix."""
+    valid: list[dict[str, Any]] = []
+    for item in segments:
+        if not isinstance(item, dict):
+            continue
+        start = _finite_number(item.get("start"))
+        end = _finite_number(item.get("end"))
+        if start is None or end is None or end <= start:
+            continue
+        valid.append(dict(item))
+    valid.sort(key=lambda item: (float(item["start"]), float(item["end"])))
+
+    count = max(0, int(limit))
+    if count == 0 or not valid:
+        return []
+    if len(valid) <= count:
+        return valid
+
+    duration = _finite_number(duration_seconds)
+    if duration is None or duration <= 0:
+        duration = max(float(item["end"]) for item in valid)
+    if count == 1:
+        target = duration / 2
+        return [
+            min(
+                valid,
+                key=lambda item: abs(
+                    (float(item["start"]) + float(item["end"])) / 2 - target
+                ),
+            )
+        ]
+
+    remaining = list(valid)
+    selected: list[dict[str, Any]] = []
+    for index in range(count):
+        target = duration * index / (count - 1)
+        closest = min(
+            remaining,
+            key=lambda item: abs(
+                (float(item["start"]) + float(item["end"])) / 2 - target
+            ),
+        )
+        selected.append(closest)
+        remaining.remove(closest)
+    selected.sort(key=lambda item: (float(item["start"]), float(item["end"])))
+    return selected
+
+
+def timeline_bucket_coverage_ratio(
+    segments: list[dict[str, Any]],
+    duration_seconds: float,
+    bucket_count: int = 8,
+) -> float:
+    """Measure whether analyzed intervals are distributed across the source."""
+    duration = _finite_number(duration_seconds)
+    buckets = max(1, int(bucket_count))
+    if duration is None or duration <= 0:
+        return 0.0
+
+    covered = [False] * buckets
+    for item in segments:
+        if not isinstance(item, dict):
+            continue
+        start = _finite_number(item.get("start"))
+        end = _finite_number(item.get("end"))
+        if start is None or end is None or end <= start:
+            continue
+        start = max(0.0, min(duration, start))
+        end = max(0.0, min(duration, end))
+        for index in range(buckets):
+            bucket_start = duration * index / buckets
+            bucket_end = duration * (index + 1) / buckets
+            if start < bucket_end and end > bucket_start:
+                covered[index] = True
+    return round(sum(covered) / buckets, 3)
+
+
+def timeline_covered_duration_seconds(
+    segments: list[dict[str, Any]],
+    duration_seconds: float | None = None,
+) -> float:
+    """Return the union duration of timeline segments without double-counting overlaps."""
+    duration = _finite_number(duration_seconds)
+    intervals: list[tuple[float, float]] = []
+    for item in segments:
+        if not isinstance(item, dict):
+            continue
+        start = _finite_number(item.get("start"))
+        end = _finite_number(item.get("end"))
+        if start is None or end is None or end <= start:
+            continue
+        start = max(0.0, start)
+        if duration is not None and duration > 0:
+            start = min(duration, start)
+            end = min(duration, end)
+        if end > start:
+            intervals.append((start, end))
+    if not intervals:
+        return 0.0
+
+    intervals.sort()
+    covered = 0.0
+    current_start, current_end = intervals[0]
+    for start, end in intervals[1:]:
+        if start > current_end:
+            covered += current_end - current_start
+            current_start, current_end = start, end
+        else:
+            current_end = max(current_end, end)
+    return round(covered + current_end - current_start, 3)
+
+
 def clamp_analysis_segments(
     segments: list[dict[str, Any]],
     duration_seconds: float,
@@ -92,6 +209,10 @@ def normalize_analysis_payload(
         "status": "corrected"
         if aggregate["clamped_count"] or aggregate["dropped_count"]
         else "valid",
+        "bucket_coverage_ratio": timeline_bucket_coverage_ratio(
+            normalized.get("semantic_segments") or normalized.get("segments") or [],
+            float(duration_seconds),
+        ),
         **aggregate,
     }
     semantic_segments = normalized.get("semantic_segments", [])
@@ -127,4 +248,7 @@ __all__ = [
     "bounded_analysis_detail",
     "clamp_analysis_segments",
     "normalize_analysis_payload",
+    "sample_timeline_segments",
+    "timeline_bucket_coverage_ratio",
+    "timeline_covered_duration_seconds",
 ]

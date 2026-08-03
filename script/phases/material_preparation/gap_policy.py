@@ -11,6 +11,8 @@ def deterministic_material_sufficient(metrics: dict[str, Any]) -> bool:
         and metrics["analysis_complete_ratio"] >= 2 / 3
         and metrics["duration_coverage_ratio"]
         >= metrics["required_duration_coverage_ratio"]
+        and metrics.get("timeline_coverage_ratio", 1.0)
+        >= metrics.get("required_timeline_coverage_ratio", 0.0)
         and metrics["topic_coverage_ratio"] >= 0.15
         and metrics["orientation_match_ratio"] >= 0.5
         and metrics["quality_floor_met"]

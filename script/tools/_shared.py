@@ -185,6 +185,7 @@ _CANDIDATE_POOL_LOCK = threading.RLock()
 _RANK_CACHE: dict[str, str] = {}
 
 MAX_DOWNLOAD_DURATION_SECONDS = 10 * 60
+VIDEO_ANALYSIS_VERSION = "video-analysis-v4-long-coverage"
 
 
 def _hidden_subprocess_kwargs() -> dict[str, Any]:
@@ -259,7 +260,7 @@ def _analysis_cache_key(source_video: Path, analysis_goal: str, model_name: str)
         "file": _file_digest(source_video),
         "goal": str(analysis_goal),
         "model": str(model_name),
-        "prompt_version": "video-analysis-v3-proxy",
+        "prompt_version": VIDEO_ANALYSIS_VERSION,
     }
     return hashlib.sha256(
         json.dumps(payload, ensure_ascii=False, sort_keys=True).encode("utf-8")
@@ -995,6 +996,7 @@ def _save_analysis_json(
         semantic_segments = _prepare_semantic_segments(semantic_segments)
         source_duration = _get_source_duration_seconds(source_video)
         payload = {
+            "analysis_version": VIDEO_ANALYSIS_VERSION,
             "source_video": str(source_video),
             "analysis_video": str(analysis_video),
             "analysis_goal": analysis_goal,
@@ -1225,26 +1227,8 @@ def _extract_audio_for_analysis(video_path: Path) -> Path | None:
         logger.warning("⚠️ 提取音频异常: %s", e)
     return None
 
-def _prepare_timestamped_video_for_analysis(video_path: Path) -> Path | None:
-    proxy_enabled = str(
-        os.environ.get("CRAYOTTER_SHORT_FORM_OPTIMIZATIONS", "true")
-    ).strip().lower() not in {"0", "false", "no", "off"}
-    max_seconds = _positive_int_env(
-        "CRAYOTTER_VIDEO_ANALYSIS_PROXY_MAX_SECONDS",
-        45,
-    )
-    meta = _get_video_meta(str(video_path))
-    source_duration = float(meta.get("duration_seconds", 0.0) or 0.0)
-    use_proxy = proxy_enabled and source_duration > max_seconds
-    suffix = "analysis_proxy" if use_proxy else "analysis_ts"
-    stamped_path = WORKSPACE / f"{video_path.stem}_{suffix}.mp4"
-    try:
-        if stamped_path.exists() and stamped_path.stat().st_mtime >= video_path.stat().st_mtime:
-            return stamped_path
-    except Exception:
-        pass
 
-    speed_factor = max(1.0, source_duration / max_seconds) if use_proxy else 1.0
+def _analysis_video_filters(speed_factor: float, use_proxy: bool) -> list[str]:
     timestamp_expr = f"t*{speed_factor:.8f}" if use_proxy else "t"
     drawtext_filter = (
         "drawtext="
@@ -1256,10 +1240,7 @@ def _prepare_timestamped_video_for_analysis(video_path: Path) -> Path | None:
         "boxcolor=black@0.65:"
         "boxborderw=10"
     )
-    video_filters = [
-        "scale='min(960,iw)':-2",
-        drawtext_filter,
-    ]
+    video_filters = ["scale='min(960,iw)':-2"]
     if use_proxy:
         video_filters.extend(
             [
@@ -1267,6 +1248,31 @@ def _prepare_timestamped_video_for_analysis(video_path: Path) -> Path | None:
                 "fps=6",
             ]
         )
+    video_filters.append(drawtext_filter)
+    return video_filters
+
+
+def _prepare_timestamped_video_for_analysis(video_path: Path) -> Path | None:
+    proxy_enabled = str(
+        os.environ.get("CRAYOTTER_SHORT_FORM_OPTIMIZATIONS", "true")
+    ).strip().lower() not in {"0", "false", "no", "off"}
+    max_seconds = _positive_int_env(
+        "CRAYOTTER_VIDEO_ANALYSIS_PROXY_MAX_SECONDS",
+        45,
+    )
+    meta = _get_video_meta(str(video_path))
+    source_duration = float(meta.get("duration_seconds", 0.0) or 0.0)
+    use_proxy = proxy_enabled and source_duration > max_seconds
+    suffix = "analysis_proxy_v2" if use_proxy else "analysis_ts"
+    stamped_path = WORKSPACE / f"{video_path.stem}_{suffix}.mp4"
+    try:
+        if stamped_path.exists() and stamped_path.stat().st_mtime >= video_path.stat().st_mtime:
+            return stamped_path
+    except Exception:
+        pass
+
+    speed_factor = max(1.0, source_duration / max_seconds) if use_proxy else 1.0
+    video_filters = _analysis_video_filters(speed_factor, use_proxy)
 
     cmd = [
         "ffmpeg",
