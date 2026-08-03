@@ -354,13 +354,13 @@ python script/visualize.py --port 9000
 
 ```bibtex
 @misc{yan2026crayottertraceablemultiagentworkflows,
-      title={Crayotter: Traceable Multi-Agent Workflows for Long-Form Video Editing},
-      author={Lecheng Yan and Yichong Zhang and Ben Pan and Xiaoyu Zheng and Jiawei Qian and Anqi Wu and Wenxi Li and Chenyang Lyu},
+      title={Crayotter: Traceable Multi-Agent Workflows for Long-Form Video Editing}, 
+      author={Lecheng Yan and Yichong Zhang and Xiantao Xu and Jianze Lin and Ben Pan and Xiaoyu Zheng and Jiawei Qian and Anqi Wu and Jiahui Geng and Ruizhe Li and Fengyu Cai and Jingcheng Niu and Raymond Li and Wenxi Li and Chenyang Lyu},
       year={2026},
       eprint={2606.07636},
       archivePrefix={arXiv},
       primaryClass={cs.CV},
-      url={https://arxiv.org/abs/2606.07636},
+      url={https://arxiv.org/abs/2606.07636}, 
 }
 ```
 
