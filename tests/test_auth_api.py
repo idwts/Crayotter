@@ -8,7 +8,9 @@
 from __future__ import annotations
 
 import argparse
+import os
 import sys
+from pathlib import Path
 from http.cookiejar import CookieJar
 from urllib.error import HTTPError
 from urllib.request import Request, build_opener, HTTPCookieProcessor
@@ -245,6 +247,77 @@ def main() -> int:
     status, data = request(base, "GET", "/api/auth/me", headers={"Cookie": f"crayotter_remember={remember_v5}"})
     assert status == 401, f"remember token should be revoked after logout: {status} {data}"
     print("[PASS] logout revokes remember token")
+
+    # 24. model-config 未登录 401
+    status, _ = request(base, "GET", "/api/auth/model-config")
+    assert status == 401, f"model-config should require auth: {status}"
+    print("[PASS] model-config requires auth")
+
+    # 25. model-config 空视图
+    jar4 = CookieJar()
+    username3 = f"mc_{uuid.uuid4().hex[:8]}"
+    status, data = request(base, "POST", "/api/auth/register", {"username": username3, "password": "McPass123!"}, jar=jar4)
+    assert status == 201, f"register failed: {status} {data}"
+    status, data = request(base, "GET", "/api/auth/model-config", jar=jar4)
+    assert status == 200 and data["model_config"]["use_own_key"] is False and data["model_config"]["has_api_key"] is False, f"empty view: {status} {data}"
+    print("[PASS] model-config empty view")
+
+    # 26. use_own_key=true 但无 key → 400
+    status, data = request(base, "PUT", "/api/auth/model-config", {"use_own_key": True}, jar=jar4)
+    assert status == 400, f"use_own_key without key must fail: {status} {data}"
+    print("[PASS] use_own_key without key rejected")
+
+    # 27. 保存自有 key：返回掩码预览且绝不回传明文
+    raw_key = f"sk-test-{uuid.uuid4().hex[:16]}"
+    status, data = request(base, "PUT", "/api/auth/model-config", {
+        "use_own_key": True, "api_key": raw_key,
+        "base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1", "model_name": "qwen-plus",
+    }, jar=jar4)
+    assert status == 200, f"save model-config failed: {status} {data}"
+    mc = data["model_config"]
+    assert mc["use_own_key"] is True and mc["has_api_key"] is True, f"view after save: {mc}"
+    assert raw_key not in json.dumps(data), "plaintext key leaked in response"
+    assert mc["api_key_preview"].startswith("****"), f"preview not masked: {mc['api_key_preview']}"
+    print("[PASS] model-config save returns masked preview only")
+
+    # 28. 缺省密钥字段保持不变
+    status, data = request(base, "PUT", "/api/auth/model-config", {"base_url": "https://example.com/v1"}, jar=jar4)
+    assert status == 200 and data["model_config"]["has_api_key"] is True, f"key should be kept: {status} {data}"
+    assert data["model_config"]["base_url"] == "https://example.com/v1"
+    print("[PASS] omitted key field keeps existing secret")
+
+    # 29. 非法 base_url → 400
+    status, data = request(base, "PUT", "/api/auth/model-config", {"base_url": "ftp://bad"}, jar=jar4)
+    assert status == 400, f"invalid base_url must fail: {status} {data}"
+    print("[PASS] invalid base_url rejected")
+
+    # 30. 运行时覆盖链（直连服务模块验证解密结果，需 CRAYOTTER_DATABASE_URL）
+    if os.environ.get("CRAYOTTER_DATABASE_URL"):
+        import psycopg2
+        sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+        from app.backend import model_config as mc_mod
+        conn = psycopg2.connect(os.environ["CRAYOTTER_DATABASE_URL"])
+        with conn.cursor() as cur:
+            cur.execute("SELECT id FROM users WHERE username = %s", (username3,))
+            uid = str(cur.fetchone()[0])
+            cur.execute("SELECT api_key_enc FROM user_model_configs WHERE user_id = %s", (uid,))
+            enc = cur.fetchone()[0]
+        conn.close()
+        assert enc.startswith("gAAAA"), f"db must store Fernet ciphertext: {enc[:12]}"
+        assert raw_key not in enc, "plaintext key stored in db"
+        overrides = mc_mod.get_runtime_overrides(uid)
+        assert overrides.get("api_key") == raw_key, f"runtime override decrypt failed: {list(overrides)}"
+        assert overrides.get("base_url") == "https://example.com/v1"
+        print("[PASS] db stores ciphertext; runtime overrides decrypt correctly")
+    else:
+        print("[SKIP] runtime override chain (CRAYOTTER_DATABASE_URL not set)")
+
+    # 31. DELETE 清除配置
+    status, data = request(base, "DELETE", "/api/auth/model-config", jar=jar4)
+    assert status == 200, f"clear failed: {status} {data}"
+    status, data = request(base, "GET", "/api/auth/model-config", jar=jar4)
+    assert data["model_config"]["has_api_key"] is False and data["model_config"]["use_own_key"] is False
+    print("[PASS] model-config cleared")
 
     print("\nAll tests passed.")
     return 0

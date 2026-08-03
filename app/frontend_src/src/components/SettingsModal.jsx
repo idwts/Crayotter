@@ -2,7 +2,17 @@ import React, { useState } from "react";
 import { Eye, EyeOff, KeyRound, RefreshCw, Save, Settings2, SlidersHorizontal, Workflow, X } from "lucide-react";
 import settingsVisualImage from "../assets/settings-visual.webp";
 
-export function SettingsModal({ configForm, setConfigForm, configMessage, setConfigMessage, submitConfig, loadConfig, setSettingsOpen, notify, t }) {
+export function SettingsModal({ configForm, setConfigForm, configMessage, setConfigMessage, submitConfig, loadConfig, setSettingsOpen, notify, publicMode = false, operatorApiConfigured = false, userModelConfig = null, userConfigForm = null, setUserConfigForm = null, saveUserModelConfig = null, clearUserModelConfig = null, t }) {
+  const updateUser = (key, value) => setUserConfigForm((current) => ({ ...current, [key]: value }));
+  const myKeyPlaceholder = userModelConfig?.has_api_key
+    ? t("keySavedPlaceholder", { preview: userModelConfig.api_key_preview })
+    : t("apiKeyPlaceholder");
+  const myVideoKeyPlaceholder = userModelConfig?.has_video_api_key
+    ? t("keySavedPlaceholder", { preview: userModelConfig.video_api_key_preview })
+    : t("videoApiKeyPlaceholder");
+  const myTtsKeyPlaceholder = userModelConfig?.has_tts_api_key
+    ? t("keySavedPlaceholder", { preview: userModelConfig.tts_api_key_preview })
+    : t("ttsApiKeyPlaceholder");
   const [activeSection, setActiveSection] = useState("api");
   const [reloading, setReloading] = useState(false);
   const update = (key, value) => setConfigForm((current) => ({ ...current, [key]: value }));
@@ -37,22 +47,109 @@ export function SettingsModal({ configForm, setConfigForm, configMessage, setCon
           </div>
           <button className="icon-button" onClick={() => setSettingsOpen(false)} type="button" aria-label={t("close")}><X size={18} /></button>
         </header>
-        <form className="grid min-h-0 grid-rows-[minmax(0,1fr)_auto]" onSubmit={(event) => submitConfig(event).catch((error) => setConfigMessage(t("configSaveFailed", { message: error.message })))}>
+        <form className="grid min-h-0 grid-rows-[minmax(0,1fr)_auto]" onSubmit={(event) => {
+            event.preventDefault();
+            if (publicMode) {
+              saveUserModelConfig().catch((error) => setConfigMessage(t("myConfigSaveFailed", { message: error.message })));
+            } else {
+              submitConfig(event).catch((error) => setConfigMessage(t("configSaveFailed", { message: error.message })));
+            }
+          }}>
           <div className="grid min-h-0 md:grid-cols-[220px_minmax(0,1fr)]">
             <aside className="hidden bg-[#F5F7FF] p-4 md:block">
               <img src={settingsVisualImage} alt="" aria-hidden="true" />
               <div className="mt-4 grid gap-2">
                 <SettingsNavButton active={activeSection === "api"} icon={KeyRound} label={t("apiKey")} onClick={() => setActiveSection("api")} />
-                <SettingsNavButton active={activeSection === "advanced"} icon={SlidersHorizontal} label={t("advanced")} onClick={() => setActiveSection("advanced")} />
+                {!publicMode && (<SettingsNavButton active={activeSection === "advanced"} icon={SlidersHorizontal} label={t("advanced")} onClick={() => setActiveSection("advanced")} />)}
               </div>
             </aside>
             <div className="min-h-0 overflow-y-auto bg-[#FAFBFF] p-4 sm:p-6">
               <div className="settings-mobile-tabs md:hidden">
                 <SettingsNavButton active={activeSection === "api"} icon={KeyRound} label={t("apiKey")} onClick={() => setActiveSection("api")} />
-                <SettingsNavButton active={activeSection === "advanced"} icon={SlidersHorizontal} label={t("advanced")} onClick={() => setActiveSection("advanced")} />
+                {!publicMode && (<SettingsNavButton active={activeSection === "advanced"} icon={SlidersHorizontal} label={t("advanced")} onClick={() => setActiveSection("advanced")} />)}
               </div>
               <div className="settings-section-stage" key={activeSection}>
                 {activeSection === "api" ? (
+                  publicMode ? (
+                    <>
+                      <SettingSection icon={KeyRound} title={t("apiSource")}>
+                        <div className="settings-workflow-grid">
+                          <label className={`settings-workflow-option${!operatorApiConfigured ? " disabled" : ""}`}>
+                            <span>{t("platformQuota")}</span>
+                            <input
+                              checked={!userConfigForm.useOwnKey}
+                              disabled={!operatorApiConfigured}
+                              onChange={() => updateUser("useOwnKey", false)}
+                              type="checkbox"
+                            />
+                            <span className="settings-switch" aria-hidden="true"><span /></span>
+                          </label>
+                          <label className="settings-workflow-option">
+                            <span>{t("myApi")}</span>
+                            <input
+                              checked={userConfigForm.useOwnKey}
+                              onChange={(event) => updateUser("useOwnKey", event.target.checked)}
+                              type="checkbox"
+                            />
+                            <span className="settings-switch" aria-hidden="true"><span /></span>
+                          </label>
+                        </div>
+                        <p className="mt-3 text-xs text-slate-500">
+                          {userConfigForm.useOwnKey
+                            ? t("myApiHint")
+                            : (operatorApiConfigured ? t("platformQuotaHint") : t("platformQuotaUnavailable"))}
+                        </p>
+                      </SettingSection>
+                      {userConfigForm.useOwnKey && (
+                        <SettingSection icon={KeyRound} title={t("myApi")}>
+                          <div className="grid gap-4 md:grid-cols-2">
+                            <Field
+                              label={t("apiKey")}
+                              value={userConfigForm.apiKey}
+                              onChange={(value) => updateUser("apiKey", value)}
+                              placeholder={myKeyPlaceholder}
+                              type="password"
+                              showSecretLabel={t("showSecret")}
+                              hideSecretLabel={t("hideSecret")}
+                            />
+                            <Field label={t("baseUrl")} value={userConfigForm.baseUrl} onChange={(value) => updateUser("baseUrl", value)} placeholder="https://.../v1" />
+                            <Field label={t("model")} value={userConfigForm.model} onChange={(value) => updateUser("model", value)} placeholder="qwen-plus" />
+                            <Field
+                              label={t("videoApiKey")}
+                              value={userConfigForm.videoApiKey}
+                              onChange={(value) => updateUser("videoApiKey", value)}
+                              placeholder={myVideoKeyPlaceholder}
+                              type="password"
+                              showSecretLabel={t("showSecret")}
+                              hideSecretLabel={t("hideSecret")}
+                            />
+                            <Field label={t("videoBaseUrl")} value={userConfigForm.videoBaseUrl} onChange={(value) => updateUser("videoBaseUrl", value)} placeholder={t("optionalBaseUrlPlaceholder")} />
+                            <Field label={t("videoModel")} value={userConfigForm.videoModel} onChange={(value) => updateUser("videoModel", value)} placeholder="qwen-vl-max-latest" />
+                            <Field
+                              label={t("ttsApiKey")}
+                              value={userConfigForm.ttsApiKey}
+                              onChange={(value) => updateUser("ttsApiKey", value)}
+                              placeholder={myTtsKeyPlaceholder}
+                              type="password"
+                              showSecretLabel={t("showSecret")}
+                              hideSecretLabel={t("hideSecret")}
+                            />
+                            <Field label={t("ttsBaseUrl")} value={userConfigForm.ttsBaseUrl} onChange={(value) => updateUser("ttsBaseUrl", value)} placeholder={t("optionalBaseUrlPlaceholder")} />
+                            <Field label={t("ttsModel")} value={userConfigForm.ttsModel} onChange={(value) => updateUser("ttsModel", value)} placeholder="qwen-tts-latest" />
+                          </div>
+                          {userModelConfig?.has_api_key && (
+                            <button
+                              className="secondary-button mt-4"
+                              type="button"
+                              onClick={() => clearUserModelConfig().catch((error) => setConfigMessage(t("myConfigSaveFailed", { message: error.message })))}
+                            >
+                              {t("clearMyConfig")}
+                            </button>
+                          )}
+                        </SettingSection>
+                      )}
+                    </>
+                  ) : (
                   <SettingSection icon={KeyRound} title={t("apiKey")}>
                     <Field
                       label={t("apiKey")}
@@ -64,6 +161,7 @@ export function SettingsModal({ configForm, setConfigForm, configMessage, setCon
                       hideSecretLabel={t("hideSecret")}
                     />
                   </SettingSection>
+                  )
                 ) : (
                   <>
                     <SettingSection icon={Workflow} title={t("workflowOptions")}>

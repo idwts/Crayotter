@@ -140,6 +140,14 @@ function App() {
   const [selectedMessages, setSelectedMessages] = useState([]);
   const [selectedPlan, setSelectedPlan] = useState(null);
   const [hasSavedConfig, setHasSavedConfig] = useState(false);
+  const [serverPublicMode, setServerPublicMode] = useState(false);
+  const [operatorApiConfigured, setOperatorApiConfigured] = useState(false);
+  const [userModelConfig, setUserModelConfig] = useState(null);
+  const [userConfigForm, setUserConfigForm] = useState({
+    useOwnKey: false, apiKey: "", baseUrl: "", model: "",
+    videoApiKey: "", videoBaseUrl: "", videoModel: "",
+    ttsApiKey: "", ttsBaseUrl: "", ttsModel: "",
+  });
   const [healthText, setHealthText] = useState("");
   const [sidebarCollapsed, setSidebarCollapsed] = useState(() => localStorage.getItem(STORAGE_KEYS.sidebarCollapsed) === "1");
   const [enablePhase2Research, setEnablePhase2Research] = useState(true);
@@ -507,7 +515,9 @@ function App() {
     setEnablePlanReview(config.enable_plan_review !== false);
     setDirectPhase3Execution(config.direct_phase3_execution === true);
     setPreferLocalMaterials(config.prefer_local_materials === true);
-    setHasSavedConfig(Boolean(profile.api_key));
+    setServerPublicMode(Boolean(config.public_mode));
+    setOperatorApiConfigured(Boolean(config.operator_api_configured));
+    setHasSavedConfig(Boolean(profile.api_key) || Boolean(config.operator_api_configured));
   }, []);
 
   const loadConfig = useCallback(async () => {
@@ -720,6 +730,33 @@ function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [authUser]);
 
+  // 登录成功后：拉取“我的 API”配置（密钥只回掩码预览，不回传明文）
+  useEffect(() => {
+    if (!authUser) {
+      setUserModelConfig(null);
+      return;
+    }
+    let cancelled = false;
+    request("/api/auth/model-config")
+      .then((data) => {
+        if (cancelled) return;
+        const mc = data?.model_config || {};
+        setUserModelConfig(mc);
+        setUserConfigForm((current) => ({
+          ...current,
+          useOwnKey: Boolean(mc.use_own_key),
+          baseUrl: mc.base_url || "",
+          model: mc.model_name || "",
+          videoBaseUrl: mc.video_base_url || "",
+          videoModel: mc.video_model_name || "",
+          ttsBaseUrl: mc.tts_base_url || "",
+          ttsModel: mc.tts_model_name || "",
+        }));
+      })
+      .catch(() => {});
+    return () => { cancelled = true; };
+  }, [authUser]);
+
   // 历史动作变化：debounce 推送到服务端 preferences（仅登录态）
   useEffect(() => {
     if (!authUser || prefsApplyingRef.current) return;
@@ -792,6 +829,39 @@ function App() {
   };
 
   const downloadFullLogUrl = selectedJob ? jobEventsDownloadUrl(selectedJob.job_id) : "";
+
+  const saveUserModelConfig = async () => {
+    const payload = {
+      use_own_key: userConfigForm.useOwnKey,
+      base_url: userConfigForm.baseUrl,
+      model_name: userConfigForm.model,
+      video_base_url: userConfigForm.videoBaseUrl,
+      video_model_name: userConfigForm.videoModel,
+      tts_base_url: userConfigForm.ttsBaseUrl,
+      tts_model_name: userConfigForm.ttsModel,
+    };
+    // 密钥字段留空 = 保持不变（不下发），避免把掩码当成新 key 覆写
+    if (userConfigForm.apiKey.trim()) payload.api_key = userConfigForm.apiKey.trim();
+    if (userConfigForm.videoApiKey.trim()) payload.video_api_key = userConfigForm.videoApiKey.trim();
+    if (userConfigForm.ttsApiKey.trim()) payload.tts_api_key = userConfigForm.ttsApiKey.trim();
+    const data = await request("/api/auth/model-config", { method: "PUT", body: JSON.stringify(payload) });
+    setUserModelConfig(data?.model_config || null);
+    setUserConfigForm((current) => ({ ...current, apiKey: "", videoApiKey: "", ttsApiKey: "" }));
+    setConfigMessage(t("myConfigSaved"));
+    notify("success", t("myConfigSaved"));
+  };
+
+  const clearUserModelConfig = async () => {
+    await request("/api/auth/model-config", { method: "DELETE" });
+    setUserModelConfig(null);
+    setUserConfigForm({
+      useOwnKey: false, apiKey: "", baseUrl: "", model: "",
+      videoApiKey: "", videoBaseUrl: "", videoModel: "",
+      ttsApiKey: "", ttsBaseUrl: "", ttsModel: "",
+    });
+    setConfigMessage(t("myConfigCleared"));
+    notify("success", t("myConfigCleared"));
+  };
 
   const submitConfig = async (event) => {
     event.preventDefault();
@@ -896,7 +966,8 @@ function App() {
   const submitJob = async () => {
     const task = taskText.trim();
     if (!task) return;
-    if (mode === "agent" && !hasSavedConfig) {
+    const ownKeyReady = Boolean(userModelConfig?.use_own_key && userModelConfig?.has_api_key);
+    if (mode === "agent" && !hasSavedConfig && !ownKeyReady) {
       setSettingsOpen(true);
       notify("info", t("apiRequired"));
       return;
@@ -1225,6 +1296,13 @@ function App() {
           loadConfig={loadConfig}
           setSettingsOpen={setSettingsOpen}
           notify={notify}
+          publicMode={serverPublicMode}
+          operatorApiConfigured={operatorApiConfigured}
+          userModelConfig={userModelConfig}
+          userConfigForm={userConfigForm}
+          setUserConfigForm={setUserConfigForm}
+          saveUserModelConfig={saveUserModelConfig}
+          clearUserModelConfig={clearUserModelConfig}
           t={t}
         />
       )}

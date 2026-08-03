@@ -26,6 +26,7 @@ from .models import JobRequest
 from .runtime_manager import RuntimeManager
 from app.backend import auth as auth_service
 from app.backend import db
+from app.backend import model_config as model_config_service
 from app.media_index import build_analysis_index, is_video_file, match_analysis_files
 from app.runtime_paths import configure_runtime_environment, get_bundle_root, get_runtime_root, resource_path, runtime_path
 
@@ -147,6 +148,14 @@ class BackendHandler(BaseHTTPRequestHandler):
                 self._write_json(HTTPStatus.OK, {"preferences": auth_service.get_preferences(user["id"])})
                 return
 
+            if path == "/api/auth/model-config":
+                user = self._auth_user()
+                if user is None:
+                    self._write_json(HTTPStatus.UNAUTHORIZED, {"error": "Not authenticated"})
+                    return
+                self._write_json(HTTPStatus.OK, {"model_config": model_config_service.public_view(user["id"])})
+                return
+
             if path == "/config":
                 self._write_json(HTTPStatus.OK, self._public_config())
                 return
@@ -239,6 +248,15 @@ class BackendHandler(BaseHTTPRequestHandler):
         path = parsed.path.rstrip("/") or "/"
 
         try:
+            if path == "/api/auth/model-config":
+                user = self._auth_user()
+                if user is None:
+                    self._write_json(HTTPStatus.UNAUTHORIZED, {"error": "Not authenticated"})
+                    return
+                payload = self._read_json()
+                view = model_config_service.update(user["id"], payload)
+                self._write_json(HTTPStatus.OK, {"model_config": view})
+                return
             if path != "/config":
                 self._write_json(HTTPStatus.NOT_FOUND, {"error": f"Unknown route: {path}"})
                 return
@@ -341,7 +359,12 @@ class BackendHandler(BaseHTTPRequestHandler):
                 return
 
             if path == "/jobs":
-                self._check_public_submission(owner_id)
+                # 登录用户启用自有 API（BYOK 持久化）时使用其密钥，且不占用平台公开配额；
+                # 否则走平台配额（公开限流）或浏览器头部 BYOK（匿名、不落库）。
+                user = self._auth_user()
+                own_overrides = model_config_service.get_runtime_overrides(user["id"]) if user else {}
+                if not own_overrides:
+                    self._check_public_submission(owner_id)
                 payload = self._read_json()
                 request = JobRequest.model_validate(payload)
                 if self._public_mode:
@@ -365,7 +388,7 @@ class BackendHandler(BaseHTTPRequestHandler):
                 record = SERVICE.runtime_manager.create_job(
                     request,
                     owner_id,
-                    self._public_runtime_overrides() if self._public_mode else None,
+                    own_overrides or (self._public_runtime_overrides() if self._public_mode else None),
                     self._uploads_root(owner_id) if self._public_mode else None,
                 )
                 self._write_json(HTTPStatus.CREATED, record)
@@ -455,6 +478,15 @@ class BackendHandler(BaseHTTPRequestHandler):
         owner_id = self._owner_id()
 
         try:
+            if path == "/api/auth/model-config":
+                user = self._auth_user()
+                if user is None:
+                    self._write_json(HTTPStatus.UNAUTHORIZED, {"error": "Not authenticated"})
+                    return
+                model_config_service.clear(user["id"])
+                self._write_json(HTTPStatus.OK, {"ok": True})
+                return
+
             if path == "/uploads":
                 raw_path = query.get("path", [""])[0]
                 if not raw_path:
