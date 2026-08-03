@@ -209,9 +209,11 @@
 | script/workflow/tool_catalog.py | Tool groups exposed to each workflow phase. |
 | script/workflow/topology.py | Declarative LangGraph topology for the Crayotter workflow. |
 | tests/test_analyze_video_retry.py | import importlib |
-| tests/test_auth_api.py | 认证 API 功能/冲突测试：register/login/me/password/logout/reset + remember-me 轮换/盗用检测 + preferences 24 项（需运行中的后端 + PostgreSQL）。 |
+| tests/test_auth_api.py | 认证 API 功能/冲突测试：register/login/me/password/logout/reset + remember-me 轮换/盗用检测 + preferences + BYOK model-config 31 项（需运行中的后端 + PostgreSQL）。 |
 | tests/test_e2e_auth_frontend.py | 认证前端 E2E：Playwright(msedge) 13 步截图验证登录/注册/记住我/浏览器重启自动续期/偏好恢复/恢复码重置（截图输出 docs/worklogs/e2e-shots）。 |
 | tests/test_e2e_byok_frontend.py | BYOK E2E：设置弹窗 API 来源切换、我的 API 保存/掩码重开、真实 agent 任务提交与 LLM 链路验证（截图输出 docs/worklogs/e2e-shots-byok）。 |
+| tests/test_e2e_job_lifecycle.py | 任务生命周期 E2E：注册+BYOK → 创建 → 历史查看/详情 → 取消 → 重建 → 服务重启→interrupted(可恢复) → 继续任务 → 再取消（截图输出 docs/worklogs/e2e-shots-lifecycle）。 |
+| tests/_restart_server_backend.py | 生命周期 E2E 辅助：paramiko systemctl restart 服务器 crayotter.service 并断言 active。 |
 | tests/test_backend_logs.py | from __future__ import annotations |
 | tests/test_browser_auth.py | from __future__ import annotations |
 | tests/test_editing_plan.py | from __future__ import annotations |

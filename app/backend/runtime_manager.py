@@ -1121,6 +1121,10 @@ class RuntimeManager:
     @staticmethod
     def _write_summary(job: ManagedJob) -> None:
         payload = job.record.model_dump()
+        # owner_id 在 JobRecord 上 exclude=True（不进 API 响应），但必须持久化，
+        # 否则后端重启后 _load_existing_jobs 恢复出的 record.owner_id 为空，
+        # 所有者的任务历史为空且 interrupted 任务无法 resume。
+        payload["owner_id"] = job.record.owner_id
         payload["job_dir"] = str(job.job_dir)
         job.summary_path.write_text(
             json.dumps(payload, ensure_ascii=False, indent=2),

@@ -95,10 +95,13 @@ def build_canonical_render_command(
         else request.profile.clip_loudness_lufs
     )
     audio_input = "0:a:0" if request.probe.has_audio else "1:a:0"
+    # 余量：loudnorm 目标 TP 比质量门限低 0.5 dB，避免动态模式下的微小过冲
+    # （实测可达 +0.04 dB）恰好压线导致 true_peak_too_high 误判。
+    true_peak_target = max(-6.0, request.profile.true_peak_dbfs - 0.5)
     audio_filter = (
         f"[{audio_input}]aresample={request.profile.audio_sample_rate},"
         "aformat=sample_fmts=fltp:channel_layouts=stereo,"
-        f"loudnorm=I={loudness:.1f}:TP={request.profile.true_peak_dbfs:.1f}:"
+        f"loudnorm=I={loudness:.1f}:TP={true_peak_target:.1f}:"
         f"LRA={request.profile.loudness_range:.1f}[aout]"
     )
     filters = _video_filter(request.profile, hdr=request.probe.is_hdr) + ";" + audio_filter

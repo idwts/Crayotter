@@ -50,7 +50,7 @@
 | GET | `/jobs/{job_id}` | 任务详情 | owner_id Cookie |
 | DELETE | `/jobs/{job_id}` | 删除任务 | owner_id Cookie |
 | POST | `/jobs/{job_id}/cancel` | 取消任务 | owner_id Cookie |
-| POST | `/jobs/{job_id}/resume` | 恢复中断任务 | owner_id Cookie |
+| POST | `/jobs/{job_id}/resume` | 恢复中断任务（2026-08-04 修复：`owner_id` 此前因 `Field(exclude=True)` 不落 `summary.json`，重启后任务对所有者不可见且无法恢复；现 `_write_summary` 显式写入 owner_id，API 响应仍排除） | owner_id Cookie |
 | POST | `/jobs/{job_id}/pause` | 暂停任务 | owner_id Cookie |
 | POST | `/jobs/{job_id}/approve` | 批准继续（pause 后） | owner_id Cookie + pause_token |
 
