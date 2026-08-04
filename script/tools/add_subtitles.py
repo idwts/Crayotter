@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from ._shared import *
+from .subtitle_layout import create_subtitle_clip
 
 
 @tool
@@ -29,7 +30,6 @@ def add_subtitles(
     try:
         from moviepy.video.io.VideoFileClip import VideoFileClip
         from moviepy.video.compositing.CompositeVideoClip import CompositeVideoClip
-        from moviepy.video.VideoClip import TextClip
 
         resolved_video = _resolve_workspace_input_path(video_path, must_exist=True)
         if resolved_video is None:
@@ -41,7 +41,14 @@ def add_subtitles(
         video = VideoFileClip(str(resolved_video))
         video_dur = video.duration
         sub_clips: list[Any] = []
-        font_path = BUNDLE_DIR / "AlibabaPuHuiTi-3-55-Regular" / "AlibabaPuHuiTi-3-55-Regular.ttf"
+        font_path = str(
+            BUNDLE_DIR
+            / "AlibabaPuHuiTi-3-55-Regular"
+            / "AlibabaPuHuiTi-3-55-Regular.ttf"
+        )
+        if not Path(font_path).is_file():
+            video.close()
+            return "字幕添加出错: 未找到可用字幕字体"
 
         for idx, sub in enumerate(subtitles):
             text = sub.get("text", "").strip()
@@ -52,29 +59,27 @@ def add_subtitles(
                 continue
             end = min(end, video_dur)
 
-            lines = []
-            remaining = text
-            while len(remaining) > 18:
-                lines.append(remaining[:18])
-                remaining = remaining[18:]
-            if remaining:
-                lines.append(remaining)
-            display_text = "\n".join(lines)
-
             try:
-                txt_clip = TextClip(
-                    text=display_text,
-                    font_size=42,
-                    color="white",
-                    stroke_color="black",
-                    stroke_width=2,
-                    font=str(font_path),
-                    text_align="center",
-                    size=(video.size[0] - 120, None),
-                    duration=end - start,
+                txt_clip, y_pos, font_size, bottom_margin, baseline_lift = (
+                    create_subtitle_clip(
+                        text=text,
+                        font_path=font_path,
+                        video_size=video.size,
+                        duration=end - start,
+                    )
                 )
-                txt_clip = txt_clip.with_position(("center", video.size[1] - 160))
-                txt_clip = txt_clip.with_start(start)
+                logger.info(
+                    "字幕布局: 段=%d, font=%s@%d, clip_h=%d, y=%d, video_h=%d, safe_margin=%d, baseline_lift=%d",
+                    idx + 1,
+                    Path(font_path).name,
+                    font_size,
+                    int(txt_clip.h),
+                    y_pos,
+                    int(video.size[1]),
+                    bottom_margin,
+                    baseline_lift,
+                )
+                txt_clip = txt_clip.with_position(("center", y_pos)).with_start(start)
                 sub_clips.append(txt_clip)
             except Exception as se:
                 logger.warning("字幕 %d 创建失败: %s", idx+1, se)
