@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import shutil
 import subprocess
 import sys
@@ -8,6 +9,7 @@ import threading
 import os
 import time
 import uuid
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
@@ -70,11 +72,98 @@ class RuntimeManager:
     _media_metadata_cache: dict[tuple[str, int, int], float | None] = {}
     _media_metadata_lock = threading.RLock()
 
+    # 任务产物保留策略：终态/中断任务超过保留天数后由 janitor 整体清除（含 workspace
+    # 原始媒体），防止公开试用磁盘只增不减。<=0 表示关闭清扫。
+    JOB_RETENTION_DAYS = float(os.environ.get("CRAYOTTER_JOB_RETENTION_DAYS", "7") or 7)
+    JOB_JANITOR_INTERVAL_SECONDS = float(os.environ.get("CRAYOTTER_JOB_JANITOR_INTERVAL_SECONDS", "21600") or 21600)
+
     def __init__(self, config_store: ConfigStore) -> None:
         self.config_store = config_store
         self._jobs: dict[str, ManagedJob] = {}
         self._lock = threading.RLock()
+        self._janitor_stop = threading.Event()
+        self._janitor_thread: threading.Thread | None = None
+        self._shutting_down = threading.Event()
         self._load_existing_jobs()
+
+    # ------------------------------------------------------------------
+    # 产物保留 janitor
+    # ------------------------------------------------------------------
+    def start_janitor(self) -> None:
+        """启动后台清扫线程（幂等）；保留天数 <=0 时不启动。"""
+        if self.JOB_RETENTION_DAYS <= 0 or self._janitor_thread is not None:
+            return
+        self._janitor_thread = threading.Thread(
+            target=self._janitor_loop, name="job-janitor", daemon=True
+        )
+        self._janitor_thread.start()
+
+    def stop_janitor(self) -> None:
+        self._janitor_stop.set()
+
+    def _janitor_loop(self) -> None:
+        while not self._janitor_stop.wait(self.JOB_JANITOR_INTERVAL_SECONDS):
+            try:
+                removed = self.sweep_expired_jobs()
+                if removed:
+                    logging.getLogger(__name__).info(
+                        "job janitor removed %d expired jobs: %s", len(removed), removed
+                    )
+            except Exception:
+                logging.getLogger(__name__).exception("job janitor sweep failed")
+
+    @staticmethod
+    def _job_reference_time(job: ManagedJob) -> datetime | None:
+        raw = job.record.completed_at or job.record.created_at or ""
+        try:
+            parsed = datetime.fromisoformat(raw)
+        except ValueError:
+            return None
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=timezone.utc)
+        return parsed
+
+    def sweep_expired_jobs(self, *, now: datetime | None = None) -> list[str]:
+        """删除超过保留期的终态/interrupted 任务（目录+内存记录），返回删除的 job_id。
+
+        running/queued 永不删除；时间戳无法解析的保守保留。
+        """
+        if self.JOB_RETENTION_DAYS <= 0:
+            return []
+        cutoff = (now or datetime.now(timezone.utc)) - timedelta(days=self.JOB_RETENTION_DAYS)
+        removed: list[str] = []
+        with self._lock:
+            for job_id, job in list(self._jobs.items()):
+                status = job.record.status
+                if status not in TERMINAL_JOB_STATUSES and status != "interrupted":
+                    continue
+                reference = self._job_reference_time(job)
+                if reference is None or reference > cutoff:
+                    continue
+                shutil.rmtree(job.job_dir, ignore_errors=True)
+                del self._jobs[job_id]
+                removed.append(job_id)
+        return removed
+
+    def begin_shutdown(self) -> None:
+        """收到停机信号的第一时间调用：置停机标志，阻断 worker 失败路径误标 failed。"""
+        self._shutting_down.set()
+
+    def shutdown(self) -> None:
+        """优雅停机：停 janitor，并把未完成任务显式落盘为 interrupted。
+
+        使 SIGTERM 停机与进程被杀后的重启恢复语义一致（重启加载时也会兜底标记），
+        同时保证 summary.json 在进程退出前是最新的。
+        """
+        self.stop_janitor()
+        self._shutting_down.set()
+        with self._lock:
+            for job in self._jobs.values():
+                if job.record.status in {"queued", "running"}:
+                    job.record.status = "interrupted"
+                    job.record.completed_at = None
+                    job.record.error = job.record.error or "Backend stopped before the task finished."
+                    self._write_summary(job)
 
     def list_jobs(self, owner_id: str | None = None) -> list[dict[str, Any]]:
         with self._lock:
@@ -579,7 +668,12 @@ class RuntimeManager:
             else:
                 self._run_agent_job(job, request, config, resume=resume)
         except Exception as exc:
-            self._mark_failed(job, str(exc))
+            # 停机竞态：SIGTERM 优雅停机已把 running 任务落盘为 interrupted，
+            # worker 因进程退出拿到的异常不得覆盖为 failed（否则用户无法 resume）。
+            if self._shutting_down.is_set() and job.record.status == "interrupted":
+                pass
+            else:
+                self._mark_failed(job, str(exc))
         finally:
             if job.has_ephemeral_credentials:
                 (job.job_dir / "runtime_profile.json").unlink(missing_ok=True)
@@ -964,6 +1058,14 @@ class RuntimeManager:
     def _mark_failed(self, job: ManagedJob, error_message: str) -> None:
         with job.lock:
             if job.record.status in TERMINAL_JOB_STATUSES:
+                return
+            # 停机中的 worker 异常（如 agent 子进程同收 SIGTERM）不得覆盖为 failed，
+            # 保持 interrupted 以便用户 resume；shutdown() 会统一落盘。
+            if self._shutting_down.is_set():
+                job.record.status = "interrupted"
+                job.record.completed_at = None
+                job.record.error = job.record.error or "Backend stopped before the task finished."
+                self._write_summary(job)
                 return
             job.record.status = "failed"
             job.record.completed_at = utc_now_iso()

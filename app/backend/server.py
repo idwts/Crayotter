@@ -10,6 +10,8 @@ import mimetypes
 import os
 import re
 import secrets
+import shutil
+import signal
 import socket
 import shutil
 import threading
@@ -1105,9 +1107,28 @@ def main() -> None:
     args = parser.parse_args()
 
     httpd = build_http_server(host=args.host, port=args.port)
+
+    # 优雅停机：SIGTERM/SIGINT 触发 httpd.shutdown（systemd KillMode=control-group
+    # 默认先发 SIGTERM），serve_forever 返回后把未完成任务落盘为 interrupted，
+    # 避免被 TimeoutStopSec 升级为 SIGKILL 时 summary 来不及写。
+    def _graceful_shutdown(signum, frame) -> None:
+        SERVICE.runtime_manager.begin_shutdown()
+        threading.Thread(target=httpd.shutdown, name="http-shutdown", daemon=True).start()
+
+    signal.signal(signal.SIGTERM, _graceful_shutdown)
+    signal.signal(signal.SIGINT, _graceful_shutdown)
+
+    SERVICE.runtime_manager.start_janitor()
+
     print(f"Crayotter backend listening on http://{args.host}:{args.port}")
     print(f"Crayotter workbench available at http://{args.host}:{args.port}/ui/")
-    httpd.serve_forever()
+    try:
+        httpd.serve_forever()
+    finally:
+        try:
+            SERVICE.runtime_manager.shutdown()
+        except Exception:
+            pass
 
 
 if __name__ == "__main__":

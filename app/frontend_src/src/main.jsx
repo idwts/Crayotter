@@ -145,6 +145,8 @@ function App() {
   const [authView, setAuthView] = useState("login");
   const [authLoading, setAuthLoading] = useState(true);
   const [jobs, setJobs] = useState([]);
+  const jobsRef = useRef([]);
+  useEffect(() => { jobsRef.current = jobs; }, [jobs]);
   const [uploads, setUploads] = useState([]);
   const [selectedJobId, setSelectedJobId] = useState(null);
   const [selectedJob, setSelectedJob] = useState(null);
@@ -667,11 +669,28 @@ function App() {
         setHealthText(health.status === "fulfilled" ? t("healthOk") : t("healthFail"));
       })
       .catch(() => setHealthText(t("healthFail")));
-    refreshTimerRef.current = window.setInterval(() => {
-      refreshJobs(false).catch(() => {});
-    }, 6000);
+    refreshTimerRef.current = { cancelled: false };
+    // 自适应轮询：tab 隐藏时暂停；有 queued/running 任务时 6s，空闲时 30s。
+    const schedulePoll = () => {
+      window.clearTimeout(refreshTimerRef.current.timer);
+      if (document.hidden || refreshTimerRef.current.cancelled) return;
+      const hasActive = (jobsRef.current || []).some((job) => ["running", "queued"].includes(job.status));
+      refreshTimerRef.current.timer = window.setTimeout(() => {
+        refreshJobs(false).catch(() => {}).finally(schedulePoll);
+      }, hasActive ? 6000 : 30000);
+    };
+    const onVisibility = () => {
+      if (!document.hidden) {
+        refreshJobs(false).catch(() => {});
+        schedulePoll();
+      }
+    };
+    document.addEventListener("visibilitychange", onVisibility);
+    schedulePoll();
     return () => {
-      window.clearInterval(refreshTimerRef.current);
+      refreshTimerRef.current.cancelled = true;
+      window.clearTimeout(refreshTimerRef.current.timer);
+      document.removeEventListener("visibilitychange", onVisibility);
       closeEventStream();
       toastTimersRef.current.forEach((timer) => window.clearTimeout(timer));
       toastTimersRef.current.clear();

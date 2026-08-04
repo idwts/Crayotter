@@ -29,6 +29,7 @@
 | PUT | `/api/auth/model-config` | 合并保存我的 API 配置；密钥字段缺省=保持、空串=清除、有值=覆写（Fernet 加密落库）；`use_own_key=true` 必须先有 api_key；base_url 必须 http(s) | auth Cookie |
 | DELETE | `/api/auth/model-config` | 清除我的 API 配置，回到平台配额 | auth Cookie |
 
+> 任务产物保留（2026-08-04）：`RuntimeManager` janitor 后台线程按 `CRAYOTTER_JOB_RETENTION_DAYS`（默认 7 天）清除终态/interrupted 任务目录（含 workspace 原始媒体），间隔 `CRAYOTTER_JOB_JANITOR_INTERVAL_SECONDS`（默认 21600s）；running/queued 永不删除。SIGTERM 优雅停机：`begin_shutdown` 置标志（worker 失败路径改标 interrupted），`shutdown` 把未完成任务落盘为 interrupted。
 > BYOK（2026-08-04 上线，migration 004）：用户可二选一——平台配额（运营者在服务端 `.env` 配置 `CRAYOTTER_API_KEY`，公开模式 3 jobs/小时限流）或“我的 API”（Fernet 加密存 `user_model_configs`，任务创建时解密为 `runtime_overrides` 注入 worker，运行结束删除 `runtime_profile.json`；使用自有 key 的登录用户不占用平台公开配额）。匿名用户仍可走请求头 BYOK（`X-Crayotter-*`，不落库）。`/config` 公开视图始终掩码所有 profile 密钥并只暴露 `operator_api_configured` 布尔位。
 
 > Remember-me 安全设计（对齐 OWASP Remember Me Cheat Sheet）：DB 仅存 validator 的 SHA-256 digest；每次使用即轮换（乐观锁 `WHERE selector AND validator_digest`，并发下只有一个请求成功）；10 秒 `last_used_at` 宽限窗口区分并发竞争与真正盗用（Jaspan 模式）；确认盗用后吊销该用户全部 remember token 并写 `user.remember_reuse_detected` 审计；每用户最多 10 个 token（LRU 淘汰）；改密/重置/注销均吊销。数据表见 `migrations/003_remember_tokens_preferences.sql`。
