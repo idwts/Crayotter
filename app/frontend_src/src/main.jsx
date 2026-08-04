@@ -53,12 +53,24 @@ export function setUnauthorizedHandler(handler) {
   _onUnauthorized = handler;
 }
 
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
 const request = async (url, options = {}) => {
-  const response = await fetch(url, {
+  let response = await fetch(url, {
     credentials: "same-origin",
     headers: { "Content-Type": "application/json" },
     ...options,
   });
+  // nginx 限流（180r/m）瞬时超窗口会返回 503；退避 2.5s 后自动重试一次，
+  // 避免 resume/cancel 等动作要求用户手动再点，也减少轮询报错噪音。
+  if (response.status === 503) {
+    await sleep(2500);
+    response = await fetch(url, {
+      credentials: "same-origin",
+      headers: { "Content-Type": "application/json" },
+      ...options,
+    });
+  }
   if (!response.ok) {
     let message = `${response.status} ${response.statusText}`;
     try {
