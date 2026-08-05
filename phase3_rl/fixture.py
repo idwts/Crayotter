@@ -41,6 +41,7 @@ class Phase3Fixture:
     allowed_tools: list[str] = field(default_factory=list)
     runtime_seed: list[SeedFile] = field(default_factory=list)
     scripted_turns: list[ScriptedTurn] = field(default_factory=list)
+    metadata: dict[str, Any] = field(default_factory=dict)
     source_path: Path | None = None
 
 
@@ -95,6 +96,7 @@ def load_fixture(identifier_or_path: str | Path) -> Phase3Fixture:
             for item in payload.get("runtime_seed", [])
         ],
         scripted_turns=[_parse_scripted_turn(item) for item in payload.get("scripted_turns", [])],
+        metadata=dict(payload.get("metadata", {})),
         source_path=path,
     )
 
@@ -152,6 +154,7 @@ def materialize_fixture(
                 "fixture_id": fixture.fixture_id,
                 "description": fixture.description,
                 "source_fixture": str(fixture.source_path) if fixture.source_path else "",
+                "metadata": fixture.metadata,
             },
             ensure_ascii=False,
             indent=2,

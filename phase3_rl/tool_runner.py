@@ -12,6 +12,31 @@ def _emit(payload: dict) -> None:
     print(f"{RESULT_SENTINEL}{json.dumps(payload, ensure_ascii=False)}")
 
 
+def _configure_episode_environment(runtime_root: str | Path) -> Path:
+    """Pin all runtime workspaces to the current rollout episode.
+
+    Ray workers import the application tool package before individual rollout
+    subprocesses are launched.  The imported package publishes its workspace
+    paths through environment variables, so inheriting those values here can
+    make a later episode resolve files against the worker's project-level
+    workspace.  Always overwrite them before importing any application module.
+    """
+
+    episode_root = Path(runtime_root).expanduser().resolve(strict=False)
+    task_workspace = episode_root / "temp"
+    user_workspace = episode_root / "user_temp"
+
+    # Direct assignment is intentional.  setdefault() would preserve stale
+    # values inherited from the long-lived AgentLoopWorker process.
+    os.environ["CRAYOTTER_RUNTIME_ROOT"] = str(episode_root)
+    os.environ["CRAYOTTER_TASK_WORKSPACE"] = str(task_workspace)
+    os.environ["CRAYOTTER_USER_WORKSPACE"] = str(user_workspace)
+
+    task_workspace.mkdir(parents=True, exist_ok=True)
+    user_workspace.mkdir(parents=True, exist_ok=True)
+    return episode_root
+
+
 def main() -> int:
     try:
         payload = json.loads(sys.stdin.read() or "{}")
@@ -31,10 +56,11 @@ def main() -> int:
         )
         return 1
 
-    os.environ["CRAYOTTER_RUNTIME_ROOT"] = runtime_root
+    _configure_episode_environment(runtime_root)
     project_root = Path(__file__).resolve().parents[1]
-    if str(project_root) not in sys.path:
-        sys.path.insert(0, str(project_root))
+    for import_root in (project_root, project_root / "script"):
+        if str(import_root) not in sys.path:
+            sys.path.insert(0, str(import_root))
 
     try:
         from app.runtime_paths import configure_runtime_environment

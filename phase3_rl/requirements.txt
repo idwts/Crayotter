@@ -1,0 +1,36 @@
+# Tested training stack (CUDA 12.9 host)
+torch==2.10.0
+transformers==5.14.1
+vllm==0.19.1
+ray==2.55.1
+hydra-core==1.3.3
+omegaconf==2.3.1
+accelerate==1.14.0
+flash-attn==2.8.3.post1
+tensordict==0.10.0
+torchdata==0.11.0
+trl==0.24.0
+peft==0.19.1
+datasets==5.0.0
+dashscope==1.25.12
+
+# Crayotter runtime and tools
+aiohttp==3.13.3
+imageio==2.37.3
+imageio-ffmpeg==0.6.0
+langchain-core==1.2.18
+langchain-openai==1.1.11
+moviepy==2.2.1
+numpy==2.2.6
+openai==2.26.0
+opencv-python-headless==4.13.0.92
+orjson==3.11.7
+pillow==11.3.0
+pydantic==2.13.4
+python-dotenv==1.2.2
+PyYAML==6.0.3
+requests==2.32.5
+tenacity==9.1.4
+tqdm==4.67.3
+xxhash==3.6.0
+zstandard==0.25.0
