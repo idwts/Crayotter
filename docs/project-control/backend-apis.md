@@ -38,9 +38,9 @@
 
 | 方法 | 路径 | 说明 | 当前鉴权 |
 |------|------|------|----------|
-| GET | `/uploads` | 列出当前 owner 的上传视频 | owner_id Cookie |
+| GET | `/uploads` | 列出当前 owner 的上传视频（2026-08-04 起支持条件搜索：`q` 名称子串（大小写不敏感）、`has_analysis=1/0`、`sort=name/size_bytes/modified_at`、`order=asc/desc`，可组合） | owner_id Cookie |
 | POST | `/uploads` | multipart 上传视频 | owner_id Cookie + PublicTrialGuard 容量限制 |
-| DELETE | `/uploads?path=` | 删除指定上传及关联分析文件 | owner_id Cookie + 路径校验 |
+| DELETE | `/uploads?path=` | 删除指定上传及关联分析文件（2026-08-04 修复：Public 模式 display_path 带 `user_temp/` 展示前缀但真实根为 `public_uploads/<owner>/`，`_resolve_upload_path` 现回退剥离该前缀，UI 删除不再 400） | owner_id Cookie + 路径校验 |
 
 ### 1.3 任务（Jobs）
 
@@ -51,7 +51,7 @@
 | GET | `/jobs/{job_id}` | 任务详情 | owner_id Cookie |
 | DELETE | `/jobs/{job_id}` | 删除任务 | owner_id Cookie |
 | POST | `/jobs/{job_id}/cancel` | 取消任务 | owner_id Cookie |
-| POST | `/jobs/{job_id}/resume` | 恢复中断任务（2026-08-04 修复：`owner_id` 此前因 `Field(exclude=True)` 不落 `summary.json`，重启后任务对所有者不可见且无法恢复；现 `_write_summary` 显式写入 owner_id，API 响应仍排除） | owner_id Cookie |
+| POST | `/jobs/{job_id}/resume` | 恢复中断/失败任务（2026-08-04 起支持请求体 `{"strategy": "resume"/"restart"}`：`resume`=从断点继续（默认，interrupted/failed 均可）；`restart`=重新开始（仅 failed，revision+1、清空 final_output/output_files）。另修复：`owner_id` 此前因 `Field(exclude=True)` 不落 `summary.json`……现 `_write_summary` 显式写入 owner_id，API 响应仍排除） | owner_id Cookie |
 | POST | `/jobs/{job_id}/pause` | 暂停任务 | owner_id Cookie |
 | POST | `/jobs/{job_id}/approve` | 批准继续（pause 后） | owner_id Cookie + pause_token |
 
@@ -69,7 +69,7 @@
 
 | 方法 | 路径 | 说明 | 当前鉴权 |
 |------|------|------|----------|
-| GET | `/jobs/{job_id}/plans/current` | 当前计划版本 | owner_id Cookie |
+| GET | `/jobs/{job_id}/plans/current` | 当前计划版本（2026-08-04 修复：无计划时由 404 KeyError 改为 200 `{"plan": null, "versions": [], "approved": null}`，消除前端常态噪音） | owner_id Cookie |
 | GET | `/jobs/{job_id}/plans/{version}` | 指定版本计划 | owner_id Cookie |
 | GET | `/jobs/{job_id}/plans/diff?from=&to=` | 两版本计划差异 | owner_id Cookie |
 | POST | `/jobs/{job_id}/plans/{version}/feedback` | 提交反馈 | owner_id Cookie |

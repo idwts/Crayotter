@@ -115,10 +115,10 @@
 | 项目 | 内容 |
 |------|------|
 | 方法 | `GET` |
-| URL | `/uploads` |
+| URL | `/uploads?q=&has_analysis=&sort=&order=`（2026-08-04 起支持名称子串搜索、分析状态筛选、排序，300ms 防抖触发） |
 | 请求头 | Cookie（后端取 owner_id） |
 | 响应 | `{ items: UploadItem[] }` |
-| 调用位置 | main.jsx:384 |
+| 调用位置 | main.jsx `loadUploads(filters)`（素材库工具栏 `.materials-search-input` + 两个 `.materials-toolbar-select`） |
 
 ### 2.2 上传文件
 
@@ -187,14 +187,14 @@
 | 请求体 | `{}` |
 | 调用位置 | main.jsx:800 |
 
-### 3.6 恢复任务
+### 3.6 恢复/重启任务
 
 | 项目 | 内容 |
 |------|------|
 | 方法 | `POST` |
 | URL | `/jobs/${jobId}/resume` |
-| 请求体 | `{}` |
-| 调用位置 | main.jsx:807 |
+| 请求体 | `{"strategy": "resume"}`（从断点继续，interrupted/failed 均可）或 `{"strategy": "restart"}`（重新开始，仅 failed，前端带确认弹窗） |
+| 调用位置 | main.jsx `resumeJob(jobId, strategy)` / `restartJob(jobId)`；失败任务详情页显示「从断点继续」「重新开始」两个按钮（DashboardUI.jsx JobsView） |
 
 ## 4. 任务事件与消息报文
 

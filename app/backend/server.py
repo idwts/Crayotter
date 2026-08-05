@@ -179,7 +179,8 @@ class BackendHandler(BaseHTTPRequestHandler):
                 return
 
             if path == "/uploads":
-                self._write_json(HTTPStatus.OK, {"items": self._list_upload_items(self._uploads_root(owner_id))})
+                items = self._list_upload_items(self._uploads_root(owner_id))
+                self._write_json(HTTPStatus.OK, {"items": self._filter_upload_items(items, query)})
                 return
 
             if path.startswith("/jobs/") and path.endswith("/events/stream"):
@@ -404,7 +405,9 @@ class BackendHandler(BaseHTTPRequestHandler):
 
             if path.startswith("/jobs/") and path.endswith("/resume"):
                 job_id = path.split("/")[2]
-                result = SERVICE.runtime_manager.resume_job(job_id, owner_id)
+                payload = self._read_json() or {}
+                strategy = str(payload.get("strategy") or "resume")
+                result = SERVICE.runtime_manager.resume_job(job_id, owner_id, strategy=strategy)
                 self._write_json(HTTPStatus.OK, result)
                 return
 
@@ -779,6 +782,31 @@ class BackendHandler(BaseHTTPRequestHandler):
             ),
         }
 
+    @staticmethod
+    def _filter_upload_items(items: list[dict[str, Any]], query: dict[str, list[str]]) -> list[dict[str, Any]]:
+        """素材条件搜索：q 名称子串（忽略大小写）、has_analysis=1/0、sort、order。
+
+        列表默认按修改时间倒序；sort 支持 modified_at/size_bytes/name。
+        """
+        keyword = (query.get("q", [""])[0] or "").strip().lower()
+        if keyword:
+            items = [item for item in items if keyword in str(item.get("name") or "").lower()]
+        has_analysis = (query.get("has_analysis", [""])[0] or "").strip().lower()
+        if has_analysis in {"1", "true", "yes"}:
+            items = [item for item in items if item.get("has_analysis")]
+        elif has_analysis in {"0", "false", "no"}:
+            items = [item for item in items if not item.get("has_analysis")]
+        sort_key = (query.get("sort", ["modified_at"])[0] or "modified_at").strip()
+        key_funcs = {
+            "name": lambda item: str(item.get("name") or "").lower(),
+            "size_bytes": lambda item: int(item.get("size_bytes") or 0),
+            "modified_at": lambda item: str(item.get("modified_at") or ""),
+        }
+        if sort_key in key_funcs:
+            reverse = (query.get("order", ["desc"])[0] or "desc").strip().lower() != "asc"
+            items = sorted(items, key=key_funcs[sort_key], reverse=reverse)
+        return items
+
     @classmethod
     def _list_upload_items(cls, upload_dir: Path) -> list[dict[str, Any]]:
         analysis_index = build_analysis_index([upload_dir])
@@ -798,7 +826,16 @@ class BackendHandler(BaseHTTPRequestHandler):
             resolved = candidate.resolve(strict=False)
             resolved.relative_to(upload_dir.resolve())
         except Exception:
-            return None
+            resolved = None
+        if resolved is None and raw_path.startswith("user_temp/"):
+            # public mode 下 display_path 统一以 user_temp/ 前缀展示，但真实根是
+            # public_uploads/<owner>/；回显删除/访问时按前缀剥离后落到 upload_dir。
+            alt = (upload_dir / raw_path[len("user_temp/"):]).resolve(strict=False)
+            try:
+                alt.relative_to(upload_dir.resolve())
+                resolved = alt
+            except Exception:
+                resolved = None
         return resolved
 
     def _handle_upload_request(self, upload_dir: Path, *, public: bool = False) -> list[dict[str, Any]]:

@@ -207,7 +207,9 @@ class RuntimeManager:
             raise KeyError(job_id)
         plan = self._plan_store(job).current()
         if plan is None:
-            raise KeyError(f"{job_id}/plans/current")
+            # 无计划是正常状态（任务尚未进入 Phase 2）：返回 200 空载体，
+            # 避免前端每轮轮询产生 404 噪音。
+            return {"plan": None, "versions": [], "approved": None}
         return {
             "plan": plan.model_dump(),
             "versions": self._plan_store(job).list_versions(),
@@ -474,7 +476,15 @@ class RuntimeManager:
             "note": "Cancellation requested.",
         }
 
-    def resume_job(self, job_id: str, owner_id: str | None = None) -> dict[str, Any]:
+    def resume_job(self, job_id: str, owner_id: str | None = None, *, strategy: str = "resume") -> dict[str, Any]:
+        """恢复失败/中断任务。
+
+        strategy="resume"：从最近 checkpoint 断点续跑（保留进度）。
+        strategy="restart"：重新开始（revision+1，从 Phase 1 重跑；workspace 中
+        已下载素材保留可复用，但执行进度不继承）。
+        """
+        if strategy not in {"resume", "restart"}:
+            raise ValueError(f"Unknown resume strategy: {strategy}")
         job = self.get_job(job_id, owner_id)
         if job is None:
             raise KeyError(job_id)
@@ -486,8 +496,8 @@ class RuntimeManager:
             ]
             if running:
                 raise RuntimeError(f"Another job is already running: {running[0]}.")
-            if job.record.status != "interrupted":
-                raise RuntimeError("Only interrupted jobs can be resumed.")
+            if job.record.status not in {"interrupted", "failed"}:
+                raise RuntimeError("Only interrupted or failed jobs can be resumed.")
 
             config = self.config_store.load()
             job.record.browser_auth_browser = config.browser_auth_browser or job.record.browser_auth_browser
@@ -511,13 +521,21 @@ class RuntimeManager:
             job.record.status = "queued"
             job.record.error = None
             job.record.completed_at = None
+            if strategy == "restart":
+                job.record.revision += 1
+                job.record.final_output = ""
+                job.record.output_files = []
             job.cancel_requested.clear()
             self._write_summary(job)
 
-        self._publish(job, "job_resume_requested", {"job_id": job_id})
+        self._publish(
+            job,
+            "job_restart_requested" if strategy == "restart" else "job_resume_requested",
+            {"job_id": job_id, "revision": job.record.revision},
+        )
         job.request = request
         job.config = config
-        job.resume_requested = True
+        job.resume_requested = strategy == "resume"
         self._start_next_job()
         return job.record.model_dump()
 

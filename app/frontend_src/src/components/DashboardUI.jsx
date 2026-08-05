@@ -987,6 +987,7 @@ export function JobsView({
   deleteJob,
   stopSelectedJob,
   resumeJob,
+  restartJob,
   openWorkbench,
   createTask,
   displayTaskTitle,
@@ -1084,6 +1085,24 @@ export function JobsView({
                       <RotateCcw size={16} />{t("resumeJob")}
                     </button>
                   )}
+                  {selectedJob.status === "failed" && (
+                    <>
+                      <button
+                        className="secondary-button"
+                        onClick={() => resumeJob(selectedJob.job_id, "resume").catch((error) => notify("error", t("operationFailed", { message: error.message })))}
+                        type="button"
+                      >
+                        <RotateCcw size={16} />{t("resumeFromCheckpoint")}
+                      </button>
+                      <button
+                        className="secondary-button"
+                        onClick={() => restartJob(selectedJob.job_id)}
+                        type="button"
+                      >
+                        <Play size={16} />{t("restartJob")}
+                      </button>
+                    </>
+                  )}
                   <button
                     className="danger-button"
                     disabled={["queued", "running"].includes(selectedJob.status)}
@@ -1154,12 +1173,28 @@ function MaterialsList({
   t,
 }) {
   const [refreshing, setRefreshing] = useState(false);
+  const [searchQuery, setSearchQuery] = useState("");
+  const [analysisFilter, setAnalysisFilter] = useState("all");
+  const [sortKey, setSortKey] = useState("modified_at");
+  const filters = { q: searchQuery.trim(), hasAnalysis: analysisFilter, sort: sortKey };
+  const filtersRef = useRef(filters);
+  filtersRef.current = filters;
+
+  // 条件变化 300ms 防抖后走服务端过滤
+  useEffect(() => {
+    const timer = window.setTimeout(() => {
+      loadUploads(filtersRef.current).catch(() => {});
+    }, 300);
+    return () => window.clearTimeout(timer);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [searchQuery, analysisFilter, sortKey]);
+
   const refresh = async () => {
     if (refreshing) return;
     setRefreshing(true);
     try {
       await Promise.all([
-        loadUploads(),
+        loadUploads(filtersRef.current),
         new Promise((resolve) => window.setTimeout(resolve, 350)),
       ]);
     } catch (error) {
@@ -1171,7 +1206,24 @@ function MaterialsList({
 
   return (
     <div className="grid gap-3">
-      <div className="flex items-center justify-end">
+      <div className="flex flex-wrap items-center gap-2">
+        <input
+          className="input materials-search-input"
+          value={searchQuery}
+          onChange={(event) => setSearchQuery(event.target.value)}
+          placeholder={t("searchMaterialsPlaceholder")}
+          type="search"
+        />
+        <select className="select materials-toolbar-select" value={analysisFilter} onChange={(event) => setAnalysisFilter(event.target.value)} aria-label={t("filterAll")}>
+          <option value="all">{t("filterAll")}</option>
+          <option value="yes">{t("analysisReady")}</option>
+          <option value="no">{t("analysisMissing")}</option>
+        </select>
+        <select className="select materials-toolbar-select" value={sortKey} onChange={(event) => setSortKey(event.target.value)} aria-label={t("sortByModified")}>
+          <option value="modified_at">{t("sortByModified")}</option>
+          <option value="size_bytes">{t("sortBySize")}</option>
+          <option value="name">{t("sortByName")}</option>
+        </select>
         <button className="icon-button" onClick={refresh} type="button" aria-label={t("refreshUploads")} aria-busy={refreshing} aria-disabled={refreshing}>
           <RefreshCw className={refreshing ? "icon-spin" : undefined} size={15} />
         </button>

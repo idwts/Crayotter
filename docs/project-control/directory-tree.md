@@ -221,6 +221,10 @@
 | tests/test_material_source_policy.py | from __future__ import annotations |
 | tests/test_material_sources.py | [Parsed_loudnorm_0 @ 000001] |
 | tests/test_job_janitor.py | 产物保留 janitor 单测：终态/超期删除、running/queued 保留、坏时间戳保守保留、completed_at 优先、naive 时间戳按 UTC、保留期关闭 no-op（7 项，纯 stdlib 桩）。 |
+| tests/test_job_recovery.py | 失败任务恢复选择单测：failed 从断点继续（revision 不变）/重新开始（revision+1、清空产出）、interrupted 恢复、非法 strategy 拒绝、completed/cancelled 拒绝、并发任务冲突、owner 校验（8 项，纯 stdlib 桩）。 |
+| tests/test_uploads_search_api.py | 素材库后端功能测试（对服务器）：上传 2 个假 mp4 → 列表 → q 子串/大小写不敏感 → has_analysis 1/0 → size/name 排序 → 组合条件 → DELETE（7 步，注册隔离账号）。 |
+| tests/test_e2e_job_recovery.py | 失败任务恢复 E2E：invalid BYOK key 造 failed → 详情双按钮截图 → 从断点继续 → requeued；第二任务 重新开始（确认弹窗截图）→ requeued（截图输出 docs/worklogs/e2e-shots-recovery）。 |
+| tests/test_e2e_materials_search.py | 素材库 E2E：上传 2 素材 → 列表 → 名称搜索 → has_analysis 筛选 → 大小排序 → UI 删除至空态（5 步截图输出 docs/worklogs/e2e-shots-materials）。 |
 | tests/test_media_consistency.py | from __future__ import annotations |
 | tests/test_modular_architecture.py | from __future__ import annotations |
 | tests/test_orchestration.py | from __future__ import annotations |

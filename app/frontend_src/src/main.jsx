@@ -462,8 +462,15 @@ function App() {
     return `${formatDate(event.timestamp)}\n${summary || "--"}`;
   }).join("\n\n"), [describeEvent, formatDate]);
 
-  const loadUploads = useCallback(async () => {
-    const payload = await request("/uploads");
+  const loadUploads = useCallback(async (filters) => {
+    const params = new URLSearchParams();
+    if (filters?.q) params.set("q", filters.q);
+    if (filters?.hasAnalysis === "yes") params.set("has_analysis", "1");
+    if (filters?.hasAnalysis === "no") params.set("has_analysis", "0");
+    if (filters?.sort) params.set("sort", filters.sort);
+    if (filters?.order) params.set("order", filters.order);
+    const suffix = params.toString() ? `?${params.toString()}` : "";
+    const payload = await request(`/uploads${suffix}`);
     setUploads(Array.isArray(payload.items) ? payload.items : []);
   }, []);
 
@@ -1030,14 +1037,26 @@ function App() {
     await refreshJobs(false);
   };
 
-  const resumeJob = async (jobId) => {
+  const resumeJob = async (jobId, strategy = "resume") => {
     const job = await request(`/jobs/${jobId}/resume`, {
       method: "POST",
-      body: JSON.stringify({}),
+      body: JSON.stringify({ strategy }),
     });
     setSelectedJob(job);
     await refreshJobs(true);
   };
+
+  const restartJob = (jobId) => confirmAction(
+    {
+      title: t("restartJobTitle"),
+      message: t("restartJobMessage"),
+      confirmLabel: t("restartJob"),
+    },
+    async () => {
+      await resumeJob(jobId, "restart");
+      notify("success", t("jobRestarted"));
+    },
+  );
 
   const sendGuidance = async (content) => {
     if (!selectedJob) return;
@@ -1274,6 +1293,7 @@ function App() {
               deleteJob={deleteJob}
               stopSelectedJob={stopSelectedJob}
               resumeJob={resumeJob}
+              restartJob={restartJob}
               openWorkbench={() => setCurrentView("workbench")}
               createTask={openWorkbenchComposer}
               displayTaskTitle={displayTaskTitle}

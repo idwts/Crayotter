@@ -52,6 +52,8 @@
 | `.settings-modal` | 设置模态框 | 系统配置 |
 | `.motion-enter` | 进入动画 | 弹窗 |
 | `.workbench-flow` | 工作台流程容器 | 主界面 |
+| `.materials-search-input` | 素材库搜索输入框（flex:1，聚焦 #155eef） | 素材库工具栏（2026-08-04 新增） |
+| `.materials-toolbar-select` | 素材库筛选/排序下拉 | 素材库工具栏（2026-08-04 新增） |
 
 ## 4. 组件清单
 
