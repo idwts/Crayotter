@@ -21,6 +21,9 @@
   <a href="https://arxiv.org/abs/2606.07636" target="_blank" rel="noopener noreferrer">
     <img src="https://img.shields.io/badge/arXiv-2606.07636-b31b1b?style=for-the-badge&logo=arxiv&logoColor=white" alt="arXiv Paper">
   </a>
+  <a href="https://arxiv.org/abs/2608.02694" target="_blank" rel="noopener noreferrer">
+    <img src="https://img.shields.io/badge/arXiv-2608.02694-b31b1b?style=for-the-badge&logo=arxiv&logoColor=white" alt="arXiv 论文">
+  </a>
   <a href="./LICENSE" target="_blank" rel="noopener noreferrer">
     <img src="https://img.shields.io/badge/License-PolyForm%20Noncommercial%201.0.0-blue?style=for-the-badge" alt="License">
   </a>
@@ -72,6 +75,7 @@ A full end-to-end run: from a one-line text request, Crayotter prepares material
 
 ## News
 
+- **2026.8.5** — Our new work is now available! Towards long-horizon video editing agents: [Crayotter: Learning Long-Horizon Video Editing Agents via Group-Relative Preference Backpropagation](https://arxiv.org/abs/2608.02694)。
 - **2026.6.27** — Crayotter 1.0.0 adds multi-source material import, unified download cleanup, and refreshed Windows release packaging.
 - **2026.6.15** — Asynchronous scheduling upgrade accelerated the overall video generation workflow by ~1.6×.
 - **2026.5.31** — Our paper is now available: [Crayotter: Traceable Multi-Agent Workflows for Long-Form Video Editing](https://arxiv.org/abs/2606.07636).
