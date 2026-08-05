@@ -214,6 +214,34 @@ body.theme-light .paper-metric-card h3 {
   line-height: 1.6;
 }
 
+.paper-code {
+  height: 220px;
+  max-height: 220px;
+  overflow-y: auto;
+  overflow-x: auto;
+  box-sizing: border-box;
+  white-space: pre;
+  scrollbar-width: thin;
+}
+
+.paper-code::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+.paper-code::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.paper-code::-webkit-scrollbar-thumb {
+  background: rgba(120, 130, 150, 0.45);
+  border-radius: 999px;
+}
+
+.paper-code::-webkit-scrollbar-thumb:hover {
+  background: rgba(120, 130, 150, 0.7);
+}
+
 @media (max-width: 980px) {
   .paper-hero-grid,
   .paper-overview-grid,
