@@ -201,7 +201,7 @@ body.theme-light .paper-metric-card h3 {
   margin-top: 20px;
 }
 
-.paper-code {
+/* .paper-code {
   margin: 0;
   padding: 16px;
   overflow-x: auto;
@@ -212,7 +212,7 @@ body.theme-light .paper-metric-card h3 {
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   font-size: 0.88rem;
   line-height: 1.6;
-}
+} */
 
 .paper-code {
   height: 220px;
