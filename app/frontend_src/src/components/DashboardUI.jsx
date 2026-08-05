@@ -28,6 +28,7 @@ import {
   Search,
   Send,
   Settings,
+  ShieldAlert,
   Sparkles,
   ScrollText,
   Trash2,
@@ -1206,6 +1207,10 @@ function MaterialsList({
 
   return (
     <div className="grid gap-3">
+      <p className="materials-disclaimer" role="note">
+        <ShieldAlert size={14} />
+        <span>{t("materialDisclaimer")}</span>
+      </p>
       <div className="flex flex-wrap items-center gap-2">
         <input
           className="input materials-search-input"
@@ -1928,6 +1933,7 @@ export function Composer({
                         <span><strong>{uploading ? t("uploading") : t("uploadNewMaterial")}</strong><small>{t("attachMaterialHint")}</small></span>
                         {!!attachedMaterials.length && <Check size={15} />}
                       </button>
+                      <p className="composer-material-disclaimer" role="note">{t("attachMaterialDisclaimer")}</p>
                       {!!uploads.length && (
                         <div className="composer-material-list">
                           {uploads.map((item) => {

@@ -173,3 +173,4 @@
 | 2026-08-04 | Claude | 失败任务恢复选择：后端 `resume_job(strategy=resume/restart)`（failed 也可恢复；restart 使 revision+1、清空 final_output/output_files）；前端失败任务详情显示「从断点继续/重新开始」两按钮（restart 带确认弹窗）；冲突单测 8 项（strategy 校验、状态门槛、并发任务冲突、owner 校验）+ 恢复 E2E（invalid BYOK key 造 failed，双路径截图）全过。 |
 | 2026-08-04 | Claude | 素材库条件搜索：后端 `GET /uploads` 支持 `q`/`has_analysis`/`sort`/`order`；前端素材库工具栏搜索框+两个下拉（300ms 防抖）；修复 Public 模式 display_path `user_temp/` 前缀致 DELETE 400 的 bug（`_resolve_upload_path` 回退剥离前缀）；后端功能测试 7 步 + 素材库 E2E 5 步截图全过。 |
 | 2026-08-04 | Claude | 小优化：`GET /jobs/{id}/plans/current` 无计划时由 404 KeyError 改为 200 `{"plan": null, ...}`，消除前端轮询常态 404 噪音。 |
+| 2026-08-06 | Claude | 素材免责声明：素材库列表顶部常驻提示条（i18n `materialDisclaimer`，告诫勿上传/使用含个人隐私、敏感信息或未授权内容素材，上传即确认权利并自担责任）+ 创作选项弹层「上传并关联新素材」下方小字提示（`attachMaterialDisclaimer`）；纯前端展示层，无后端改动；E2E 3 步截图全过（中文提示条/弹层提示/英文提示条，英文用新 context 预置 localStorage + 双 cookie 注入规避语言偏好回写抖动）。 |

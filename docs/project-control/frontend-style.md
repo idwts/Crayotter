@@ -54,6 +54,8 @@
 | `.workbench-flow` | 工作台流程容器 | 主界面 |
 | `.materials-search-input` | 素材库搜索输入框（flex:1，聚焦 #155eef） | 素材库工具栏（2026-08-04 新增） |
 | `.materials-toolbar-select` | 素材库筛选/排序下拉 | 素材库工具栏（2026-08-04 新增） |
+| `.materials-disclaimer` | 素材免责声明提示条（琥珀色 #fff8ec/#92590a，ShieldAlert 图标） | 素材库列表顶部常驻（2026-08-06 新增） |
+| `.composer-material-disclaimer` | 素材免责小字提示 | 创作选项弹层「上传并关联新素材」下方（2026-08-06 新增） |
 
 ## 4. 组件清单
 

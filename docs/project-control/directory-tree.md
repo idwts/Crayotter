@@ -225,6 +225,7 @@
 | tests/test_uploads_search_api.py | 素材库后端功能测试（对服务器）：上传 2 个假 mp4 → 列表 → q 子串/大小写不敏感 → has_analysis 1/0 → size/name 排序 → 组合条件 → DELETE（7 步，注册隔离账号）。 |
 | tests/test_e2e_job_recovery.py | 失败任务恢复 E2E：invalid BYOK key 造 failed → 详情双按钮截图 → 从断点继续 → requeued；第二任务 重新开始（确认弹窗截图）→ requeued（截图输出 docs/worklogs/e2e-shots-recovery）。 |
 | tests/test_e2e_materials_search.py | 素材库 E2E：上传 2 素材 → 列表 → 名称搜索 → has_analysis 筛选 → 大小排序 → UI 删除至空态（5 步截图输出 docs/worklogs/e2e-shots-materials）。 |
+| tests/test_e2e_material_disclaimer.py | 素材免责声明 E2E：素材库常驻提示条（中）→ 创作选项弹层提示（中）→ 英文提示条（新 context 预置 localStorage 语言 + API 注册注入双 cookie 会话，规避语言偏好回写抖动）（截图输出 docs/worklogs/e2e-shots-disclaimer）。 |
 | tests/test_media_consistency.py | from __future__ import annotations |
 | tests/test_modular_architecture.py | from __future__ import annotations |
 | tests/test_orchestration.py | from __future__ import annotations |

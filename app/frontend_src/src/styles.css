@@ -5474,3 +5474,28 @@ textarea:focus-visible {
   background: #ffffff;
   color: #101828;
 }
+
+/* 素材免责声明提示条 */
+.materials-disclaimer {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin: 0;
+  padding: 9px 12px;
+  border: 1px solid #fde3b6;
+  border-radius: 10px;
+  background: #fff8ec;
+  color: #92590a;
+  font-size: 12px;
+  line-height: 1.6;
+}
+.materials-disclaimer svg {
+  flex-shrink: 0;
+  margin-top: 2px;
+}
+.composer-material-disclaimer {
+  margin: 2px 4px 6px;
+  color: #92590a;
+  font-size: 11px;
+  line-height: 1.5;
+}
