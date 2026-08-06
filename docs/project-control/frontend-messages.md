@@ -196,6 +196,15 @@
 | 请求体 | `{"strategy": "resume"}`（从断点继续，interrupted/failed 均可）或 `{"strategy": "restart"}`（重新开始，仅 failed，前端带确认弹窗） |
 | 调用位置 | main.jsx `resumeJob(jobId, strategy)` / `restartJob(jobId)`；失败任务详情页显示「从断点继续」「重新开始」两个按钮（DashboardUI.jsx JobsView） |
 
+### 3.7 任务完成通知
+
+| 项目 | 内容 |
+|------|------|
+| 方法 | 状态开关（localStorage + 创作选项弹层） |
+| 键值 | `notifyOnDone` / `notifyOnDoneHint` |
+| 调用位置 | `DashboardUI.jsx Composer` 选项菜单、`main.jsx` 轮询检测任务状态变化 + `Notification` API |
+| 说明 | 开启后任务从 queued/running 进入 completed/failed 时发浏览器系统通知；点击通知聚焦窗口并选中该任务 |
+
 ## 4. 任务事件与消息报文
 
 ### 4.1 获取事件

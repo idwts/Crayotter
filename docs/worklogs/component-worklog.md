@@ -174,3 +174,7 @@
 | 2026-08-04 | Claude | 素材库条件搜索：后端 `GET /uploads` 支持 `q`/`has_analysis`/`sort`/`order`；前端素材库工具栏搜索框+两个下拉（300ms 防抖）；修复 Public 模式 display_path `user_temp/` 前缀致 DELETE 400 的 bug（`_resolve_upload_path` 回退剥离前缀）；后端功能测试 7 步 + 素材库 E2E 5 步截图全过。 |
 | 2026-08-04 | Claude | 小优化：`GET /jobs/{id}/plans/current` 无计划时由 404 KeyError 改为 200 `{"plan": null, ...}`，消除前端轮询常态 404 噪音。 |
 | 2026-08-06 | Claude | 素材免责声明：素材库列表顶部常驻提示条（i18n `materialDisclaimer`，告诫勿上传/使用含个人隐私、敏感信息或未授权内容素材，上传即确认权利并自担责任）+ 创作选项弹层「上传并关联新素材」下方小字提示（`attachMaterialDisclaimer`）；纯前端展示层，无后端改动；E2E 3 步截图全过（中文提示条/弹层提示/英文提示条，英文用新 context 预置 localStorage + 双 cookie 注入规避语言偏好回写抖动）。 |
+| 2026-08-06 | Claude | 大文件分片上传：后端 `init/chunk/complete/abort` 四接口（单文件硬上限 2GB、每片 1MB、24h 过期清理、PublicTrialGuard 容量校验）；前端素材库「上传大文件」按钮，小文件仍走原 `/uploads` 接口；nginx 新增 `/uploads/chunked` location（`client_max_body_size 2m`）；功能测试 + E2E 全过。 |
+| 2026-08-06 | Claude | 磁盘水位 LRU：`RuntimeManager.evict_lru_jobs()` 在 janitor 循环中检测 JOBS_DIR 分区使用率，超 70% 时按最近使用时间从旧到新清除终态任务目录，interrupted 最后，running/queued 永不删除，目标水位 60%；环境变量 `CRAYOTTER_DISK_LRU_THRESHOLD_PERCENT`/`TARGET_PERCENT`；单测 6 项全过。 |
+| 2026-08-06 | Claude | 素材库批量管理 + 在线预览：每行复选框 + 全选 +「删除选中(N)」批量删除（带确认弹窗）；点击「预览」打开 video 弹层直接播放；E2E 截图验证。 |
+| 2026-08-06 | Claude | 任务完成通知：创作选项弹层新增「完成时通知我」开关（localStorage 持久化 + 请求 Notification 权限）；轮询发现任务从 queued/running 进入 completed/failed 时发送浏览器系统通知（点击聚焦并选中任务）；E2E 验证 localStorage 持久化。 |

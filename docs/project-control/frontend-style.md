@@ -54,8 +54,14 @@
 | `.workbench-flow` | 工作台流程容器 | 主界面 |
 | `.materials-search-input` | 素材库搜索输入框（flex:1，聚焦 #155eef） | 素材库工具栏（2026-08-04 新增） |
 | `.materials-toolbar-select` | 素材库筛选/排序下拉 | 素材库工具栏（2026-08-04 新增） |
-| `.materials-disclaimer` | 素材免责声明提示条（琥珀色 #fff8ec/#92590a，ShieldAlert 图标） | 素材库列表顶部常驻（2026-08-06 新增） |
-| `.composer-material-disclaimer` | 素材免责小字提示 | 创作选项弹层「上传并关联新素材」下方（2026-08-06 新增） |
+| `.materials-batch-bar` | 批量选择工具条（全选复选框 + 删除选中按钮） | 素材库列表上方（2026-08-06 新增） |
+| `.materials-select-all` | 全选标签样式 | 批量工具条 |
+| `.materials-batch-delete` | 删除选中按钮 | 批量工具条 |
+| `.material-select` | 每行素材复选框 | 素材行 |
+| `.material-row.selected` | 选中态背景/边框 | 素材行 |
+| `.material-preview-layer` | 视频预览弹层遮罩层（z-index 70） | 素材库点击「预览」后（2026-08-06 新增） |
+| `.material-preview-dialog` | 视频预览容器（深色背景、圆角、阴影） | 预览弹层 |
+| `.material-preview-video` | `<video>` 元素样式 | 预览弹层 |
 
 ## 4. 组件清单
 

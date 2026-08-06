@@ -31,6 +31,7 @@ const STORAGE_KEYS = {
   contextTab: "crayotter.contextTab",
   lastJobId: "crayotter.lastJobId",
   taskDraft: "crayotter.taskDraft",
+  notifyOnDone: "crayotter.notifyOnDone",
 };
 
 // 登录后在服务端同步的历史动作记忆（preferences JSONB，跨设备）
@@ -170,6 +171,8 @@ function App() {
   const [preferLocalMaterials, setPreferLocalMaterials] = useState(false);
   const [workflowConfigSaving, setWorkflowConfigSaving] = useState(false);
   const [uploading, setUploading] = useState(false);
+  const [largeUploadProgress, setLargeUploadProgress] = useState(null);
+  const [notifyOnDone, setNotifyOnDone] = useState(() => localStorage.getItem(STORAGE_KEYS.notifyOnDone) === "1");
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [mobileDrawerOpen, setMobileDrawerOpen] = useState(false);
   const [currentView, setCurrentView] = useState(() => localStorage.getItem(STORAGE_KEYS.currentView) || "workbench");
@@ -957,6 +960,115 @@ function App() {
     }
   };
 
+  const uploadLargeFiles = async (files) => {
+    if (!files?.length) return;
+    setUploading(true);
+    setLargeUploadProgress(0);
+    try {
+      const list = Array.from(files);
+      const uploaded = [];
+      for (let fileIndex = 0; fileIndex < list.length; fileIndex += 1) {
+        const file = list[fileIndex];
+        const session = await request("/uploads/chunked/init", {
+          method: "POST",
+          body: JSON.stringify({ name: file.name, size_bytes: file.size }),
+        });
+        const chunkSize = session.chunk_size;
+        const totalChunks = Math.ceil(file.size / chunkSize);
+        try {
+          for (let index = 0; index < totalChunks; index += 1) {
+            const blob = file.slice(index * chunkSize, (index + 1) * chunkSize);
+            const response = await fetch(`/uploads/chunked/${session.upload_id}?index=${index}`, {
+              method: "POST",
+              credentials: "same-origin",
+              headers: { "Content-Type": "application/octet-stream" },
+              body: blob,
+            });
+            if (!response.ok) {
+              let message = `${response.status} ${response.statusText}`;
+              try { message = (await response.json()).error || message; } catch (_) { /* ignore */ }
+              throw new Error(message);
+            }
+            setLargeUploadProgress(Math.round(((fileIndex + (index + 1) / totalChunks) / list.length) * 100));
+          }
+          const done = await request(`/uploads/chunked/${session.upload_id}/complete`, { method: "POST", body: "{}" });
+          uploaded.push(...(Array.isArray(done.items) ? done.items : []));
+        } catch (error) {
+          // 失败时中止会话，清掉服务器端暂存分片
+          request(`/uploads/chunked/${session.upload_id}`, { method: "DELETE" }).catch(() => {});
+          throw error;
+        }
+      }
+      await loadUploads();
+      notify("success", t("uploadSucceeded", { count: uploaded.length }));
+      return uploaded;
+    } catch (error) {
+      notify("error", t("uploadFailed", { message: error.message }));
+      throw error;
+    } finally {
+      setUploading(false);
+      setLargeUploadProgress(null);
+    }
+  };
+
+  const deleteUploads = async (displayPaths) => {
+    const paths = (displayPaths || []).filter(Boolean);
+    if (!paths.length) return;
+    await confirmAction(
+      {
+        title: t("deleteMaterialTitle"),
+        message: t("confirmDeleteUploads", { count: paths.length }),
+        confirmLabel: t("delete"),
+      },
+      async () => {
+        for (const path of paths) {
+          // eslint-disable-next-line no-await-in-loop
+          await request(`/uploads?path=${encodeURIComponent(path)}`, { method: "DELETE" });
+        }
+        await loadUploads();
+        notify("success", t("deleteMaterialsSucceeded", { count: paths.length }));
+      },
+    );
+  };
+
+  // 任务完成通知：开启时请求浏览器通知权限；轮询发现任务从 queued/running 进入
+  // completed/failed 时发系统通知（点击通知聚焦并选中该任务）。
+  const toggleNotifyOnDone = async () => {
+    const next = !notifyOnDone;
+    if (next && typeof window !== "undefined" && "Notification" in window) {
+      if (Notification.permission === "default") {
+        try { await Notification.requestPermission(); } catch (_) { /* ignore */ }
+      }
+      if (Notification.permission === "denied") {
+        notify("info", t("notifyPermissionDenied"));
+      }
+    }
+    setNotifyOnDone(next);
+  };
+
+  useEffect(() => {
+    localStorage.setItem(STORAGE_KEYS.notifyOnDone, notifyOnDone ? "1" : "0");
+  }, [notifyOnDone]);
+
+  const jobStatusSnapshotRef = useRef(null);
+  useEffect(() => {
+    const previous = jobStatusSnapshotRef.current;
+    const current = {};
+    jobs.forEach((job) => { current[job.job_id] = job.status; });
+    jobStatusSnapshotRef.current = current;
+    if (!previous || !notifyOnDone) return;
+    if (typeof window === "undefined" || !("Notification" in window) || Notification.permission !== "granted") return;
+    jobs.forEach((job) => {
+      const before = previous[job.job_id];
+      if (!["queued", "running"].includes(before)) return;
+      if (job.status === "completed" || job.status === "failed") {
+        const title = job.status === "completed" ? t("jobCompletedNotice") : t("jobFailedNotice");
+        const notice = new Notification(title, { body: displayTaskTitle(job), tag: `crayotter-${job.job_id}` });
+        notice.onclick = () => { window.focus(); setSelectedJobId(job.job_id); };
+      }
+    });
+  }, [jobs, notifyOnDone, t, displayTaskTitle]);
+
   const deleteUpload = async (displayPath, hasAnalysis) => {
     const message = hasAnalysis ? t("confirmDeleteUploadAnalysis", { path: displayPath }) : t("confirmDeleteUpload", { path: displayPath });
     await confirmAction(
@@ -1202,6 +1314,8 @@ function App() {
     uploads,
     uploading,
     uploadSelectedFiles,
+    notifyOnDone,
+    toggleNotifyOnDone,
     notify,
   };
 
@@ -1214,9 +1328,12 @@ function App() {
     fileUrl,
     setTaskText,
     deleteUpload,
+    deleteUploads,
     loadUploads,
     uploading,
+    largeUploadProgress,
     uploadSelectedFiles,
+    uploadLargeFiles,
     notify,
     t,
   };

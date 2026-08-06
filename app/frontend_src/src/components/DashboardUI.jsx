@@ -6,6 +6,7 @@ import {
   AlertTriangle,
   Archive,
   ArrowLeft,
+  Bell,
   Bot,
   Check,
   ChevronDown,
@@ -1126,9 +1127,15 @@ export function JobsView({
 
 export function MaterialsView(props) {
   const inputRef = useRef(null);
+  const largeInputRef = useRef(null);
   const upload = (files) => {
     props.uploadSelectedFiles(files).catch(() => {}).finally(() => {
       if (inputRef.current) inputRef.current.value = "";
+    });
+  };
+  const uploadLarge = (files) => {
+    props.uploadLargeFiles(files).catch(() => {}).finally(() => {
+      if (largeInputRef.current) largeInputRef.current.value = "";
     });
   };
   return (
@@ -1147,8 +1154,22 @@ export function MaterialsView(props) {
             hidden
             onChange={(event) => upload(event.target.files)}
           />
+          <input
+            ref={largeInputRef}
+            type="file"
+            accept=".mp4,.mov,.mkv,.avi,.webm,.m4v,.mpeg,.mpg,video/*"
+            multiple
+            hidden
+            onChange={(event) => uploadLarge(event.target.files)}
+          />
+          <button className="secondary-button" disabled={props.uploading} onClick={() => largeInputRef.current?.click()} type="button" title={props.t("uploadLargeHint")}>
+            <Upload size={16} />
+            {props.largeUploadProgress != null
+              ? props.t("uploadLargeProgress", { percent: props.largeUploadProgress })
+              : props.t("uploadLargeMaterial")}
+          </button>
           <button className="primary-button" disabled={props.uploading} onClick={() => inputRef.current?.click()} type="button">
-            <Upload size={16} />{props.uploading ? props.t("uploading") : props.t("uploadMaterial")}
+            <Upload size={16} />{props.uploading && props.largeUploadProgress == null ? props.t("uploading") : props.t("uploadMaterial")}
           </button>
         </>
       )}
@@ -1168,6 +1189,7 @@ function MaterialsList({
   fileUrl,
   setTaskText,
   deleteUpload,
+  deleteUploads,
   loadUploads,
   notify,
   compact = false,
@@ -1177,6 +1199,8 @@ function MaterialsList({
   const [searchQuery, setSearchQuery] = useState("");
   const [analysisFilter, setAnalysisFilter] = useState("all");
   const [sortKey, setSortKey] = useState("modified_at");
+  const [selected, setSelected] = useState(() => new Set());
+  const [previewItem, setPreviewItem] = useState(null);
   const filters = { q: searchQuery.trim(), hasAnalysis: analysisFilter, sort: sortKey };
   const filtersRef = useRef(filters);
   filtersRef.current = filters;
@@ -1189,6 +1213,15 @@ function MaterialsList({
     return () => window.clearTimeout(timer);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [searchQuery, analysisFilter, sortKey]);
+
+  // 列表变化后清掉已不存在素材的选中态
+  useEffect(() => {
+    setSelected((current) => {
+      const alive = new Set(uploads.map((item) => item.display_path || item.path || item.name));
+      const next = new Set([...current].filter((key) => alive.has(key)));
+      return next.size === current.size ? current : next;
+    });
+  }, [uploads]);
 
   const refresh = async () => {
     if (refreshing) return;
@@ -1203,6 +1236,19 @@ function MaterialsList({
     } finally {
       setRefreshing(false);
     }
+  };
+
+  const itemKey = (item) => item.display_path || item.path || item.name;
+  const allSelected = uploads.length > 0 && uploads.every((item) => selected.has(itemKey(item)));
+  const toggleSelectAll = () => {
+    setSelected(allSelected ? new Set() : new Set(uploads.map(itemKey)));
+  };
+  const toggleSelect = (key) => {
+    setSelected((current) => {
+      const next = new Set(current);
+      if (next.has(key)) next.delete(key); else next.add(key);
+      return next;
+    });
   };
 
   return (
@@ -1233,8 +1279,28 @@ function MaterialsList({
           <RefreshCw className={refreshing ? "icon-spin" : undefined} size={15} />
         </button>
       </div>
+      {uploads.length > 0 && (
+        <div className="materials-batch-bar">
+          <label className="materials-select-all">
+            <input type="checkbox" checked={allSelected} onChange={toggleSelectAll} aria-label={t("selectAll")} />
+            <span>{t("selectAll")}</span>
+          </label>
+          {selected.size > 0 && (
+            <button className="text-action danger materials-batch-delete" onClick={() => deleteUploads([...selected])} type="button">
+              <Trash2 size={14} />{t("deleteSelected", { count: selected.size })}
+            </button>
+          )}
+        </div>
+      )}
       {uploads.map((item) => (
-        <article className="material-row" key={item.display_path || item.path || item.name}>
+        <article className={cx("material-row", selected.has(itemKey(item)) && "selected")} key={itemKey(item)}>
+          <input
+            className="material-select"
+            type="checkbox"
+            checked={selected.has(itemKey(item))}
+            onChange={() => toggleSelect(itemKey(item))}
+            aria-label={item.name || "material"}
+          />
           <span className="material-thumb"><FileVideo2 size={22} /></span>
           <div className="min-w-0 flex-1">
             <div className="flex flex-wrap items-center gap-2">
@@ -1244,6 +1310,7 @@ function MaterialsList({
             <p className="mt-1 truncate text-xs text-slate-400">{formatBytes(item.size_bytes)} · {formatDate(item.modified_at)}</p>
             {!compact && <p className="mt-2 text-xs leading-5 text-slate-500">{uploadAnalysisHint(item)}</p>}
             <div className="mt-2 flex flex-wrap gap-2">
+              <button className="text-action" onClick={() => setPreviewItem(item)} type="button">{t("preview")}</button>
               <button className="text-action" onClick={() => {
                 const displayPath = item.display_path || "";
                 if (!displayPath) return;
@@ -1261,6 +1328,20 @@ function MaterialsList({
           title={t("noUploads")}
           body={t("materialsLibrarySubtitle")}
         />
+      )}
+      {previewItem && (
+        <div className="dialog-layer material-preview-layer" role="dialog" aria-label={t("preview")}>
+          <div className="dialog-backdrop" onClick={() => setPreviewItem(null)} />
+          <div className="material-preview-dialog motion-enter">
+            <header className="material-preview-header">
+              <strong className="truncate">{previewItem.name || "--"}</strong>
+              <button className="icon-button" onClick={() => setPreviewItem(null)} type="button" aria-label={t("close")}>
+                <X size={16} />
+              </button>
+            </header>
+            <video className="material-preview-video" src={fileUrl(previewItem.path)} controls autoPlay playsInline />
+          </div>
+        </div>
       )}
     </div>
   );
@@ -1713,6 +1794,8 @@ export function Composer({
   uploads,
   uploading,
   uploadSelectedFiles,
+  notifyOnDone,
+  toggleNotifyOnDone,
   notify,
   t,
 }) {
@@ -1967,6 +2050,11 @@ export function Composer({
                         <FolderOpen size={16} />
                         <span><strong>{t("localFirst")}</strong><small>{localFirstActive ? t("localFirstOnTitle") : t("localFirstOffTitle")}</small></span>
                         {localFirstActive && <Check size={15} />}
+                      </button>
+                      <button className={cx("composer-option-row", notifyOnDone && "selected")} onClick={() => toggleNotifyOnDone()} type="button" role="menuitemcheckbox" aria-checked={!!notifyOnDone}>
+                        <Bell size={16} />
+                        <span><strong>{t("notifyOnDone")}</strong><small>{t("notifyOnDoneHint")}</small></span>
+                        {notifyOnDone && <Check size={15} />}
                       </button>
                 </div>
               )}

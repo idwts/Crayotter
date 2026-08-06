@@ -39,7 +39,11 @@
 | 方法 | 路径 | 说明 | 当前鉴权 |
 |------|------|------|----------|
 | GET | `/uploads` | 列出当前 owner 的上传视频（2026-08-04 起支持条件搜索：`q` 名称子串（大小写不敏感）、`has_analysis=1/0`、`sort=name/size_bytes/modified_at`、`order=asc/desc`，可组合） | owner_id Cookie |
-| POST | `/uploads` | multipart 上传视频 | owner_id Cookie + PublicTrialGuard 容量限制 |
+| POST | `/uploads` | multipart 上传视频（小文件快速通道） | owner_id Cookie + PublicTrialGuard 容量限制 |
+| POST | `/uploads/chunked/init` | 大文件分片上传：创建会话，返回 `upload_id`/`chunk_size`/`max_bytes`（单文件硬上限 2GB，每片 1MB） | owner_id Cookie + PublicTrialGuard 容量限制 |
+| POST | `/uploads/chunked/{upload_id}?index={n}` | 上传第 n 个分片（二进制 body，长度严格校验） | owner_id Cookie |
+| POST | `/uploads/chunked/{upload_id}/complete` | 合并分片并落盘，返回素材项 | owner_id Cookie |
+| DELETE | `/uploads/chunked/{upload_id}` | 中止分片上传并清理暂存目录 | owner_id Cookie |
 | DELETE | `/uploads?path=` | 删除指定上传及关联分析文件（2026-08-04 修复：Public 模式 display_path 带 `user_temp/` 展示前缀但真实根为 `public_uploads/<owner>/`，`_resolve_upload_path` 现回退剥离该前缀，UI 删除不再 400） | owner_id Cookie + 路径校验 |
 
 ### 1.3 任务（Jobs）
@@ -108,6 +112,8 @@
 | `pause_job/approve_job` | runtime_manager.py:538/551 | 暂停/继续控制 | 保留 |
 | `wait_for_events(...)` | runtime_manager.py:563 | SSE 事件等待 | 保留 |
 | `_run_job/_run_agent_job/_watch_agent_process` | runtime_manager.py:569/700/884 | Agent 执行核心 | **M7 Docker 化重点改造对象** |
+| `sweep_expired_jobs` | runtime_manager.py | 产物保留 janitor：终态/interrupted 超保留期整目录清除 | 保留 |
+| `evict_lru_jobs` | runtime_manager.py | 磁盘水位 LRU：分区使用率超阈值（默认 70%）时按最近使用时间从旧到新清终态任务，interrupted 最后，running/queued 永不删除 | 新增 |
 | `_load_existing_jobs` | runtime_manager.py:1263 | 启动时恢复历史任务 | 保留 |
 
 ## 3. 后续鉴权改造清单

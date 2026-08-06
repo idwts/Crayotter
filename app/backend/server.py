@@ -66,6 +66,10 @@ PUBLIC_UPLOADS_DIR.mkdir(parents=True, exist_ok=True)
 MAX_JSON_BODY_BYTES = int(os.environ.get("CRAYOTTER_MAX_JSON_BODY_BYTES", "65536"))
 PUBLIC_UPLOAD_MAX_BYTES = int(os.environ.get("CRAYOTTER_PUBLIC_UPLOAD_MAX_BYTES", str(500 * 1024 * 1024)))
 PUBLIC_UPLOAD_SESSION_MAX_BYTES = int(os.environ.get("CRAYOTTER_PUBLIC_UPLOAD_SESSION_MAX_BYTES", str(1500 * 1024 * 1024)))
+# 大文件分片上传：单文件硬上限（防攻击）、固定分片大小、暂存会话过期时间
+CHUNKED_UPLOAD_MAX_BYTES = int(os.environ.get("CRAYOTTER_CHUNKED_UPLOAD_MAX_BYTES", str(2 * 1024 * 1024 * 1024)))  # 2 GB
+CHUNKED_UPLOAD_CHUNK_BYTES = int(os.environ.get("CRAYOTTER_CHUNKED_UPLOAD_CHUNK_BYTES", str(1 * 1024 * 1024)))  # 1 MB
+CHUNKED_UPLOAD_STALE_SECONDS = float(os.environ.get("CRAYOTTER_CHUNKED_UPLOAD_STALE_SECONDS", str(24 * 3600)))
 PUBLIC_JOBS_PER_HOUR = int(os.environ.get("CRAYOTTER_PUBLIC_JOBS_PER_HOUR", "3"))
 PUBLIC_ACTIVE_JOBS_PER_SESSION = int(os.environ.get("CRAYOTTER_PUBLIC_ACTIVE_JOBS_PER_SESSION", "1"))
 
@@ -275,6 +279,7 @@ class BackendHandler(BaseHTTPRequestHandler):
     def do_POST(self) -> None:  # noqa: N802
         parsed = urlparse(self.path)
         path = parsed.path.rstrip("/") or "/"
+        query = parse_qs(parsed.query)
         owner_id = self._owner_id()
 
         try:
@@ -359,6 +364,23 @@ class BackendHandler(BaseHTTPRequestHandler):
             if path == "/uploads":
                 items = self._handle_upload_request(self._uploads_root(owner_id), public=self._public_mode)
                 self._write_json(HTTPStatus.CREATED, {"items": items})
+                return
+
+            # 大文件分片上传：init 创建会话 → 逐片上传 → complete 合并落盘
+            if path == "/uploads/chunked/init":
+                payload = self._read_json()
+                result = self._chunked_upload_init(self._uploads_root(owner_id), payload, public=self._public_mode)
+                self._write_json(HTTPStatus.CREATED, result)
+                return
+
+            chunked_match = re.fullmatch(r"/uploads/chunked/([0-9a-f]{32})(/complete)?", path)
+            if chunked_match and chunked_match.group(2):
+                items = self._chunked_upload_complete(self._uploads_root(owner_id), chunked_match.group(1))
+                self._write_json(HTTPStatus.CREATED, {"items": items})
+                return
+            if chunked_match:
+                result = self._chunked_upload_part(self._uploads_root(owner_id), chunked_match.group(1), query)
+                self._write_json(HTTPStatus.OK, result)
                 return
 
             if path == "/jobs":
@@ -499,6 +521,13 @@ class BackendHandler(BaseHTTPRequestHandler):
                     return
                 removed = self._delete_upload(raw_path, self._uploads_root(owner_id))
                 self._write_json(HTTPStatus.OK, removed)
+                return
+
+            chunked_match = re.fullmatch(r"/uploads/chunked/([0-9a-f]{32})", path)
+            if chunked_match:
+                session_dir = self._chunked_session_dir(self._uploads_root(owner_id), chunked_match.group(1))
+                shutil.rmtree(session_dir, ignore_errors=True)
+                self._write_json(HTTPStatus.OK, {"aborted": True})
                 return
 
             if path.startswith("/jobs/"):
@@ -837,6 +866,99 @@ class BackendHandler(BaseHTTPRequestHandler):
             except Exception:
                 resolved = None
         return resolved
+
+    # ------------------------------------------------------------------
+    # 大文件分片上传（小文件仍走 /uploads 原接口，两套互不影响）
+    # ------------------------------------------------------------------
+    @staticmethod
+    def _chunked_session_dir(upload_dir: Path, upload_id: str) -> Path:
+        session_dir = (upload_dir / ".chunks" / upload_id).resolve(strict=False)
+        session_dir.relative_to(upload_dir.resolve())  # 防路径逃逸
+        return session_dir
+
+    @classmethod
+    def _chunked_session_meta(cls, upload_dir: Path, upload_id: str) -> tuple[Path, dict[str, Any]]:
+        session_dir = cls._chunked_session_dir(upload_dir, upload_id)
+        meta_path = session_dir / "meta.json"
+        if not meta_path.exists():
+            raise FileNotFoundError("Chunked upload session not found.")
+        meta = json.loads(meta_path.read_text(encoding="utf-8"))
+        size_bytes = int(meta.get("size_bytes") or 0)
+        if size_bytes <= 0 or size_bytes > CHUNKED_UPLOAD_MAX_BYTES:
+            raise ValueError("Invalid chunked upload session metadata.")
+        return session_dir, {"name": str(meta.get("name") or "uploaded_video"), "size_bytes": size_bytes}
+
+    @classmethod
+    def _chunked_sweep_stale(cls, upload_dir: Path) -> None:
+        chunks_root = upload_dir / ".chunks"
+        if not chunks_root.exists():
+            return
+        now = time.time()
+        for child in chunks_root.iterdir():
+            if child.is_dir() and now - child.stat().st_mtime > CHUNKED_UPLOAD_STALE_SECONDS:
+                shutil.rmtree(child, ignore_errors=True)
+
+    def _chunked_upload_init(self, upload_dir: Path, payload: dict[str, Any], *, public: bool) -> dict[str, Any]:
+        name = self._sanitize_upload_name(str((payload or {}).get("name") or ""))
+        size_bytes = int((payload or {}).get("size_bytes") or 0)
+        if size_bytes <= 0 or size_bytes > CHUNKED_UPLOAD_MAX_BYTES:
+            raise ValueError(f"Each chunked upload must not exceed {CHUNKED_UPLOAD_MAX_BYTES // (1024 * 1024 * 1024)} GB.")
+        if public and Path(name).suffix.lower() not in RuntimeManager.VIDEO_SUFFIXES:
+            raise ValueError("Public uploads accept video files only.")
+        if public:
+            used = sum(path.stat().st_size for path in upload_dir.rglob("*") if path.is_file())
+            if used + size_bytes > PUBLIC_UPLOAD_SESSION_MAX_BYTES:
+                raise ValueError("This session has reached its upload storage limit.")
+        self._chunked_sweep_stale(upload_dir)
+        upload_id = secrets.token_hex(16)
+        session_dir = self._chunked_session_dir(upload_dir, upload_id)
+        session_dir.mkdir(parents=True, exist_ok=False)
+        (session_dir / "meta.json").write_text(
+            json.dumps({"name": name, "size_bytes": size_bytes}, ensure_ascii=False), encoding="utf-8"
+        )
+        return {
+            "upload_id": upload_id,
+            "chunk_size": CHUNKED_UPLOAD_CHUNK_BYTES,
+            "max_bytes": CHUNKED_UPLOAD_MAX_BYTES,
+        }
+
+    def _chunked_upload_part(self, upload_dir: Path, upload_id: str, query: dict[str, list[str]]) -> dict[str, Any]:
+        session_dir, meta = self._chunked_session_meta(upload_dir, upload_id)
+        size_bytes = meta["size_bytes"]
+        total_chunks = (size_bytes + CHUNKED_UPLOAD_CHUNK_BYTES - 1) // CHUNKED_UPLOAD_CHUNK_BYTES
+        try:
+            index = int(query.get("index", ["-1"])[0])
+        except ValueError:
+            index = -1
+        if index < 0 or index >= total_chunks:
+            raise ValueError(f"Chunk index out of range (expected 0..{total_chunks - 1}).")
+        content_length = int(self.headers.get("Content-Length", "0") or 0)
+        expected = min(CHUNKED_UPLOAD_CHUNK_BYTES, size_bytes - index * CHUNKED_UPLOAD_CHUNK_BYTES)
+        if content_length <= 0 or content_length != expected:
+            raise ValueError(f"Chunk {index} must be exactly {expected} bytes.")
+        body = self.rfile.read(content_length)
+        if len(body) != content_length:
+            raise ValueError("Incomplete chunk body.")
+        (session_dir / f"{index:06d}.part").write_bytes(body)
+        received = sum(path.stat().st_size for path in session_dir.glob("*.part"))
+        return {"received_bytes": received, "total_bytes": size_bytes}
+
+    def _chunked_upload_complete(self, upload_dir: Path, upload_id: str) -> list[dict[str, Any]]:
+        session_dir, meta = self._chunked_session_meta(upload_dir, upload_id)
+        size_bytes = meta["size_bytes"]
+        total_chunks = (size_bytes + CHUNKED_UPLOAD_CHUNK_BYTES - 1) // CHUNKED_UPLOAD_CHUNK_BYTES
+        parts = [session_dir / f"{index:06d}.part" for index in range(total_chunks)]
+        if any(not part.exists() for part in parts):
+            raise ValueError("Chunked upload is incomplete.")
+        if sum(part.stat().st_size for part in parts) != size_bytes:
+            raise ValueError("Chunked upload size mismatch.")
+        target_path = self._allocate_upload_path(meta["name"], upload_dir)
+        target_path.parent.mkdir(parents=True, exist_ok=True)
+        with target_path.open("wb") as handle:
+            for part in parts:
+                handle.write(part.read_bytes())
+        shutil.rmtree(session_dir, ignore_errors=True)
+        return [self._serialize_upload_item(target_path, upload_dir=upload_dir)]
 
     def _handle_upload_request(self, upload_dir: Path, *, public: bool = False) -> list[dict[str, Any]]:
         if cgi is None:

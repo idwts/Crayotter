@@ -76,6 +76,10 @@ class RuntimeManager:
     # 原始媒体），防止公开试用磁盘只增不减。<=0 表示关闭清扫。
     JOB_RETENTION_DAYS = float(os.environ.get("CRAYOTTER_JOB_RETENTION_DAYS", "7") or 7)
     JOB_JANITOR_INTERVAL_SECONDS = float(os.environ.get("CRAYOTTER_JOB_JANITOR_INTERVAL_SECONDS", "21600") or 21600)
+    # 磁盘水位 LRU：分区使用率超过阈值（%）时，按最近使用时间从旧到新清除终态任务目录，
+    # 直到回落到目标水位或无任务可清。interrupted 最后清除，running/queued 永不清除。<=0 关闭。
+    DISK_LRU_THRESHOLD_PERCENT = float(os.environ.get("CRAYOTTER_DISK_LRU_THRESHOLD_PERCENT", "70") or 70)
+    DISK_LRU_TARGET_PERCENT = float(os.environ.get("CRAYOTTER_DISK_LRU_TARGET_PERCENT", "60") or 60)
 
     def __init__(self, config_store: ConfigStore) -> None:
         self.config_store = config_store
@@ -111,6 +115,14 @@ class RuntimeManager:
                     )
             except Exception:
                 logging.getLogger(__name__).exception("job janitor sweep failed")
+            try:
+                evicted = self.evict_lru_jobs()
+                if evicted:
+                    logging.getLogger(__name__).info(
+                        "disk LRU evicted %d jobs above watermark: %s", len(evicted), evicted
+                    )
+            except Exception:
+                logging.getLogger(__name__).exception("disk LRU eviction failed")
 
     @staticmethod
     def _job_reference_time(job: ManagedJob) -> datetime | None:
@@ -140,6 +152,46 @@ class RuntimeManager:
                 reference = self._job_reference_time(job)
                 if reference is None or reference > cutoff:
                     continue
+                shutil.rmtree(job.job_dir, ignore_errors=True)
+                del self._jobs[job_id]
+                removed.append(job_id)
+        return removed
+
+    def evict_lru_jobs(self, *, usage_fn=None) -> list[str]:
+        """磁盘水位 LRU 清除：分区使用率超阈值时，按最近使用时间从旧到新删除终态任务。
+
+        终态（completed/failed/cancelled）优先，interrupted 最后参与；running/queued 永不删除；
+        时间戳无法解析的保守保留。usage_fn 可注入（默认 shutil.disk_usage）便于测试。
+        """
+        if self.DISK_LRU_THRESHOLD_PERCENT <= 0:
+            return []
+        usage_fn = usage_fn or shutil.disk_usage
+
+        def usage_percent() -> float:
+            usage = usage_fn(str(JOBS_DIR))
+            return usage.used / usage.total * 100 if usage.total else 0.0
+
+        if usage_percent() <= self.DISK_LRU_THRESHOLD_PERCENT:
+            return []
+        removed: list[str] = []
+        with self._lock:
+            candidates = []
+            for job_id, job in self._jobs.items():
+                status = job.record.status
+                if status in TERMINAL_JOB_STATUSES:
+                    tier = 0
+                elif status == "interrupted":
+                    tier = 1
+                else:
+                    continue
+                reference = self._job_reference_time(job)
+                if reference is None:
+                    continue
+                candidates.append((tier, reference, job_id, job))
+            candidates.sort(key=lambda item: (item[0], item[1]))
+            for _, _, job_id, job in candidates:
+                if usage_percent() <= self.DISK_LRU_TARGET_PERCENT:
+                    break
                 shutil.rmtree(job.job_dir, ignore_errors=True)
                 del self._jobs[job_id]
                 removed.append(job_id)
