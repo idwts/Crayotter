@@ -205,6 +205,14 @@
 | 调用位置 | `DashboardUI.jsx Composer` 选项菜单、`main.jsx` 轮询检测任务状态变化 + `Notification` API |
 | 说明 | 开启后任务从 queued/running 进入 completed/failed 时发浏览器系统通知；点击通知聚焦窗口并选中该任务 |
 
+### 3.8 标签页标题状态
+
+| 项目 | 内容 |
+|------|------|
+| 行为 | 存在 queued/running 任务时 `document.title` 显示 `(N 运行中) Crayotter Workbench`（英文 `active`），全部结束后恢复原标题 |
+| 键值 | `tabTitleActive` |
+| 调用位置 | `main.jsx` jobs 轮询副作用（2026-08-06 新增） |
+
 ## 4. 任务事件与消息报文
 
 ### 4.1 获取事件

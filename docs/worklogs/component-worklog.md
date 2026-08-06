@@ -178,3 +178,4 @@
 | 2026-08-06 | Claude | 磁盘水位 LRU：`RuntimeManager.evict_lru_jobs()` 在 janitor 循环中检测 JOBS_DIR 分区使用率，超 70% 时按最近使用时间从旧到新清除终态任务目录，interrupted 最后，running/queued 永不删除，目标水位 60%；环境变量 `CRAYOTTER_DISK_LRU_THRESHOLD_PERCENT`/`TARGET_PERCENT`；单测 6 项全过。 |
 | 2026-08-06 | Claude | 素材库批量管理 + 在线预览：每行复选框 + 全选 +「删除选中(N)」批量删除（带确认弹窗）；点击「预览」打开 video 弹层直接播放；E2E 截图验证。 |
 | 2026-08-06 | Claude | 任务完成通知：创作选项弹层新增「完成时通知我」开关（localStorage 持久化 + 请求 Notification 权限）；轮询发现任务从 queued/running 进入 completed/failed 时发送浏览器系统通知（点击聚焦并选中任务）；E2E 验证 localStorage 持久化。 |
+| 2026-08-06 | Claude | 小改进：标签页标题实时反映活跃任务数（`document.title = "(N 运行中) Crayotter Workbench"`，任务结束自动恢复原标题）；与完成通知互补，不开通知权限的用户切走标签页也能看到状态；i18n `tabTitleActive`；E2E 实测 idle→运行中→恢复全链路。 |

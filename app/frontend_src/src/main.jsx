@@ -1069,6 +1069,14 @@ function App() {
     });
   }, [jobs, notifyOnDone, t, displayTaskTitle]);
 
+  // 标签页标题实时反映活跃任务数：切走标签页也能一眼看到任务是否还在跑
+  useEffect(() => {
+    const active = jobs.filter((job) => ["queued", "running"].includes(job.status)).length;
+    document.title = active > 0
+      ? `(${active} ${t("tabTitleActive")}) Crayotter Workbench`
+      : "Crayotter Workbench";
+  }, [jobs, t]);
+
   const deleteUpload = async (displayPath, hasAnalysis) => {
     const message = hasAnalysis ? t("confirmDeleteUploadAnalysis", { path: displayPath }) : t("confirmDeleteUpload", { path: displayPath });
     await confirmAction(
