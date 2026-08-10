@@ -5112,7 +5112,11 @@ textarea:focus-visible {
 /* Workbench polish pass: roomier plan review, inline logs, brighter progress/media. */
 .workspace-grid {
   width: min(1340px, 100%);
-  grid-template-columns: minmax(760px, 1fr) minmax(250px, 300px);
+  /* 第一列 min 从 760px 降到 600px：1280px 视口下内容区仅 ~1008px，
+     760+250+26 轨道溢出并被 justify-content:center 对称外推，
+     导致 composer 弹层左缘被 overflow:hidden 裁切（design review Must Fix 3）。
+     ≥1341px 视口由 fr 扩张不受影响。 */
+  grid-template-columns: minmax(600px, 1fr) minmax(250px, 300px);
   gap: 26px;
 }
 
@@ -5451,6 +5455,26 @@ textarea:focus-visible {
 @media (max-width: 1180px) {
   .workspace-grid {
     grid-template-columns: minmax(0, 1fr) minmax(236px, 286px);
+  }
+}
+
+/* 修复：工作台在 ≤920px 必须回归单列布局，否则上方 5113 行的固定双列
+   (minmax(760px,1fr) minmax(250px,300px)) 会把执行列压成几十像素宽，
+   导致 hero 文字逐字竖排、统计卡重叠（design review 2026-08-10 Must Fix 1/2）。 */
+@media (max-width: 920px) {
+  .workspace-grid {
+    height: auto;
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .inspector-column .overview-grid {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 640px) {
+  .inspector-column .overview-grid {
+    grid-template-columns: 1fr;
   }
 }
 
