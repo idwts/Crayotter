@@ -1,6 +1,6 @@
 # 前端风格表
 
-> 说明：本表记录 Crayotter 前端的设计系统、组件清单与复用约定，便于后续新增页面（登录/注册/账号/管理后台）时保持风格统一。智能体阅读后应记住：**前端基于 React + Tailwind CSS，主色调为 `#155EEF`（品牌蓝），背景为 `#F4F7FA`，所有自定义样式集中在 `styles.css`；新增账号体系页面时应复用 `DashboardUI` 中定义的按钮、输入框、卡片、模态框风格。**
+> 说明：本表记录 Crayotter 前端的设计系统、组件清单与复用约定，便于后续新增页面（登录/注册/账号/管理后台）时保持风格统一。智能体阅读后应记住：**前端基于 React + Tailwind CSS，2026-08-11 全量色彩归一后主色调为靛蓝 `#5E6FEF`（品牌文字色 `#5266E9`），背景为 `#F4F7FA`，全站唯一色板定义在 `styles.css` 顶部 `:root` 的 `--app-*` CSS 变量中，新增样式必须使用这些变量，禁止新增一次性硬编码色值。**
 
 ## 1. 技术栈
 
@@ -13,22 +13,28 @@
 | 国际化 | 自研 `i18n.js`（`MESSAGES` 对象） |
 | 状态 | `useState`/`useRef`/`useCallback` + `localStorage` |
 
-## 2. Tailwind 设计 Token
+## 2. 设计 Token（2026-08-11 全量归一）
 
-见 `app/frontend_src/tailwind.config.js`：
+全站唯一色板：`styles.css` 顶部 `:root` 的 `--app-*` 变量（CSS 侧唯一事实源），`tailwind.config.js` 的 `app.*` 色值已与之对齐（JSX 侧）。**新增颜色必须先查此表，语义对不上时才允许新增 token 并登记本表。**
 
 | Token | 值 | 用途 |
 |-------|-----|------|
 | `app.bg` | `#F4F7FA` | 页面背景 |
 | `app.surface` | `#FFFFFF` | 卡片/浮层面板 |
 | `app.panel` | `#F8FAFC` | 侧边栏/次级面板 |
+| `app.fill` | `#EDF0F6` | 芯片/输入框/弱填充（仅 CSS） |
 | `app.line` | `#D9E1EA` | 分割线/边框 |
-| `app.ink` | `#101828` | 主文字 |
-| `app.soft` | `#667085` | 次要文字 |
-| `app.brand` | `#155EEF` | 品牌主色/主要按钮 |
-| `app.success` | `#0E9384` | 成功状态 |
-| `app.warning` | `#DC6803` | 警告状态 |
-| `app.danger` | `#D92D20` | 危险/删除 |
+| `app.ink` / `app.ink-2` | `#101828` / `#334155` | 主文字 / 次级标题 |
+| `app.soft` / `app.muted` / `app.disabled` | `#667085` / `#98A2B3` / `#CBD3E4` | 辅助文字 / 占位 / 禁用 |
+| `app.brand` / `app.brand-ink` | `#5E6FEF` / `#5266E9` | 主操作 / 品牌文字链接 |
+| `app.brand-soft` / `app.brand-line` / `app.brand-focus` / `app.brand-dark` | `#EEF1FF` / `#E0E7FF` / `#9AA5F2` / `#2D3261` | 选中浅底 / 品牌浅边 / 聚焦环 / 阶段完成深底 |
+| `app.success` / `-ink` / `-soft` | `#22C55E` / `#166534` / `#DCFCE7` | 成功状态 |
+| `app.danger` / `-soft` / `-line` | `#D92D20` / `#FFF1F2` / `#FFEBED` | 危险/删除 |
+| `app.warning-ink` / `-soft` | `#92590A` / `#FFF8EC` | 警示条（免责声明等；tailwind `app.warning` `#DC6803` 仅 JSX 用） |
+| 类别色（非语义） | `app.sky` `#3B82F6` / `app.sky-soft` `#EFF6FF` / `app.violet` `#8463D9` / `app.violet-soft` `#EDE9FE` | metric 卡片等分类标识 |
+| 深色预览面 | `app.dark` `#0B1220` / `app.dark-2` `#222B3D` | 视频播放器/产物预览 |
+
+圆角刻度：`6px`（小元素）/ `8px`（按钮、输入框，主刻度）/ `10px` / `12px` / `16px`（卡片、弹层）/ `999px`（胶囊）。禁止 5/7/9/14px 等刻度外取值。
 
 ## 3. 自定义 CSS 关键类（styles.css）
 
