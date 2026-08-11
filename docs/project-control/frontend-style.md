@@ -42,16 +42,11 @@
 | `.primary-button` | 主操作按钮 | 创建任务、保存 |
 | `.secondary-button` | 次级按钮 | 取消、返回 |
 | `.danger-button` | 危险按钮 | 删除、取消任务 |
-| `.ghost-button` | 幽灵按钮 | 低调操作 |
-| `.card` / `.panel` | 卡片/面板 | 内容分区 |
-| `.form-field` / `.field-label` | 表单字段 | 设置模态框 |
-| `.input` / `.select` | 输入框/选择框 | 表单 |
 | `.toast-viewport` / `.toast-item` | Toast 通知 | 全局反馈 |
 | `.dialog-layer` / `.dialog-backdrop` | 模态框层级 | 确认对话框、设置 |
 | `.confirm-dialog` | 确认对话框 | 删除确认 |
 | `.settings-modal` | 设置模态框 | 系统配置 |
 | `.motion-enter` | 进入动画 | 弹窗 |
-| `.workbench-flow` | 工作台流程容器 | 主界面 |
 | `.materials-search-input` | 素材库搜索输入框（flex:1，聚焦 #155eef） | 素材库工具栏（2026-08-04 新增） |
 | `.materials-toolbar-select` | 素材库筛选/排序下拉 | 素材库工具栏（2026-08-04 新增） |
 | `.materials-batch-bar` | 批量选择工具条（全选复选框 + 删除选中按钮） | 素材库列表上方（2026-08-06 新增） |
@@ -82,7 +77,7 @@
 
 | 元素 | 说明 |
 |------|------|
-| `Field` | 表单字段组件：label + `.input` + 可选密码可见性切换（Eye/EyeOff）+ 错误提示（`text-app-danger`） |
+| `Field` | 表单字段组件：label + `.input` 类名（无专用样式规则，实际外观由 styles.css:130 的元素级 `input, textarea` 选择器提供）+ 可选密码可见性切换（Eye/EyeOff）+ 错误提示（`text-app-danger`） |
 | `cx` | 类名拼接工具（filter(Boolean).join） |
 | 布局约定 | `grid min-h-screen place-items-center bg-app-bg p-4` 居中容器 + `max-w-md rounded-2xl bg-app-surface p-8 shadow-sm` 卡片 |
 | 提交按钮 | `.primary-button flex w-full items-center justify-center gap-2` + `Loader2` 旋转动画（busy 态） |

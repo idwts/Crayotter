@@ -241,9 +241,7 @@ class RuntimeManager:
             raise KeyError(job_id)
         with job.lock:
             detail = job.record.model_dump()
-            detail["job_dir"] = str(job.job_dir)
-            detail["events_path"] = str(job.events_path)
-            detail["summary_path"] = str(job.summary_path)
+            # 不回传 job_dir/events_path/summary_path：服务器内部绝对路径对客户端无用且属信息泄露面。
             detail["artifacts"] = self._collect_artifacts(job)
             return detail
 

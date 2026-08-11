@@ -227,6 +227,9 @@
 | tests/test_chunked_upload_api.py | 大文件分片上传后端功能测试（对服务器）：init → 2 个分片 → complete → 列表 → DELETE，注册隔离账号。 |
 | tests/test_disk_lru.py | 磁盘水位 LRU 单测：低于阈值不清理、disabled 不清理、终态旧任务先清、interrupted 后清、running/queued 保留、坏时间戳保留（6 项，纯 stdlib 桩 + 假 usage_fn）。 |
 | tests/test_e2e_materials_advanced.py | 素材库进阶 E2E：小文件普通上传 + 大文件分片上传 + 在线预览弹层 + 批量选择删除 + 任务完成通知开关持久化（5 步截图输出 docs/worklogs/e2e-shots-materials-advanced）。 |
+| tests/test_e2e_material_disclaimer.py | 素材免责声明 E2E：素材库提示条/创作选项弹层提示/英文语境（独立 context 预置 localStorage + 双 Cookie 注入）3 步截图（docs/worklogs/e2e-shots-disclaimer）。 |
+| tests/test_api_hardening.py | API 健壮性回归：SSE 不存在任务干净 404、参数解析错误 400、未知路由 404、未认证 401（2026-08-11 新增）。 |
+| tests/test_e2e_materials_search.py | 素材库条件搜索 E2E：名称子串搜索、分析状态筛选、排序切换 5 步截图（docs/worklogs/e2e-shots-materials）。 |
 | deploy/nginx-crayotter.conf | 服务器 nginx 配置模板（含 `/uploads/chunked` 1MB 分片 location、180r/m 限流、500m 普通上传等）。 |
 | tests/test_media_consistency.py | from __future__ import annotations |
 | tests/test_modular_architecture.py | from __future__ import annotations |

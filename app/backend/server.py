@@ -245,8 +245,12 @@ class BackendHandler(BaseHTTPRequestHandler):
                 return
 
             self._write_json(HTTPStatus.NOT_FOUND, {"error": f"Unknown route: {path}"})
+        except RuntimeError as exc:
+            self._write_json(HTTPStatus.CONFLICT, {"error": str(exc)})
         except KeyError as exc:
             self._write_json(HTTPStatus.NOT_FOUND, {"error": f"Not found: {exc.args[0]}"})
+        except (ValueError, TypeError) as exc:
+            self._write_json(HTTPStatus.BAD_REQUEST, {"error": str(exc)})
         except Exception as exc:
             self._write_json(HTTPStatus.INTERNAL_SERVER_ERROR, {"error": str(exc)})
 
@@ -273,6 +277,8 @@ class BackendHandler(BaseHTTPRequestHandler):
             payload = self._read_json()
             config = SERVICE.config_store.update(payload)
             self._write_json(HTTPStatus.OK, config.model_dump())
+        except RuntimeError as exc:
+            self._write_json(HTTPStatus.CONFLICT, {"error": str(exc)})
         except Exception as exc:
             self._write_json(HTTPStatus.BAD_REQUEST, {"error": str(exc)})
 
@@ -1053,6 +1059,9 @@ class BackendHandler(BaseHTTPRequestHandler):
         }
 
     def _stream_events(self, job_id: str, after_sequence: int = 0, owner_id: str | None = None) -> None:
+        # 先校验任务存在再发响应头：否则 404 会被序列化进 SSE body（损坏响应）。
+        if SERVICE.runtime_manager.get_job(job_id, owner_id) is None:
+            raise KeyError(job_id)
         self.send_response(HTTPStatus.OK)
         self._send_session_cookie()
         self.send_header("Content-Type", "text/event-stream; charset=utf-8")

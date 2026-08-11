@@ -137,7 +137,29 @@
 | 方法 | `DELETE` |
 | URL | `/uploads?path=${encodeURIComponent(displayPath)}` |
 | 响应 | `{ deleted: true, path, display_path, deleted_analysis_count }` |
-| 调用位置 | main.jsx:736 |
+| 调用位置 | main.jsx `deleteUploads`（单行删除与批量删除共用，批量为循环调用） |
+
+### 2.4 大文件分片上传（2026-08-06 新增）
+
+| 步骤 | 方法 | URL | 请求体 | 响应 |
+|------|------|-----|--------|------|
+| 初始化 | `POST` | `/uploads/chunked/init` | `{ name, size }` JSON | 201 `{ upload_id, chunk_size, max_bytes }` |
+| 上传分片 | `POST` | `/uploads/chunked/{upload_id}?index=N` | 二进制分片（原生 fetch，`Content-Type: application/octet-stream`，每片 = init 返回的 chunk_size，当前 1MB） | 200 `{ received_bytes, total_bytes }` |
+| 完成合并 | `POST` | `/uploads/chunked/{upload_id}/complete` | `{}` | 201 `{ items: UploadItem[] }` |
+| 中止清理 | `DELETE` | `/uploads/chunked/{upload_id}` | — | 200 `{ aborted: true }` |
+
+- 调用位置：main.jsx `uploadLargeFiles`（素材库「上传大文件」按钮；小文件仍走 2.2 原接口）。
+- 约束：单文件 ≤2GB；分片会话 24h 过期由后端清理；nginx 对 `/uploads/chunked` 单独 `client_max_body_size 2m`。
+- 失败路径：任一分片非 2xx 时前端自动调中止接口清理会话。
+
+### 2.5 通用与配置报文
+
+| 方法 | URL | 说明 | 调用位置 |
+|------|-----|------|----------|
+| `GET` | `/health` | 启动时健康检查（`Promise.allSettled` 内，不阻塞渲染） | main.jsx `checkSession` 启动序列 |
+| `PUT` | `/config` | 保存演示模式/工作流配置；Public 模式 403 | main.jsx `submitConfig`、`syncWorkflowConfig` |
+
+> 说明：`request()` 封装（main.jsx）内含 503 限流自动退避 2.5s 重试一次；`fileUrl`/`downloadFileUrl` 紧随其后。行号随版本漂移，以函数名为准。4.1 节事件轮询实际不带 `?after=`（后端默认 after=0），仅 SSE 流携带 after。
 
 ## 3. 任务相关报文
 

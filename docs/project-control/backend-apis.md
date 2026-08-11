@@ -4,6 +4,8 @@
 
 ## 1. HTTP 接口总览
 
+> 错误响应约定（2026-08-11 统一）：所有业务错误为 `{"error": msg}` JSON；状态码跨方法一致——`KeyError→404`、`RuntimeError→409`、`ValueError/TypeError→400`（客户端参数错误）、其余未预期异常 GET→500 / POST·PUT·DELETE→400。SSE `/jobs/{id}/events/stream` 先校验任务存在再发响应头，任务不存在返回干净 404 JSON。
+
 ### 1.1 静态与系统
 
 | 方法 | 路径 | 说明 | 当前鉴权 |
@@ -39,8 +41,8 @@
 | 方法 | 路径 | 说明 | 当前鉴权 |
 |------|------|------|----------|
 | GET | `/uploads` | 列出当前 owner 的上传视频（2026-08-04 起支持条件搜索：`q` 名称子串（大小写不敏感）、`has_analysis=1/0`、`sort=name/size_bytes/modified_at`、`order=asc/desc`，可组合） | owner_id Cookie |
-| POST | `/uploads` | multipart 上传视频（小文件快速通道） | owner_id Cookie + PublicTrialGuard 容量限制 |
-| POST | `/uploads/chunked/init` | 大文件分片上传：创建会话，返回 `upload_id`/`chunk_size`/`max_bytes`（单文件硬上限 2GB，每片 1MB） | owner_id Cookie + PublicTrialGuard 容量限制 |
+| POST | `/uploads` | multipart 上传视频（小文件快速通道） | owner_id Cookie + 上传容量常量限制（`PUBLIC_UPLOAD_MAX_BYTES`/`PUBLIC_UPLOAD_SESSION_MAX_BYTES`，与 PublicTrialGuard 无关） |
+| POST | `/uploads/chunked/init` | 大文件分片上传：创建会话，返回 `upload_id`/`chunk_size`/`max_bytes`（单文件硬上限 2GB，每片 1MB） | owner_id Cookie + 上传容量常量限制（同 `/uploads`） |
 | POST | `/uploads/chunked/{upload_id}?index={n}` | 上传第 n 个分片（二进制 body，长度严格校验） | owner_id Cookie |
 | POST | `/uploads/chunked/{upload_id}/complete` | 合并分片并落盘，返回素材项 | owner_id Cookie |
 | DELETE | `/uploads/chunked/{upload_id}` | 中止分片上传并清理暂存目录 | owner_id Cookie |
@@ -52,7 +54,7 @@
 |------|------|------|----------|
 | GET | `/jobs` | 列出当前 owner 的所有任务 | owner_id Cookie |
 | POST | `/jobs` | 创建新任务 | owner_id Cookie + PublicTrialGuard 频率限制 |
-| GET | `/jobs/{job_id}` | 任务详情 | owner_id Cookie |
+| GET | `/jobs/{job_id}` | 任务详情（2026-08-11 起不再回传 job_dir/events_path/summary_path 内部绝对路径） | owner_id Cookie |
 | DELETE | `/jobs/{job_id}` | 删除任务 | owner_id Cookie |
 | POST | `/jobs/{job_id}/cancel` | 取消任务 | owner_id Cookie |
 | POST | `/jobs/{job_id}/resume` | 恢复中断/失败任务（2026-08-04 起支持请求体 `{"strategy": "resume"/"restart"}`：`resume`=从断点继续（默认，interrupted/failed 均可）；`restart`=重新开始（仅 failed，revision+1、清空 final_output/output_files）。另修复：`owner_id` 此前因 `Field(exclude=True)` 不落 `summary.json`……现 `_write_summary` 显式写入 owner_id，API 响应仍排除） | owner_id Cookie |
@@ -97,24 +99,24 @@
 
 | 方法 | 位置 | 说明 | 后续复用建议 |
 |------|------|------|--------------|
-| `list_jobs(owner_id)` | runtime_manager.py:79 | 列出某 owner 的任务 | 保留，增加 tenant_id 过滤 |
-| `get_job(job_id, owner_id)` | runtime_manager.py:90 | 获取 ManagedJob 对象 | 保留，增加 tenant 校验 |
-| `get_job_detail(job_id, owner_id)` | runtime_manager.py:97 | 任务详情字典 | 保留 |
-| `list_job_artifacts(job_id, owner_id)` | runtime_manager.py:109 | 任务产物列表 | 保留，用于 artifact 下载鉴权 |
-| `get_current_plan(job_id, owner_id)` | runtime_manager.py:115 | 当前编辑计划 | 保留 |
-| `get_plan(job_id, version, owner_id)` | runtime_manager.py:130 | 指定版本计划 | 保留 |
-| `get_plan_diff(...)` | runtime_manager.py:139 | 计划差异 | 保留 |
-| `apply_plan_feedback(...)` | runtime_manager.py:145 | 应用用户反馈 | 保留 |
-| `approve_plan/reject_plan` | runtime_manager.py:219/242 | 计划审批 | 保留 |
-| `create_job(request, owner_id, overrides, upload_root)` | runtime_manager.py:252 | 创建任务并启动 worker | **核心，需要 tenant 化改造** |
-| `cancel_job/resume_job/delete_job` | runtime_manager.py:362/388/435 | 任务生命周期 | 保留 |
-| `list_events/events_log_text/list_messages/add_message` | runtime_manager.py:447/453/456/462 | 事件消息读写 | 保留 |
-| `pause_job/approve_job` | runtime_manager.py:538/551 | 暂停/继续控制 | 保留 |
-| `wait_for_events(...)` | runtime_manager.py:563 | SSE 事件等待 | 保留 |
-| `_run_job/_run_agent_job/_watch_agent_process` | runtime_manager.py:569/700/884 | Agent 执行核心 | **M7 Docker 化重点改造对象** |
+| `list_jobs(owner_id)` | runtime_manager.py:220 | 列出某 owner 的任务 | 保留，增加 tenant_id 过滤 |
+| `get_job(job_id, owner_id)` | runtime_manager.py:231 | 获取 ManagedJob 对象 | 保留，增加 tenant 校验 |
+| `get_job_detail(job_id, owner_id)` | runtime_manager.py:238 | 任务详情字典 | 保留 |
+| `list_job_artifacts(job_id, owner_id)` | runtime_manager.py:250 | 任务产物列表 | 保留，用于 artifact 下载鉴权 |
+| `get_current_plan(job_id, owner_id)` | runtime_manager.py:256 | 当前编辑计划 | 保留 |
+| `get_plan(job_id, version, owner_id)` | runtime_manager.py:273 | 指定版本计划 | 保留 |
+| `get_plan_diff(...)` | runtime_manager.py:282 | 计划差异 | 保留 |
+| `apply_plan_feedback(...)` | runtime_manager.py:288 | 应用用户反馈 | 保留 |
+| `approve_plan/reject_plan` | runtime_manager.py:362/385 | 计划审批 | 保留 |
+| `create_job(request, owner_id, overrides, upload_root)` | runtime_manager.py:395 | 创建任务并启动 worker | **核心，需要 tenant 化改造** |
+| `cancel_job/resume_job/delete_job` | runtime_manager.py:505/531/594 | 任务生命周期 | 保留 |
+| `list_events/events_log_text/list_messages/add_message` | runtime_manager.py:606/612/615/621 | 事件消息读写 | 保留 |
+| `pause_job/approve_job` | runtime_manager.py:697/710 | 暂停/继续控制 | 保留 |
+| `wait_for_events(...)` | runtime_manager.py:722 | SSE 事件等待 | 保留 |
+| `_run_job/_run_agent_job/_watch_agent_process` | runtime_manager.py:728/864/1048 | Agent 执行核心 | **M7 Docker 化重点改造对象** |
 | `sweep_expired_jobs` | runtime_manager.py | 产物保留 janitor：终态/interrupted 超保留期整目录清除 | 保留 |
 | `evict_lru_jobs` | runtime_manager.py | 磁盘水位 LRU：分区使用率超阈值（默认 70%）时按最近使用时间从旧到新清终态任务，interrupted 最后，running/queued 永不删除 | 新增 |
-| `_load_existing_jobs` | runtime_manager.py:1263 | 启动时恢复历史任务 | 保留 |
+| `_load_existing_jobs` | runtime_manager.py:1439 | 启动时恢复历史任务 | 保留 |
 
 ## 3. 后续鉴权改造清单
 
