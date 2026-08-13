@@ -94,7 +94,7 @@
 
 | 组件 | 文件 | 说明 |
 |------|------|------|
-| `SettingsModal` | `SettingsModal.jsx` | 设置弹窗；公开模式下“API 密钥”页签变为“API 来源”二选一（平台配额/我的 API）+ BYOK 表单（密钥留空=保持不变，掩码占位提示），高级页签在公开模式隐藏 |
+| `SettingsModal` | `SettingsModal.jsx` | 设置弹窗；公开模式下“API 密钥”页签变为“API 来源”二选一（平台配额/我的 API）+ BYOK 表单（密钥留空=保持不变，掩码占位提示），高级页签在公开模式隐藏；登录用户可见「账号安全」页签（`ChangePasswordSection`，2026-08-11 新增：原密码+新密码+确认，成功后全会话失效回登录页） |
 | `AppSidebar` | `DashboardUI.jsx` | 左侧导航栏，支持折叠 |
 | `AppTopbar` | `DashboardUI.jsx` | 顶部工具栏 |
 | `MobileDrawer` | `DashboardUI.jsx` | 移动端抽屉导航 |
@@ -150,7 +150,6 @@
 - **登录态管理**（`main.jsx`）：启动时 `GET /api/auth/me` 检查 session；`authView` 在 login/register/reset 间切换；401 通过 `setUnauthorizedHandler` 统一跳登录页。
 - **侧边栏入口**（`DashboardUI.jsx AppSidebar`）：展示 `authUser.username`，提供 `LogOut` 退出按钮。
 - **后续建议**：
-  - **账号管理**：复用 `SettingsModal` 的左右分栏布局与 `.settings-section-stage` 样式，新增改密入口（调用 `POST /api/auth/password`）。
   - **管理员后台**：复用 `ContextPanel` + `DetailsTab` 模式展示用户/任务列表。
   - **Toast 反馈**：复用 `ToastViewport` 与 `notify(type, message)` 机制。
   - **确认弹窗**：复用 `ConfirmDialog` 处理危险操作（删除账号、重置密码）。

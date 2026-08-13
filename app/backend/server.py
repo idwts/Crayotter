@@ -291,6 +291,9 @@ class BackendHandler(BaseHTTPRequestHandler):
         try:
             if path == "/api/auth/register":
                 payload = self._read_json()
+                register_key = auth_service._throttle_key(self._client_ip(), "*")
+                auth_service.register_limiter.check(register_key)
+                auth_service.register_limiter.record_failure(register_key)
                 result = auth_service.register(
                     str(payload.get("username") or ""),
                     str(payload.get("password") or ""),
@@ -308,13 +311,20 @@ class BackendHandler(BaseHTTPRequestHandler):
 
             if path == "/api/auth/login":
                 payload = self._read_json()
-                result = auth_service.login(
-                    str(payload.get("username") or ""),
-                    str(payload.get("password") or ""),
-                    remember_me=bool(payload.get("remember_me")),
-                    ip_address=self._client_ip(),
-                    user_agent=self._client_user_agent(),
-                )
+                throttle_key = auth_service._throttle_key(self._client_ip(), str(payload.get("username") or ""))
+                auth_service.login_lockout.check(throttle_key)
+                try:
+                    result = auth_service.login(
+                        str(payload.get("username") or ""),
+                        str(payload.get("password") or ""),
+                        remember_me=bool(payload.get("remember_me")),
+                        ip_address=self._client_ip(),
+                        user_agent=self._client_user_agent(),
+                    )
+                except ValueError:
+                    auth_service.login_lockout.record_failure(throttle_key)
+                    raise
+                auth_service.login_lockout.record_success(throttle_key)
                 self._write_json(
                     HTTPStatus.OK,
                     {"user": result["user"], "expires_at": result["expires_at"]},
@@ -348,12 +358,19 @@ class BackendHandler(BaseHTTPRequestHandler):
 
             if path == "/api/auth/reset":
                 payload = self._read_json()
-                auth_service.reset_password_by_recovery_code(
-                    str(payload.get("username") or ""),
-                    str(payload.get("recovery_code") or ""),
-                    str(payload.get("new_password") or ""),
-                    ip_address=self._client_ip(),
-                )
+                throttle_key = auth_service._throttle_key(self._client_ip(), str(payload.get("username") or ""))
+                auth_service.login_lockout.check(throttle_key)
+                try:
+                    auth_service.reset_password_by_recovery_code(
+                        str(payload.get("username") or ""),
+                        str(payload.get("recovery_code") or ""),
+                        str(payload.get("new_password") or ""),
+                        ip_address=self._client_ip(),
+                    )
+                except ValueError:
+                    auth_service.login_lockout.record_failure(throttle_key)
+                    raise
+                auth_service.login_lockout.record_success(throttle_key)
                 self._write_json(HTTPStatus.OK, {"ok": True}, clear_auth=True, clear_remember=True)
                 return
 
@@ -497,6 +514,9 @@ class BackendHandler(BaseHTTPRequestHandler):
                     return
 
             self._write_json(HTTPStatus.NOT_FOUND, {"error": f"Unknown route: {path}"})
+        except auth_service.AuthThrottledError as exc:
+            # 认证限流/锁定：429 + retry_after 秒数（do_POST 独有，仅认证路由会抛出）
+            self._write_json(HTTPStatus.TOO_MANY_REQUESTS, {"error": str(exc), "retry_after": exc.retry_after})
         except RuntimeError as exc:
             self._write_json(HTTPStatus.CONFLICT, {"error": str(exc)})
         except KeyError as exc:

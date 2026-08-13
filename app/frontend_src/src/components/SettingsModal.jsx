@@ -1,8 +1,8 @@
 import React, { useState } from "react";
-import { Eye, EyeOff, KeyRound, RefreshCw, Save, Settings2, SlidersHorizontal, Workflow, X } from "lucide-react";
+import { Eye, EyeOff, KeyRound, RefreshCw, Save, Settings2, ShieldCheck, SlidersHorizontal, Workflow, X } from "lucide-react";
 import settingsVisualImage from "../assets/settings-visual.webp";
 
-export function SettingsModal({ configForm, setConfigForm, configMessage, setConfigMessage, submitConfig, loadConfig, setSettingsOpen, notify, publicMode = false, operatorApiConfigured = false, userModelConfig = null, userConfigForm = null, setUserConfigForm = null, saveUserModelConfig = null, clearUserModelConfig = null, t }) {
+export function SettingsModal({ configForm, setConfigForm, configMessage, setConfigMessage, submitConfig, loadConfig, setSettingsOpen, notify, publicMode = false, operatorApiConfigured = false, userModelConfig = null, userConfigForm = null, setUserConfigForm = null, saveUserModelConfig = null, clearUserModelConfig = null, authUser = null, changePassword = null, t }) {
   const updateUser = (key, value) => setUserConfigForm((current) => ({ ...current, [key]: value }));
   const myKeyPlaceholder = userModelConfig?.has_api_key
     ? t("keySavedPlaceholder", { preview: userModelConfig.api_key_preview })
@@ -61,15 +61,19 @@ export function SettingsModal({ configForm, setConfigForm, configMessage, setCon
               <div className="mt-4 grid gap-2">
                 <SettingsNavButton active={activeSection === "api"} icon={KeyRound} label={t("apiKey")} onClick={() => setActiveSection("api")} />
                 {!publicMode && (<SettingsNavButton active={activeSection === "advanced"} icon={SlidersHorizontal} label={t("advanced")} onClick={() => setActiveSection("advanced")} />)}
+                {authUser && changePassword && (<SettingsNavButton active={activeSection === "account"} icon={ShieldCheck} label={t("accountSecurity")} onClick={() => setActiveSection("account")} />)}
               </div>
             </aside>
             <div className="min-h-0 overflow-y-auto bg-[#FAFBFF] p-4 sm:p-6">
               <div className="settings-mobile-tabs md:hidden">
                 <SettingsNavButton active={activeSection === "api"} icon={KeyRound} label={t("apiKey")} onClick={() => setActiveSection("api")} />
                 {!publicMode && (<SettingsNavButton active={activeSection === "advanced"} icon={SlidersHorizontal} label={t("advanced")} onClick={() => setActiveSection("advanced")} />)}
+                {authUser && changePassword && (<SettingsNavButton active={activeSection === "account"} icon={ShieldCheck} label={t("accountSecurity")} onClick={() => setActiveSection("account")} />)}
               </div>
               <div className="settings-section-stage" key={activeSection}>
-                {activeSection === "api" ? (
+                {activeSection === "account" && authUser && changePassword ? (
+                  <ChangePasswordSection authUser={authUser} changePassword={changePassword} notify={notify} t={t} />
+                ) : activeSection === "api" ? (
                   publicMode ? (
                     <>
                       <SettingSection icon={KeyRound} title={t("apiSource")}>
@@ -245,6 +249,51 @@ export function SettingsModal({ configForm, setConfigForm, configMessage, setCon
         </form>
       </section>
     </div>
+  );
+}
+
+function ChangePasswordSection({ authUser, changePassword, notify, t }) {
+  const [oldPassword, setOldPassword] = useState("");
+  const [newPassword, setNewPassword] = useState("");
+  const [confirmPassword, setConfirmPassword] = useState("");
+  const [busy, setBusy] = useState(false);
+
+  const submit = async () => {
+    if (busy) return;
+    if (!oldPassword || !newPassword) {
+      notify("error", t("passwordRequired"));
+      return;
+    }
+    if (newPassword.length < 8) {
+      notify("error", t("newPasswordTooShort"));
+      return;
+    }
+    if (newPassword !== confirmPassword) {
+      notify("error", t("passwordMismatch"));
+      return;
+    }
+    setBusy(true);
+    try {
+      await changePassword(oldPassword, newPassword);
+      // 成功后 authUser 清空、回到登录页（由 main.jsx changePassword 处理）
+    } catch (error) {
+      notify("error", error.message);
+      setBusy(false);
+    }
+  };
+
+  return (
+    <SettingSection icon={ShieldCheck} title={t("accountSecurity")}>
+      <p className="mb-4 text-xs text-slate-500">{t("accountSecurityHint", { username: authUser.username })}</p>
+      <div className="grid max-w-md gap-4">
+        <Field label={t("oldPassword")} value={oldPassword} onChange={setOldPassword} type="password" showSecretLabel={t("showSecret")} hideSecretLabel={t("hideSecret")} />
+        <Field label={t("newPassword")} value={newPassword} onChange={setNewPassword} type="password" showSecretLabel={t("showSecret")} hideSecretLabel={t("hideSecret")} />
+        <Field label={t("confirmNewPassword")} value={confirmPassword} onChange={setConfirmPassword} type="password" showSecretLabel={t("showSecret")} hideSecretLabel={t("hideSecret")} />
+      </div>
+      <button className="primary-button mt-4" disabled={busy} type="button" onClick={submit} aria-busy={busy}>
+        <ShieldCheck size={16} />{busy ? t("changingPassword") : t("changePassword")}
+      </button>
+    </SettingSection>
   );
 }
 

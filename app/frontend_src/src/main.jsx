@@ -335,6 +335,18 @@ function App() {
     closeEventStream();
   }, [closeEventStream]);
 
+  // 修改密码：后端成功后会吊销全部 session 并清除 Cookie，前端直接回登录页
+  const changePassword = useCallback(async (oldPassword, newPassword) => {
+    await request("/api/auth/password", {
+      method: "POST",
+      body: JSON.stringify({ old_password: oldPassword, new_password: newPassword }),
+    });
+    setAuthUser(null);
+    setAuthView("login");
+    closeEventStream();
+    notify("success", t("passwordChangedRelogin"));
+  }, [closeEventStream, notify, t]);
+
   const statusLabel = useCallback((status) => {
     const key = {
       pending: "statusPending",
@@ -1256,34 +1268,45 @@ function App() {
   }
 
   if (!authUser) {
+    // 认证页也需要 ToastViewport，否则登录/注册/重置失败时 notify 无处渲染（静默失败）
+    const authToasts = <ToastViewport toasts={toasts} dismissToast={dismissToast} />;
     if (authView === "register") {
       return (
-        <RegisterPage
-          t={t}
-          notify={notify}
-          onRegister={(user) => setAuthUser(user)}
-          onSwitchToLogin={() => setAuthView("login")}
-        />
+        <>
+          <RegisterPage
+            t={t}
+            notify={notify}
+            onRegister={(user) => setAuthUser(user)}
+            onSwitchToLogin={() => setAuthView("login")}
+          />
+          {authToasts}
+        </>
       );
     }
     if (authView === "reset") {
       return (
-        <ResetPasswordPage
-          t={t}
-          notify={notify}
-          onDone={() => setAuthView("login")}
-          onBackToLogin={() => setAuthView("login")}
-        />
+        <>
+          <ResetPasswordPage
+            t={t}
+            notify={notify}
+            onDone={() => setAuthView("login")}
+            onBackToLogin={() => setAuthView("login")}
+          />
+          {authToasts}
+        </>
       );
     }
     return (
-      <LoginPage
-        t={t}
-        notify={notify}
-        onLogin={(user) => setAuthUser(user)}
-        onSwitchToRegister={() => setAuthView("register")}
-        onSwitchToReset={() => setAuthView("reset")}
-      />
+      <>
+        <LoginPage
+          t={t}
+          notify={notify}
+          onLogin={(user) => setAuthUser(user)}
+          onSwitchToRegister={() => setAuthView("register")}
+          onSwitchToReset={() => setAuthView("reset")}
+        />
+        {authToasts}
+      </>
     );
   }
   const currentPhaseCode = getHighestPhase(selectedMeaningfulEvents);
@@ -1479,6 +1502,8 @@ function App() {
           setUserConfigForm={setUserConfigForm}
           saveUserModelConfig={saveUserModelConfig}
           clearUserModelConfig={clearUserModelConfig}
+          authUser={authUser}
+          changePassword={changePassword}
           t={t}
         />
       )}

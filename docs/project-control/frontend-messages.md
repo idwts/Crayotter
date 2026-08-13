@@ -90,6 +90,19 @@
 | 响应 200 | `{ ok: true }` |
 | 调用位置 | main.jsx `clearUserModelConfig`（“清除我的配置”按钮） |
 
+### 0.10a 修改密码
+
+| 项目 | 内容 |
+|------|------|
+| 方法 | `POST` |
+| URL | `/api/auth/password` |
+| 请求体 | `{ old_password, new_password }` |
+| 响应 200 | `{ ok: true }`，后端吊销全部 session/remember token 并清除 Cookie，前端直接回登录页 |
+| 错误 | 400：原密码错误/新密码少于 8 位；401：未登录 |
+| 调用位置 | main.jsx `changePassword`（设置弹窗「账号安全」页签，2026-08-11 新增） |
+
+> 认证限流（2026-08-11）：`/api/auth/login` 与 `/api/auth/reset` 同一 IP+账号 10 分钟内失败 5 次即锁定，返回 **429 `{ error, retry_after }`**；`/api/auth/register` 每 IP 每小时限 10 次，超限同 429。
+
 ### 0.10 合并更新服务端偏好
 
 | 项目 | 内容 |

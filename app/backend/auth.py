@@ -14,6 +14,8 @@ import hmac
 import json
 import logging
 import secrets
+import threading
+import time
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
@@ -38,6 +40,75 @@ REMEMBER_VALIDATOR_BYTES = 32
 REMEMBER_DAYS = 30
 MAX_REMEMBER_TOKENS_PER_USER = 10
 MAX_PREFERENCES_BYTES = 16 * 1024  # preferences JSONB 上限 16KB
+
+# 认证接口防爆破（2026-08-11）：同一 IP+账号 窗口内连续失败超限即锁定。
+# 进程内内存实现——单实例部署足够；多实例时需换共享存储。
+AUTH_FAILURE_WINDOW_SECONDS = 600
+AUTH_FAILURE_MAX = 5
+AUTH_LOCK_SECONDS = 900
+# 注册按 IP 限频（防批量注册）
+REGISTER_WINDOW_SECONDS = 3600
+REGISTER_MAX_PER_IP = 10
+
+
+class AuthThrottledError(RuntimeError):
+    """触发认证限流/锁定。retry_after 为建议等待秒数。"""
+
+    def __init__(self, retry_after: int) -> None:
+        self.retry_after = max(1, int(retry_after))
+        minutes = max(1, self.retry_after // 60)
+        super().__init__(f"尝试次数过多，请约 {minutes} 分钟后再试")
+
+
+class FailureLockout:
+    """线程安全的失败计数锁定器：窗口内失败达上限后锁定 lock_seconds。"""
+
+    def __init__(self, *, max_failures: int, window_seconds: int, lock_seconds: int) -> None:
+        self._max = max_failures
+        self._window = window_seconds
+        self._lock_seconds = lock_seconds
+        self._failures: dict[str, list[float]] = {}
+        self._mutex = threading.Lock()
+
+    def check(self, key: str) -> None:
+        """若已锁定则抛 AuthThrottledError。"""
+        now = time.monotonic()
+        with self._mutex:
+            failures = [t for t in self._failures.get(key, []) if now - t < self._window]
+            if failures:
+                self._failures[key] = failures
+            else:
+                self._failures.pop(key, None)
+            if len(failures) >= self._max:
+                # 锁定至最早一次失败滑出窗口后再过 lock_seconds
+                raise AuthThrottledError(failures[0] + self._window + self._lock_seconds - now)
+
+    def record_failure(self, key: str) -> None:
+        now = time.monotonic()
+        with self._mutex:
+            failures = [t for t in self._failures.get(key, []) if now - t < self._window]
+            failures.append(now)
+            self._failures[key] = failures
+
+    def record_success(self, key: str) -> None:
+        with self._mutex:
+            self._failures.pop(key, None)
+
+
+def _throttle_key(ip_address: str | None, username: str) -> str:
+    return f"{ip_address or 'unknown'}|{username.strip().lower()}"
+
+
+login_lockout = FailureLockout(
+    max_failures=AUTH_FAILURE_MAX,
+    window_seconds=AUTH_FAILURE_WINDOW_SECONDS,
+    lock_seconds=AUTH_LOCK_SECONDS,
+)
+register_limiter = FailureLockout(
+    max_failures=REGISTER_MAX_PER_IP,
+    window_seconds=REGISTER_WINDOW_SECONDS,
+    lock_seconds=REGISTER_WINDOW_SECONDS,
+)
 
 
 def _sha256(value: str | bytes) -> str:
