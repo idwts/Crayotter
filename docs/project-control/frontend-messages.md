@@ -62,7 +62,7 @@
 | 响应 200 | `{ preferences: {...} }`；未登录 401 |
 | 调用位置 | main.jsx 偏好同步 effect（`authUser` 变化后拉取并应用语言/侧栏/视图/任务草稿等） |
 
-### 0.8 读取我的 API 配置
+### 0.7 读取我的 API 配置
 
 | 项目 | 内容 |
 |------|------|
@@ -71,7 +71,7 @@
 | 响应 200 | `{ model_config: { use_own_key, has_api_key, api_key_preview, base_url, model_name, ...(video/tts 同构), updated_at } }`；密钥只回掩码预览；未登录 401 |
 | 调用位置 | main.jsx 登录后 effect（恢复“我的 API”表单） |
 
-### 0.9 保存我的 API 配置
+### 0.8 保存我的 API 配置
 
 | 项目 | 内容 |
 |------|------|
@@ -81,7 +81,7 @@
 | 响应 200 | `{ model_config }`（掩码视图）；400：use_own_key 无 key / base_url 非 http(s) / 字段非法 |
 | 调用位置 | main.jsx `saveUserModelConfig`（设置弹窗公开模式保存按钮） |
 
-### 0.10 清除我的 API 配置
+### 0.9 清除我的 API 配置
 
 | 项目 | 内容 |
 |------|------|
@@ -90,7 +90,7 @@
 | 响应 200 | `{ ok: true }` |
 | 调用位置 | main.jsx `clearUserModelConfig`（“清除我的配置”按钮） |
 
-### 0.7 合并更新服务端偏好
+### 0.10 合并更新服务端偏好
 
 | 项目 | 内容 |
 |------|------|
@@ -178,7 +178,7 @@
 |------|------|
 | 方法 | `POST` |
 | URL | `/jobs` |
-| 请求体 | `{ task, mode, enable_phase2_research, enable_plan_review, direct_phase3_execution, prefer_local_materials, target_duration_seconds, deadline_seconds, processing_mode, output_profile, enabled_material_platforms }` |
+| 请求体 | 前端实际发送 6 个字段：`{ task, mode, enable_phase2_research, enable_plan_review, direct_phase3_execution, prefer_local_materials }`；后端另支持可选字段 `target_duration_seconds, deadline_seconds, processing_mode, output_profile, enabled_material_platforms`（当前前端未发送，缺省走后端默认） |
 | 响应 | 新建 JobRecord |
 | 调用位置 | main.jsx:788 |
 
@@ -281,7 +281,7 @@
 | 方法 | `GET`（下载） |
 | URL | `/jobs/${jobId}/events.log` |
 | 响应 | text/plain 附件 |
-| 调用位置 | 通过 `downloadFileUrl` 间接使用 |
+| 调用位置 | `src/logDownload.js` `jobEventsDownloadUrl(jobId)` 生成 URL + `downloadTextFile` 触发下载（注意：`downloadFileUrl` 生成的是 `/files?path=…&download=1`，与本接口无关） |
 
 ## 5. 计划相关报文
 
@@ -336,7 +336,7 @@
 ## 7. 后续鉴权/改造要点
 
 - [x] 登录后所有请求携带 Session Cookie；401 统一跳转登录页（已实现）。
-- [x] 新增 `/api/auth/register`、`/api/auth/login`、`/api/auth/logout`、`/api/auth/me`、`/api/auth/password`、`/api/auth/reset` 等接口对接（已实现）。
+- [x] 新增 `/api/auth/register`、`/api/auth/login`、`/api/auth/logout`、`/api/auth/me`、`/api/auth/reset` 等接口对接（已实现；`/api/auth/password` 后端已就绪但前端尚无改密入口，见 frontend-style.md §6 后续建议）。
 - [x] remember-me 登录（`remember_me` 字段 + `crayotter_remember` Cookie 自动续期）与 `/api/auth/preferences` 服务端偏好同步（2026-08-02 已实现，含 E2E 截图验证）。
 - [x] “API 来源”二选一（平台配额/我的 API）+ `/api/auth/model-config` 三接口对接（2026-08-04 已实现，含 E2E 截图与真实 agent 冒烟）。
 - [ ] `/config` 前端已读取，后续可能需要区分公开/管理员配置。

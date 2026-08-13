@@ -53,7 +53,7 @@
 | `.confirm-dialog` | 确认对话框 | 删除确认 |
 | `.settings-modal` | 设置模态框 | 系统配置 |
 | `.motion-enter` | 进入动画 | 弹窗 |
-| `.materials-search-input` | 素材库搜索输入框（flex:1，聚焦 #155eef） | 素材库工具栏（2026-08-04 新增） |
+| `.materials-search-input` | 素材库搜索输入框（flex:1，聚焦 `--app-brand`（#5E6FEF）） | 素材库工具栏（2026-08-04 新增） |
 | `.materials-toolbar-select` | 素材库筛选/排序下拉 | 素材库工具栏（2026-08-04 新增） |
 | `.materials-batch-bar` | 批量选择工具条（全选复选框 + 删除选中按钮） | 素材库列表上方（2026-08-06 新增） |
 | `.materials-select-all` | 全选标签样式 | 批量工具条 |
