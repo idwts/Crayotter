@@ -317,6 +317,20 @@ function App() {
     window.setTimeout(() => document.querySelector(".composer-shell textarea")?.focus(), 0);
   }, []);
 
+  // 任务模板/一键复跑：把历史任务参数套用到创作面板，用户确认后再发送
+  const useJobAsTemplate = useCallback((job) => {
+    if (!job) return;
+    setTaskText(job.task || "");
+    setMode(job.mode === "agent" ? "agent" : "demo");
+    setEnablePhase2Research(job.enable_phase2_research !== false);
+    setEnablePlanReview(job.enable_plan_review !== false);
+    setDirectPhase3Execution(job.direct_phase3_execution === true);
+    setPreferLocalMaterials(job.prefer_local_materials === true);
+    setCurrentView("workbench");
+    window.setTimeout(() => document.querySelector(".composer-shell textarea")?.focus(), 0);
+    notify("success", t("templateApplied"));
+  }, [notify, t]);
+
   const closeEventStream = useCallback(() => {
     if (eventSourceRef.current) {
       eventSourceRef.current.close();
@@ -1444,6 +1458,7 @@ function App() {
               restartJob={restartJob}
               openWorkbench={() => setCurrentView("workbench")}
               createTask={openWorkbenchComposer}
+              useJobAsTemplate={useJobAsTemplate}
               displayTaskTitle={displayTaskTitle}
               statusLabel={statusLabel}
               modeLabel={modeLabel}

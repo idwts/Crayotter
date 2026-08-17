@@ -14,6 +14,7 @@ import {
   ChevronRight,
   CircleStop,
   Clock3,
+  Copy,
   Download,
   FileVideo2,
   FolderOpen,
@@ -992,6 +993,7 @@ export function JobsView({
   restartJob,
   openWorkbench,
   createTask,
+  useJobAsTemplate,
   displayTaskTitle,
   statusLabel,
   modeLabel,
@@ -1072,6 +1074,9 @@ export function JobsView({
                 <div className="job-detail-actions">
                   <button className="primary-button" onClick={openWorkbench} type="button">
                     <LayoutDashboard size={16} />{t("viewWorkbench")}
+                  </button>
+                  <button className="secondary-button" onClick={() => useJobAsTemplate(selectedJob)} type="button">
+                    <Copy size={16} />{t("useAsTemplate")}
                   </button>
                   {selectedJob.status === "running" && (
                     <button className="secondary-button" onClick={() => stopSelectedJob().catch((error) => notify("error", t("operationFailed", { message: error.message })))} type="button">

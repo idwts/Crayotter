@@ -457,6 +457,7 @@
 | tests/test_disk_lru.py | 磁盘水位 LRU 单测：低于阈值不清理、disabled 不清理、终态旧任务先清、interrupted 后清、running/queued 保留、坏时间戳保留（6 项，纯 stdlib 桩 + 假 usage_fn）。 |
 
 | tests/test_e2e_materials_advanced.py | 素材库进阶 E2E：小文件普通上传 + 大文件分片上传 + 在线预览弹层 + 批量选择删除 + 任务完成通知开关持久化（5 步截图输出 docs/worklogs/e2e-shots-materials-advanced）。 |
+| tests/test_e2e_job_template.py | 任务模板/一键复跑 E2E：创建演示任务→历史详情「用作模板」→创作面板套用任务描述与创作选项（4 步截图输出 docs/worklogs/e2e-shots-job-template）。 |
 
 | tests/test_e2e_material_disclaimer.py | 素材免责声明 E2E：素材库提示条/创作选项弹层提示/英文语境（独立 context 预置 localStorage + 双 Cookie 注入）3 步截图（docs/worklogs/e2e-shots-disclaimer）。 |
 

@@ -240,7 +240,15 @@
 | 调用位置 | `DashboardUI.jsx Composer` 选项菜单、`main.jsx` 轮询检测任务状态变化 + `Notification` API |
 | 说明 | 开启后任务从 queued/running 进入 completed/failed 时发浏览器系统通知；点击通知聚焦窗口并选中该任务 |
 
-### 3.8 标签页标题状态
+### 3.8 任务模板/一键复跑
+
+| 项目 | 内容 |
+|------|------|
+| 行为 | 纯前端功能，无新接口：任务历史详情「用作模板」按钮读取 JobRecord 的 `task/mode/enable_phase2_research/enable_plan_review/direct_phase3_execution/prefer_local_materials`，套用进创作面板草稿与创作选项并跳转工作台，用户确认后仍走 3.2 `POST /jobs` 创建 |
+| 键值 | `useAsTemplate` / `templateApplied` |
+| 调用位置 | main.jsx `useJobAsTemplate`、DashboardUI.jsx JobsView 详情操作区（2026-08-17 新增） |
+
+### 3.9 标签页标题状态
 
 | 项目 | 内容 |
 |------|------|
