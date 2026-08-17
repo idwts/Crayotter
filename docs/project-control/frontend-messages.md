@@ -10,7 +10,7 @@
 |------|------|
 | 方法 | `POST` |
 | URL | `/api/auth/register` |
-| 请求体 | `{ username, password }` |
+| 请求体 | `{ username, password, security_question?, security_answer? }`；密保可选但问题与答案必须成对（2026-08-17 起） |
 | 响应 201 | `{ user, tenant, recovery_codes }`；2026-08-02 起同时 `Set-Cookie: crayotter_auth_session`（注册即登录） |
 | 调用位置 | AuthPages.jsx `RegisterPage.submit` |
 
@@ -24,16 +24,25 @@
 | 响应 200 | `{ user, expires_at }`，`Set-Cookie: crayotter_auth_session`；`remember_me=true` 时追加 `Set-Cookie: crayotter_remember`（30 天，HttpOnly+SameSite=Lax） |
 | 调用位置 | AuthPages.jsx `LoginPage.submit` |
 
-### 0.3 恢复码重置密码
+### 0.3 忘记密码重置（恢复码 / 密保问题双通道）
 
 | 项目 | 内容 |
 |------|------|
 | 方法 | `POST` |
 | URL | `/api/auth/reset` |
-| 请求体 | `{ username, recovery_code, new_password }` |
+| 请求体 | 恢复码通道：`{ username, recovery_code, new_password }`；密保通道：`{ username, security_answer, new_password }`（2026-08-17 起，两者共用本端点与失败锁定） |
 | 响应 200 | `{ ok: true }`，后端吊销该用户全部 session 并清除 Cookie |
-| 错误 | 400：恢复码无效/已使用/新密码少于 8 位 |
-| 调用位置 | AuthPages.jsx `ResetPasswordPage.submit` |
+| 错误 | 400：恢复码无效/已使用、密保答案不正确、新密码少于 8 位 |
+| 调用位置 | AuthPages.jsx `ResetPasswordPage.submit`（页面含「恢复码找回 / 密保问题找回」切换） |
+
+### 0.3a 查询密保问题
+
+| 项目 | 内容 |
+|------|------|
+| 方法 | `GET` |
+| URL | `/api/auth/security-question?username=` |
+| 响应 200 | `{ question }`；用户不存在或未设置时 `question` 为 `null`；无需登录 |
+| 调用位置 | AuthPages.jsx `ResetPasswordPage.fetchQuestion`（密保通道下用户名失焦/切换 tab 时自动查询） |
 
 ### 0.4 查询当前登录用户
 

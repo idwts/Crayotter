@@ -19,12 +19,13 @@
 
 | 方法 | 路径 | 说明 | 当前鉴权 |
 |------|------|------|----------|
-| POST | `/api/auth/register` | 注册，返回 `{user, tenant, recovery_codes}`；2026-08-02 起注册成功自动建立会话并设置 auth Cookie | 无 |
+| POST | `/api/auth/register` | 注册，返回 `{user, tenant, recovery_codes}`；2026-08-02 起注册成功自动建立会话并设置 auth Cookie；2026-08-17 起支持可选 `security_question`+`security_answer`（必须成对，答案存 SHA-256 摘要） | 无 |
 | POST | `/api/auth/login` | 登录，设置 `crayotter_auth_session` Cookie；`remember_me=true` 时额外设置 `crayotter_remember` Cookie（selector:validator，30 天，HttpOnly+SameSite=Lax，HTTPS 下 Secure） | 无 |
 | POST | `/api/auth/logout` | 注销当前 session、吊销对应 remember token 并清除 Cookie | auth Cookie |
 | GET | `/api/auth/me` | 当前登录用户信息，未登录 401；无 session 但携带有效 remember Cookie 时自动轮换续期（返回 `{user, renewed: true}` 并重置两个 Cookie） | auth/remember Cookie |
 | POST | `/api/auth/password` | 登录态改密，成功后吊销全部 session 与全部 remember token | auth Cookie |
-| POST | `/api/auth/reset` | 一次性恢复码重置密码，成功后吊销全部 session 与 remember token 并清除 Cookie | 无 |
+| POST | `/api/auth/reset` | 忘记密码重置（双通道）：`recovery_code` 或 `security_answer` 二选一，成功后吊销全部 session 与 remember token 并清除 Cookie；与登录共用失败锁定 | 无 |
+| GET | `/api/auth/security-question?username=` | 查询账号密保问题（忘记密码流程用），未设置/不存在返回 `{question: null}` | 无 |
 | GET | `/api/auth/preferences` | 读取当前用户服务端偏好（JSONB） | auth Cookie |
 | POST | `/api/auth/preferences` | 合并更新偏好 `{preferences: {...}}`，键禁 `__` 前缀且 ≤64 字符，整体 ≤16KB | auth Cookie |
 | GET | `/api/auth/model-config` | 读取“我的 API”配置视图（密钥只回 `****后4位` 掩码与 has_ 标志，绝不回传明文/密文） | auth Cookie |

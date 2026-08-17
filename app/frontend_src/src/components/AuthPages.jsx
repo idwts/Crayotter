@@ -16,6 +16,7 @@ function Field({
   showToggle,
   toggleLabel,
   onToggle,
+  onBlur,
 }) {
   return (
     <div className="form-field">
@@ -29,6 +30,7 @@ function Field({
           type={type}
           value={value}
           onChange={(e) => onChange(e.target.value)}
+          onBlur={onBlur}
           placeholder={placeholder}
           className={cx("input w-full", error && "border-app-danger")}
           required={required}
@@ -185,17 +187,41 @@ export function LoginPage({ onLogin, onSwitchToRegister, onSwitchToReset, t, not
 
 export function ResetPasswordPage({ onDone, onBackToLogin, t, notify }) {
   const [username, setUsername] = useState("");
+  const [method, setMethod] = useState("recovery"); // recovery | question
   const [recoveryCode, setRecoveryCode] = useState("");
+  const [securityQuestion, setSecurityQuestion] = useState(null); // null=未查询, ""=未设置
+  const [securityAnswer, setSecurityAnswer] = useState("");
+  const [questionLoading, setQuestionLoading] = useState(false);
   const [newPassword, setNewPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
   const [showPassword, setShowPassword] = useState(false);
   const [busy, setBusy] = useState(false);
   const [errors, setErrors] = useState({});
 
+  const fetchQuestion = async (name) => {
+    const target = (name ?? username).trim();
+    if (!target) return;
+    setQuestionLoading(true);
+    try {
+      const response = await fetch(`/api/auth/security-question?username=${encodeURIComponent(target)}`);
+      const data = await response.json();
+      setSecurityQuestion(data.question || "");
+    } catch {
+      setSecurityQuestion("");
+    } finally {
+      setQuestionLoading(false);
+    }
+  };
+
   const validate = () => {
     const next = {};
     if (!username.trim()) next.username = t("fieldRequired");
-    if (!recoveryCode.trim()) next.recoveryCode = t("fieldRequired");
+    if (method === "recovery") {
+      if (!recoveryCode.trim()) next.recoveryCode = t("fieldRequired");
+    } else {
+      if (!securityQuestion) next.securityAnswer = t("securityQuestionFetchFirst");
+      else if (!securityAnswer.trim()) next.securityAnswer = t("fieldRequired");
+    }
     if (!newPassword) next.newPassword = t("fieldRequired");
     else if (newPassword.length < 8) next.newPassword = t("passwordTooShort");
     if (newPassword !== confirmPassword) next.confirmPassword = t("passwordMismatch");
@@ -208,14 +234,13 @@ export function ResetPasswordPage({ onDone, onBackToLogin, t, notify }) {
     if (!validate()) return;
     setBusy(true);
     try {
+      const body = { username: username.trim(), new_password: newPassword };
+      if (method === "recovery") body.recovery_code = recoveryCode.trim();
+      else body.security_answer = securityAnswer.trim();
       const response = await fetch("/api/auth/reset", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          username: username.trim(),
-          recovery_code: recoveryCode.trim(),
-          new_password: newPassword,
-        }),
+        body: JSON.stringify(body),
       });
       const data = await response.json();
       if (!response.ok) throw new Error(data.error || t("resetFailed"));
@@ -241,20 +266,69 @@ export function ResetPasswordPage({ onDone, onBackToLogin, t, notify }) {
             id="reset-username"
             label={t("username")}
             value={username}
-            onChange={setUsername}
+            onChange={(v) => { setUsername(v); setSecurityQuestion(null); }}
             placeholder={t("usernamePlaceholder")}
             error={errors.username}
             required
+            onBlur={() => { if (method === "question") fetchQuestion(); }}
           />
-          <Field
-            id="reset-recovery-code"
-            label={t("recoveryCode")}
-            value={recoveryCode}
-            onChange={setRecoveryCode}
-            placeholder={t("recoveryCodePlaceholder")}
-            error={errors.recoveryCode}
-            required
-          />
+          <div className="flex gap-2" role="tablist">
+            {[["recovery", t("resetViaRecoveryCode")], ["question", t("resetViaSecurityQuestion")]].map(([key, label]) => (
+              <button
+                key={key}
+                type="button"
+                role="tab"
+                aria-selected={method === key}
+                onClick={() => {
+                  setMethod(key);
+                  if (key === "question" && username.trim() && securityQuestion === null) fetchQuestion();
+                }}
+                className={cx(
+                  "flex-1 rounded-lg border px-3 py-2 text-sm font-medium transition-colors",
+                  method === key
+                    ? "border-app-brand bg-app-panel text-app-brand"
+                    : "border-app-line text-app-soft hover:text-app-ink",
+                )}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+          {method === "recovery" ? (
+            <Field
+              id="reset-recovery-code"
+              label={t("recoveryCode")}
+              value={recoveryCode}
+              onChange={setRecoveryCode}
+              placeholder={t("recoveryCodePlaceholder")}
+              error={errors.recoveryCode}
+              required
+            />
+          ) : (
+            <>
+              {questionLoading ? (
+                <p className="text-sm text-app-soft">{t("securityQuestionLoading")}</p>
+              ) : securityQuestion === null ? (
+                <p className="text-sm text-app-soft">{t("securityQuestionFetchHint")}</p>
+              ) : securityQuestion === "" ? (
+                <p className="text-sm text-app-danger">{t("securityQuestionMissing")}</p>
+              ) : (
+                <div className="rounded-lg bg-app-panel px-3 py-2 text-sm text-app-ink">
+                  <span className="mr-1 text-app-soft">{t("securityQuestion")}:</span>
+                  {securityQuestion}
+                </div>
+              )}
+              <Field
+                id="reset-security-answer"
+                label={t("securityAnswer")}
+                value={securityAnswer}
+                onChange={setSecurityAnswer}
+                placeholder={t("securityAnswerPlaceholder")}
+                error={errors.securityAnswer}
+                required
+              />
+            </>
+          )}
           <Field
             id="reset-new-password"
             label={t("newPassword")}
@@ -304,6 +378,8 @@ export function RegisterPage({ onRegister, onSwitchToLogin, t, notify }) {
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
+  const [securityQuestion, setSecurityQuestion] = useState("");
+  const [securityAnswer, setSecurityAnswer] = useState("");
   const [showPassword, setShowPassword] = useState(false);
   const [busy, setBusy] = useState(false);
   const [errors, setErrors] = useState({});
@@ -316,6 +392,9 @@ export function RegisterPage({ onRegister, onSwitchToLogin, t, notify }) {
     if (!password) next.password = t("fieldRequired");
     else if (password.length < 8) next.password = t("passwordTooShort");
     if (password !== confirmPassword) next.confirmPassword = t("passwordMismatch");
+    // 密保可选，但问题与答案必须成对填写
+    if (securityQuestion.trim() && !securityAnswer.trim()) next.securityAnswer = t("securityAnswerRequired");
+    if (!securityQuestion.trim() && securityAnswer.trim()) next.securityQuestion = t("securityQuestionRequired");
     setErrors(next);
     return Object.keys(next).length === 0;
   };
@@ -325,10 +404,15 @@ export function RegisterPage({ onRegister, onSwitchToLogin, t, notify }) {
     if (!validate()) return;
     setBusy(true);
     try {
+      const body = { username: username.trim(), password };
+      if (securityQuestion.trim()) {
+        body.security_question = securityQuestion.trim();
+        body.security_answer = securityAnswer.trim();
+      }
       const response = await fetch("/api/auth/register", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ username: username.trim(), password }),
+        body: JSON.stringify(body),
       });
       const data = await response.json();
       if (!response.ok) throw new Error(data.error || t("registerFailed"));
@@ -407,6 +491,22 @@ export function RegisterPage({ onRegister, onSwitchToLogin, t, notify }) {
             placeholder={t("confirmPasswordPlaceholder")}
             error={errors.confirmPassword}
             required
+          />
+          <Field
+            id="reg-security-question"
+            label={t("securityQuestionOptional")}
+            value={securityQuestion}
+            onChange={setSecurityQuestion}
+            placeholder={t("securityQuestionPlaceholder")}
+            error={errors.securityQuestion}
+          />
+          <Field
+            id="reg-security-answer"
+            label={t("securityAnswerOptional")}
+            value={securityAnswer}
+            onChange={setSecurityAnswer}
+            placeholder={t("securityAnswerPlaceholder")}
+            error={errors.securityAnswer}
           />
           <button
             type="submit"

@@ -170,13 +170,27 @@ def register(
     *,
     ip_address: str | None = None,
     user_agent: str | None = None,
+    security_question: str | None = None,
+    security_answer: str | None = None,
 ) -> dict[str, Any]:
-    """用户注册。返回用户信息、租户信息、明文恢复码列表。"""
+    """用户注册。返回用户信息、租户信息、明文恢复码列表。密保问题可选，与答案必须成对提供。"""
     normalized = username.strip().lower()
     if len(normalized) < 2:
         raise ValueError("用户名过短")
     if len(password) < 8:
         raise ValueError("密码强度不足，至少 8 位")
+
+    question = (security_question or "").strip()
+    answer_digest: str | None = None
+    if question or (security_answer or "").strip():
+        if not question or not (security_answer or "").strip():
+            raise ValueError("密保问题与答案必须同时填写")
+        if len(question) > 200:
+            raise ValueError("密保问题过长")
+        answer = security_answer.strip()
+        if len(answer) > 200:
+            raise ValueError("密保答案过长")
+        answer_digest = _sha256(answer.lower())
 
     password_hash, version = hash_password(password)
 
@@ -199,11 +213,11 @@ def register(
             # 创建用户
             cur.execute(
                 """
-                INSERT INTO users (tenant_id, username, password_hash, password_algorithm_version)
-                VALUES (%s, %s, %s, %s)
+                INSERT INTO users (tenant_id, username, password_hash, password_algorithm_version, security_question, security_answer_digest)
+                VALUES (%s, %s, %s, %s, %s, %s)
                 RETURNING id, tenant_id, username, status, created_at
                 """,
-                (tenant_id, normalized, password_hash, version),
+                (tenant_id, normalized, password_hash, version, question or None, answer_digest),
             )
             user = cur.fetchone()
             user_id = user["id"]
@@ -687,6 +701,81 @@ def change_password(
             target_id=str(user_id),
             ip_address=ip_address,
         )
+
+
+def get_security_question(username: str) -> str | None:
+    """按用户名查询密保问题（忘记密码流程用）。用户不存在或未设置均返回 None。"""
+    normalized = username.strip().lower()
+    if not normalized:
+        return None
+    with db.get_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT security_question FROM users WHERE lower(username) = %s AND status = 'active'",
+                (normalized,),
+            )
+            row = cur.fetchone()
+    if row is None:
+        return None
+    return row["security_question"]
+
+
+def reset_password_by_security_answer(
+    username: str,
+    security_answer: str,
+    new_password: str,
+    *,
+    ip_address: str | None = None,
+) -> bool:
+    """使用密保答案重置密码（与恢复码并行的第二种找回方式）。"""
+    if len(new_password) < 8:
+        raise ValueError("新密码至少 8 位")
+
+    normalized = username.strip().lower()
+    answer_digest = _sha256(security_answer.strip().lower())
+
+    with db.get_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT id FROM users
+                WHERE lower(username) = %s
+                  AND security_answer_digest = %s
+                  AND status = 'active'
+                """,
+                (normalized, answer_digest),
+            )
+            row = cur.fetchone()
+            if row is None:
+                _audit_with_conn(
+                    conn,
+                    action="user.recovery_failed",
+                    target_type="user",
+                    target_id=normalized,
+                    details={"reason": "invalid_security_answer"},
+                    ip_address=ip_address,
+                )
+                raise ValueError("密保答案不正确")
+
+            user_id = row["id"]
+            new_hash, version = hash_password(new_password)
+            cur.execute(
+                "UPDATE users SET password_hash = %s, password_algorithm_version = %s WHERE id = %s",
+                (new_hash, version, user_id),
+            )
+
+        revoke_all_user_sessions(user_id, ip_address=ip_address)
+        revoke_all_remember_tokens(user_id)
+        _audit_with_conn(
+            conn,
+            action="user.reset_password",
+            actor_id=user_id,
+            target_type="user",
+            target_id=str(user_id),
+            details={"method": "security_answer"},
+            ip_address=ip_address,
+        )
+    return True
 
 
 def reset_password_by_recovery_code(

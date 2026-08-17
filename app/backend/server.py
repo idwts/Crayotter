@@ -127,6 +127,12 @@ class BackendHandler(BaseHTTPRequestHandler):
                 self._write_json(HTTPStatus.OK, {"ok": True})
                 return
 
+            if path == "/api/auth/security-question":
+                # 忘记密码流程：按用户名查询密保问题（无需登录；不存在/未设置返回 null）
+                question = auth_service.get_security_question((query.get("username") or [""])[0])
+                self._write_json(HTTPStatus.OK, {"question": question})
+                return
+
             if path == "/api/auth/me":
                 user = self._auth_user()
                 if user is None:
@@ -299,6 +305,8 @@ class BackendHandler(BaseHTTPRequestHandler):
                     str(payload.get("password") or ""),
                     ip_address=self._client_ip(),
                     user_agent=self._client_user_agent(),
+                    security_question=payload.get("security_question"),
+                    security_answer=payload.get("security_answer"),
                 )
                 # 注册成功后自动建立会话，前端可直接进入工作台
                 session_token, _ = auth_service.create_session(
@@ -361,12 +369,22 @@ class BackendHandler(BaseHTTPRequestHandler):
                 throttle_key = auth_service._throttle_key(self._client_ip(), str(payload.get("username") or ""))
                 auth_service.login_lockout.check(throttle_key)
                 try:
-                    auth_service.reset_password_by_recovery_code(
-                        str(payload.get("username") or ""),
-                        str(payload.get("recovery_code") or ""),
-                        str(payload.get("new_password") or ""),
-                        ip_address=self._client_ip(),
-                    )
+                    security_answer = str(payload.get("security_answer") or "").strip()
+                    if security_answer:
+                        # 密保问题找回（与恢复码并行）
+                        auth_service.reset_password_by_security_answer(
+                            str(payload.get("username") or ""),
+                            security_answer,
+                            str(payload.get("new_password") or ""),
+                            ip_address=self._client_ip(),
+                        )
+                    else:
+                        auth_service.reset_password_by_recovery_code(
+                            str(payload.get("username") or ""),
+                            str(payload.get("recovery_code") or ""),
+                            str(payload.get("new_password") or ""),
+                            ip_address=self._client_ip(),
+                        )
                 except ValueError:
                     auth_service.login_lockout.record_failure(throttle_key)
                     raise

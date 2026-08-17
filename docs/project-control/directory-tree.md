@@ -151,6 +151,7 @@
 | migrations/003_remember_tokens_preferences.sql | 迁移 003：remember_tokens 表（selector 主键/validator_digest/过期与审计字段）+ users.preferences JSONB 列。 |
 
 | migrations/004_user_model_configs.sql | 迁移 004：user_model_configs 表（BYOK 持久化，密钥列为 Fernet 密文）。 |
+| migrations/005_security_question.sql | 迁移 005：users 表新增 security_question + security_answer_digest（可选密保问题找回通道）。 |
 
 | packaging/build_windows.ps1 | PowerShell 脚本 |
 
@@ -427,6 +428,8 @@
 
 | tests/test_e2e_byok_frontend.py | BYOK E2E：设置弹窗 API 来源切换、我的 API 保存/掩码重开、真实 agent 任务提交与 LLM 链路验证（截图输出 docs/worklogs/e2e-shots-byok）。 |
 | tests/test_e2e_change_password.py | 设置弹窗账号安全改密全链路 E2E（2026-08-11） |
+| tests/test_security_question_api.py | 密保问题 API 测试：注册可选密保/成对校验/查询问题/密保重置/恢复码通道回归（2026-08-17） |
+| tests/test_e2e_security_question.py | 密保问题全链路 E2E：注册设密保→登出→密保找回→新密码登录（5 步截图，2026-08-17） |
 
 | tests/test_e2e_polling_cadence.py | 前端自适应轮询 smoke：注册后静置 45s 统计 GET /jobs 次数，验证空闲 30s 档（不建任务、零 LLM 成本）。 |
 
