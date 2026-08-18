@@ -87,7 +87,7 @@
 
 | 方法 | 路径 | 说明 | 当前鉴权 |
 |------|------|------|----------|
-| GET | `/files?path=` | 按路径下载文件 | Public mode 下仅允许访问当前 owner 的 artifact |
+| GET | `/files?path=` | 按路径下载/预览文件（2026-08-18 修复：此前仅放行 owner 任务 artifact，导致素材库上传文件预览一律 403） | Public mode 下仅允许访问当前 owner 的任务 artifact 与本人上传素材（`public_uploads/<owner>/` 前缀）；他人一律 403 |
 | GET | `/jobs/{job_id}/artifacts` | 任务产物列表 | owner_id Cookie |
 
 ### 1.7 配置管理

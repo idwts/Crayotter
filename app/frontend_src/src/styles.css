@@ -5622,3 +5622,23 @@ textarea:focus-visible {
   max-height: 70vh;
   background: #000000;
 }
+
+/* 移动端触控目标（design review Should-Fix）：上方 ≤720px 旧规则把 composer 控件
+   压到 30px/34px，违反 44px 触控目标；在层叠末尾恢复（必须保持在本文件最后）。 */
+@media (max-width: 720px) {
+  .composer-options-trigger,
+  .mode-selector-trigger {
+    height: auto;
+    min-height: 44px;
+    padding-top: 6px;
+    padding-bottom: 6px;
+  }
+  .send-button,
+  .composer-stop-button {
+    height: 44px;
+    width: 44px;
+  }
+  .composer-option-row {
+    min-height: 44px;
+  }
+}

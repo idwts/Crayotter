@@ -91,13 +91,15 @@
 
 ### 组件名：RuntimeManager 租户化
 - **负责人**：待定
-- **状态**：未开始
+- **状态**：部分完成（2026-08-18 任务目录物理隔离已上线）
 - **关联文档**：[backend-apis.md](./backend-apis.md)
 - **已做**：
   - [x] 梳理 RuntimeManager 方法清单
 - **待做**：
-  - [ ] 所有方法增加 tenant_id 参数
-  - [ ] 路径解析改为 `/srv/crayotter/tenants/{tenant_uuid}/`
+  - [x] 任务目录物理隔离：新任务落 `app_state/jobs/<owner_id>/<job_id>/`，加载器兼容旧扁平布局（零迁移，旧任务原位可用）
+  - [x] /files 属主校验补全：放行本人上传素材（修复素材库预览 403 bug），他人上传/产物一律 403
+  - [ ] owner_id 绑定 user.id（当前 owner_id 仍是匿名会话 Cookie，换浏览器即新「租户」；登录用户跨端不共享任务）
+  - [ ] 路径解析改为 `/srv/crayotter/tenants/{tenant_uuid}/`（完整租户模型，依赖上一项）
   - [ ] 历史匿名数据归档
 - **阻塞/风险**：
   - 改动面大，需要完整回归测试。
@@ -187,3 +189,4 @@
 | 2026-08-17 | Claude | 注册限频每 IP 每小时 10→20 次（`REGISTER_MAX_PER_IP`，用户要求），已部署重启，注册实测 201；frontend-messages 同步。 |
 | 2026-08-17 | Claude | 任务模板/一键复跑：任务历史详情操作区新增「用作模板」按钮（Copy 图标），点击后将该 JobRecord 的 task/mode/四个创作选项套用进创作面板草稿与选项并聚焦输入框，用户调整后发送——纯前端功能无新接口（复用 POST /jobs）；i18n `useAsTemplate`/`templateApplied`；E2E 4 步截图全过（含 Phase2 关/本地素材开的选项断言）。开发中发现并处理：demo 模式 ASCII 任务标题在 UI 显示为本地化「演示任务」。 |
 | 2026-08-17 | Claude | 可选密保问题找回通道：注册页新增可选密保问题+答案（必须成对，答案仅存 SHA-256 摘要且小写去空格归一，migration 005 users 加两列）；忘记密码页改为「恢复码找回/密保问题找回」双 tab，密保通道输入用户名失焦自动查询问题（GET /api/auth/security-question，无需登录），重置复用 POST /api/auth/reset 单端点双通道（security_answer 非空即走密保校验）并与登录共用失败锁定；重置成功同样吊销全部 session+remember token。验证：API 8 步（含归一化/成对校验/恢复码回归）+ E2E 5 步截图全过；部署时发现 cd 路径致 deploy 脚本 uploaded 0 files 的静默未部署，已核对线上资源 hash 修正。文档：frontend-messages §0.1/0.3/0.3a、backend-apis、directory-tree 同步。 |
+| 2026-08-18 | Claude | 多用户数据隔离两项（按用户指示只部署不提交）：①/files 属主校验补全——探针实证素材库上传文件预览在 public 模式下一律 403（artifact 白名单不含上传素材），修复为放行 `public_uploads/<owner>/` 前缀，他人上传/产物仍 403；②RuntimeManager 任务目录物理隔离——`_job_dir_for` 使新任务落 `JOBS_DIR/<owner_id>/<job_id>/`，`_load_existing_jobs` 兼容旧扁平+新嵌套双布局（零迁移），janitor/LRU 基于内存索引不受影响。单测 3 项 + 线上 8 步矩阵全过；janitor/LRU 回归全过。另完成移动端触控目标修复（≤720px 旧规则把 composer 控件压到 30/34px，层叠末尾恢复 44px，375px 实测 send 44×44/选项 106×44/模式 112×44）。文档：backend-apis /files 行、AGENTS.md jobs 目录说明、directory-tree 两条目。 |

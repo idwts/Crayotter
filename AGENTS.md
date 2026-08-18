@@ -120,8 +120,8 @@ Important runtime directories:
 - `user_temp`: user-uploaded local source videos and paired `*_analysis.json`
 - `logs`: `agent_*.log` and `video_agent_*.log`
 - `memory_experience`: historical case memory, especially `latest_skills.md`
-- `app_state/jobs`: backend job records, events, summaries, and per-job workspaces
-- `app_state/jobs/<job_id>/workspace`: isolated task workspace containing DAG checkpoints and the artifact manifest
+- `app_state/jobs`: backend job records, events, summaries, and per-job workspaces. Public mode jobs created after 2026-08-18 live under `app_state/jobs/<owner_id>/<job_id>/` (per-owner physical isolation); legacy flat `app_state/jobs/<job_id>/` dirs remain supported by the loader
+- `app_state/jobs/<job_id>/workspace` (or nested per-owner equivalent): isolated task workspace containing DAG checkpoints and the artifact manifest
 
 Backend workers set:
 
@@ -270,18 +270,26 @@ Static website/demo assets are separate under `website/` and should not be confu
 
 ## Phase 3 RL Directory
 
-`phase3_rl/` is an experimental/smoke pipeline for `verl + Qwen3.5 + Crayotter` Phase 3 RL integration.
+`phase3_rl/` is the RL training scaffolding for `verl + Crayotter` Phase 3 integration.
 
-It includes:
+**⚠️ 2026-06-25 重大革新（仅在 A800 服务器 `~/yu`，本地代码仍为旧版 GRPO）**：算法从 GRPO 转向 **HGPO**（Hierarchical Group-Relative Policy Optimization = 分层组相对 + r_align judge + 轨迹反演），基座模型换为 `Qwen3.5-2B-Base`，verl 升级到 0.9.0.dev。详细上下文见 `phase3_rl/logs/PROJECT_CONTEXT.md`（HGPO 主线）与本地 memory `crayotter-hgpo-innovation.md`。
 
-- fixture-based local rollout
-- dataset export
-- tool config export
-- `CrayotterSubprocessTool`
-- custom `CrayotterPhase3ToolAgentLoop`
-- GRPO smoke script
+HGPO 新增/修改文件（服务器 `~/yu/phase3_rl/`）：
 
-This is not the main app runtime. The README in `phase3_rl/README_CN.md` documents environment-specific assumptions such as vendored `verl`, `sglang`, and AutoDL paths.
+- `hgpo_advantage.py` — HGPO advantage estimator（注册 verl `"hgpo"`），method 1（分层组相对）+ method 3（轨迹反演）
+- `credit_state.py` — 锚点状态 `s_t`、artifact DAG、轨迹反演权重（纯 stdlib，跨进程共享）
+- `verl_patches.py` — monkey-patch verl 0.9.0.dev 让 `"hgpo"` 收到 `non_tensor_batch` + `batch`
+- `run_verl_hgpo.py` — 入口（install patch → delegate `verl.trainer.main_ppo`）
+- `run_hgpo_smoke.sh` — smoke 启动（2 step × 2 rollout）
+- `verify_2x2.py` — 2×2 功能门（C1 credit_state / C2 live r_align / C3 HGPO dense / C4 degrade），full 训练前必跑
+- `reward.py` — 精简至 4.3KB，judge 移至 per-step r_align
+- `verl_tools.py` / `verl_agent_loop.py` — 注入 per-step anchor/r_align/inv_w 到 `extra_fields`
+
+**当前阻塞**：HGPO smoke（`crayotter-hgpo-smoke`）degeneracy——rollout `tool_calls=0`、advantages 全 0、训练 no-op。`Qwen3.5-2B-Base` 是 base 模型，工具格式/parser 匹配待确认。
+
+旧版 GRPO 仍保留：fixture-based local rollout、dataset/tool-config export、`CrayotterSubprocessTool`、`CrayotterPhase3ToolAgentLoop`、`run_verl_phase3_grpo.sh`。GRPO 时代 dry-run4/5 历史（reward 平台期 1.22、0% export_bonus、只学 `inspect_video_duration`）正是 HGPO 革新的动机，详见 PROJECT_CONTEXT.md 附录 A。
+
+This is not the main app runtime. The README in `phase3_rl/README_CN.md` documents environment-specific assumptions such as vendored `verl`, `sglang`, and server/WSL paths.
 
 ## Development Notes
 

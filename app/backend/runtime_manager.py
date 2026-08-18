@@ -434,7 +434,7 @@ class RuntimeManager:
 
         with self._lock:
             job_id = self._new_job_id()
-            job_dir = JOBS_DIR / job_id
+            job_dir = self._job_dir_for(owner_id, job_id)
             job_dir.mkdir(parents=True, exist_ok=True)
             record = JobRecord(
                 job_id=job_id,
@@ -1434,13 +1434,30 @@ class RuntimeManager:
             )
         return sorted(results, key=lambda item: item["display_path"])
 
+    @staticmethod
+    def _job_dir_for(owner_id: str, job_id: str) -> Path:
+        """多用户物理隔离：有属主的任务落到 JOBS_DIR/<owner_id>/<job_id>；
+        无属主（本地单机模式）保持原有扁平布局。owner_id 为 urlsafe token，文件名安全。"""
+        if owner_id:
+            return JOBS_DIR / owner_id / job_id
+        return JOBS_DIR / job_id
+
     def _load_existing_jobs(self) -> None:
         if not JOBS_DIR.exists():
             return
 
-        for job_dir in sorted(JOBS_DIR.iterdir()):
-            if not job_dir.is_dir():
+        job_dirs: list[Path] = []
+        for entry in sorted(JOBS_DIR.iterdir()):
+            if not entry.is_dir():
                 continue
+            if (entry / "summary.json").exists():
+                job_dirs.append(entry)  # 旧版扁平布局，保持原位可用
+                continue
+            for child in sorted(entry.iterdir()):  # 属主子目录布局 JOBS_DIR/<owner>/<job>
+                if child.is_dir() and (child / "summary.json").exists():
+                    job_dirs.append(child)
+
+        for job_dir in job_dirs:
             summary_path = job_dir / "summary.json"
             if not summary_path.exists():
                 continue

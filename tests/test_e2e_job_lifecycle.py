@@ -147,7 +147,18 @@ def main() -> int:
         page.wait_for_selector(".job-select-row:has-text('生命周期恢复测试')", timeout=60000)
         # 后端启动时把 running 任务标记为 interrupted（“可恢复”），轮询等待状态翻转
         wait_job_status(page, "生命周期恢复测试", {"interrupted"}, timeout_ms=120_000)
-        page.locator(".job-select-row", has_text="生命周期恢复测试").first.click()
+        try:
+            page.locator(".job-select-row", has_text="生命周期恢复测试").first.click(timeout=60000)
+        except Exception:
+            # 失败诊断：记录 DOM 中实际的任务行与截图（2026-08-18 排查点击超时）
+            rows = page.evaluate("""() => [...document.querySelectorAll('.job-select-row')].map(r => ({
+                text: r.innerText.slice(0, 50),
+                visible: !!(r.offsetWidth || r.offsetHeight),
+                display: getComputedStyle(r).display,
+            }))""")
+            print(f"[diag] .job-select-row at click-failure: {rows}")
+            page.screenshot(path=str(shots / "diag-click-failure.png"), full_page=True)
+            raise
         page.wait_for_selector(".status-pill:has-text('可恢复')", timeout=60000)
         page.screenshot(path=str(shots / "06-job-interrupted-after-restart.png"), full_page=True)
         print("[PASS] 06 job shows interrupted (可恢复) after backend restart")

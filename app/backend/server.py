@@ -699,19 +699,25 @@ class BackendHandler(BaseHTTPRequestHandler):
         except FileNotFoundError:
             self._write_json(HTTPStatus.NOT_FOUND, {"error": "File not found."})
             return
-        allowed = False
-        for job in SERVICE.runtime_manager._jobs.values():
-            if job.record.owner_id != owner_id:
-                continue
-            for artifact in SERVICE.runtime_manager.list_job_artifacts(job.record.job_id, owner_id):
-                try:
-                    if resolved == Path(str(artifact.get("path") or "")).resolve(strict=True):
-                        allowed = True
-                        break
-                except FileNotFoundError:
+        # 属主自己的上传素材（素材库预览/打开/下载）直接放行
+        try:
+            resolved.relative_to(self._uploads_root(owner_id).resolve())
+            allowed = True
+        except ValueError:
+            allowed = False
+        if not allowed:
+            for job in SERVICE.runtime_manager._jobs.values():
+                if job.record.owner_id != owner_id:
                     continue
-            if allowed:
-                break
+                for artifact in SERVICE.runtime_manager.list_job_artifacts(job.record.job_id, owner_id):
+                    try:
+                        if resolved == Path(str(artifact.get("path") or "")).resolve(strict=True):
+                            allowed = True
+                            break
+                    except FileNotFoundError:
+                        continue
+                if allowed:
+                    break
         if not allowed:
             self._write_json(HTTPStatus.FORBIDDEN, {"error": "Requested file is not an artifact owned by this session."})
             return

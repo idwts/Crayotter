@@ -429,6 +429,8 @@
 | tests/test_e2e_byok_frontend.py | BYOK E2E：设置弹窗 API 来源切换、我的 API 保存/掩码重开、真实 agent 任务提交与 LLM 链路验证（截图输出 docs/worklogs/e2e-shots-byok）。 |
 | tests/test_e2e_change_password.py | 设置弹窗账号安全改密全链路 E2E（2026-08-11） |
 | tests/test_security_question_api.py | 密保问题 API 测试：注册可选密保/成对校验/查询问题/密保重置/恢复码通道回归（2026-08-17） |
+| tests/test_files_owner_api.py | /files 属主访问控制线上测试：本人上传素材 200/他人 403、本人任务产物 200/他人 403、新任务目录落在 JOBS_DIR/<owner>/ 下（8 步，2026-08-18） |
+| tests/test_job_tenant_dirs.py | RuntimeManager 租户目录单测：_job_dir_for 有属主嵌套/无属主扁平、_load_existing_jobs 同时兼容旧扁平与新属主子目录布局（3 项，2026-08-18） |
 | tests/test_e2e_security_question.py | 密保问题全链路 E2E：注册设密保→登出→密保找回→新密码登录（5 步截图，2026-08-17） |
 
 | tests/test_e2e_polling_cadence.py | 前端自适应轮询 smoke：注册后静置 45s 统计 GET /jobs 次数，验证空闲 30s 档（不建任务、零 LLM 成本）。 |
