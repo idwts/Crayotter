@@ -11,7 +11,7 @@ from playwright.sync_api import sync_playwright
 
 def main() -> int:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--base-url", default="http://8.161.229.68")
+    parser.add_argument("--base-url", default="https://8.161.229.68")
     parser.add_argument("--shots", default="docs/worklogs/e2e-shots-disclaimer")
     args = parser.parse_args()
     base = args.base_url.rstrip("/")
@@ -22,7 +22,8 @@ def main() -> int:
 
     with sync_playwright() as p:
         browser = p.chromium.launch(channel="msedge")
-        context = browser.new_context(viewport={"width": 1440, "height": 900})
+        context = browser.new_context(ignore_https_errors=True, viewport={"width": 1440, "height": 900})
+        context.add_init_script("localStorage.setItem('crayotter.onboardingDone.v1', '1')")
         page = context.new_page()
         page.on("pageerror", lambda exc: print(f"[pageerror] {exc}"))
 
@@ -31,6 +32,7 @@ def main() -> int:
         page.fill("#reg-username", username)
         page.fill("#reg-password", "DscPass123!")
         page.fill("#reg-confirm-password", "DscPass123!")
+        page.check("#reg-agree-terms")
         page.click("button[type=submit]")
         page.wait_for_selector("text=注册成功", timeout=15000)
         page.click("text=进入工作台")
@@ -65,7 +67,8 @@ def main() -> int:
 
         username_en = f"dse_{uuid.uuid4().hex[:8]}"
         session = http.Session()
-        resp = session.post(f"{base}/api/auth/register", json={"username": username_en, "password": "DscPass123!"}, timeout=30)
+        resp = session.post(f"{base}/api/auth/register", json={"username": username_en, "password": "DscPass123!",
+        "agree_terms": True}, timeout=30)
         assert resp.status_code in (200, 201), resp.text[:200]
         host = base.split("://", 1)[-1].split(":")[0]
         cookies = [
@@ -73,7 +76,7 @@ def main() -> int:
             for name, value in session.cookies.items()
         ]
         assert any(c["name"] == "crayotter_session" for c in cookies), "register did not set session cookie"
-        context_en = browser.new_context(viewport={"width": 1440, "height": 900})
+        context_en = browser.new_context(ignore_https_errors=True, viewport={"width": 1440, "height": 900})
         context_en.add_init_script("localStorage.setItem('crayotter.language', 'en')")
         context_en.add_cookies(cookies)
         page_en = context_en.new_page()

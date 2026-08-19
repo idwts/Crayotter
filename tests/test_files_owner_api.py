@@ -16,8 +16,14 @@ import sys
 import time
 
 import requests
+requests.packages.urllib3.disable_warnings()  # 自签证书
+_ORIG_SESSION_REQUEST = requests.Session.request
+def _insecure_session_request(self, *args, **kwargs):
+    kwargs.setdefault("verify", False)
+    return _ORIG_SESSION_REQUEST(self, *args, **kwargs)
+requests.Session.request = _insecure_session_request
 
-BASE = "http://8.161.229.68"
+BASE = "https://8.161.229.68"
 
 step = 0
 
@@ -34,7 +40,8 @@ def check(ok: bool, label: str) -> None:
 def new_user(tag: str) -> requests.Session:
     s = requests.Session()
     name = f"files_{tag}_{secrets.token_hex(3)}"
-    r = s.post(f"{BASE}/api/auth/register", json={"username": name, "password": "probePass123!"})
+    r = s.post(f"{BASE}/api/auth/register", json={"username": name, "password": "probePass123!",
+        "agree_terms": True})
     assert r.status_code == 201, r.text
     return s
 

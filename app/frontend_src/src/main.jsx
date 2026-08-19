@@ -14,6 +14,8 @@ import {
 import { SettingsModal as RedesignedSettingsModal } from "./components/SettingsModal";
 import { ConfirmDialog, ToastViewport } from "./components/FeedbackUI";
 import { LoginPage, RegisterPage, ResetPasswordPage } from "./components/AuthPages";
+import { UserAgreementPage, TechOverviewPage } from "./components/InfoPages";
+import { OnboardingDialog } from "./components/OnboardingDialog";
 import { MESSAGES } from "./i18n";
 import {
   getHighestPhase,
@@ -144,10 +146,23 @@ function App() {
   const [language, setLanguage] = useState(() => localStorage.getItem(STORAGE_KEYS.language) || "zh");
   const [authUser, setAuthUser] = useState(null);
   const [authView, setAuthView] = useState("login");
+  const [authReturnView, setAuthReturnView] = useState("login");
+  const [onboardingOpen, setOnboardingOpen] = useState(false);
   const [authLoading, setAuthLoading] = useState(true);
   const [jobs, setJobs] = useState([]);
   const jobsRef = useRef([]);
   useEffect(() => { jobsRef.current = jobs; }, [jobs]);
+
+  useEffect(() => {
+    if (authUser && !localStorage.getItem("crayotter.onboardingDone.v1")) {
+      setOnboardingOpen(true);
+    }
+  }, [authUser]);
+
+  const closeOnboarding = useCallback(() => {
+    localStorage.setItem("crayotter.onboardingDone.v1", "1");
+    setOnboardingOpen(false);
+  }, []);
   const [uploads, setUploads] = useState([]);
   const [selectedJobId, setSelectedJobId] = useState(null);
   const [selectedJob, setSelectedJob] = useState(null);
@@ -1284,6 +1299,16 @@ function App() {
   if (!authUser) {
     // 认证页也需要 ToastViewport，否则登录/注册/重置失败时 notify 无处渲染（静默失败）
     const authToasts = <ToastViewport toasts={toasts} dismissToast={dismissToast} />;
+    if (authView === "agreement") {
+      return (
+        <>
+          <div className="min-h-screen">
+            <UserAgreementPage t={t} onBack={() => setAuthView(authReturnView)} />
+          </div>
+          {authToasts}
+        </>
+      );
+    }
     if (authView === "register") {
       return (
         <>
@@ -1292,6 +1317,7 @@ function App() {
             notify={notify}
             onRegister={(user) => setAuthUser(user)}
             onSwitchToLogin={() => setAuthView("login")}
+            onOpenAgreement={() => { setAuthReturnView("register"); setAuthView("agreement"); }}
           />
           {authToasts}
         </>
@@ -1318,6 +1344,7 @@ function App() {
           onLogin={(user) => setAuthUser(user)}
           onSwitchToRegister={() => setAuthView("register")}
           onSwitchToReset={() => setAuthView("reset")}
+          onOpenAgreement={() => { setAuthReturnView("login"); setAuthView("agreement"); }}
         />
         {authToasts}
       </>
@@ -1400,6 +1427,7 @@ function App() {
         t={t}
         authUser={authUser}
         onLogout={handleLogout}
+        onOpenGuide={() => setOnboardingOpen(true)}
       />
 
       <div className="grid min-h-0 min-w-0 grid-rows-[auto_minmax(0,1fr)]">
@@ -1468,6 +1496,16 @@ function App() {
             />
           )}
           {currentView === "materials" && <MaterialsView {...materialsProps} />}
+          {currentView === "agreement" && (
+            <div className="h-full overflow-y-auto">
+              <UserAgreementPage t={t} onBack={() => setCurrentView("workbench")} />
+            </div>
+          )}
+          {currentView === "tech" && (
+            <div className="h-full overflow-y-auto">
+              <TechOverviewPage t={t} onBack={() => setCurrentView("workbench")} />
+            </div>
+          )}
           {currentView === "artifacts" && (
             <ArtifactsView
               artifacts={primaryArtifacts}
@@ -1499,6 +1537,7 @@ function App() {
         t={t}
       />
       <MobileBottomNav currentView={currentView} setCurrentView={setCurrentView} t={t} />
+      {onboardingOpen && <OnboardingDialog t={t} onDone={closeOnboarding} />}
 
       {settingsOpen && (
         <RedesignedSettingsModal

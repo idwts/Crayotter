@@ -56,7 +56,7 @@ def click_action_with_retry(page, button_text: str, task_hint: str, target: str,
 
 def main() -> int:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--base-url", default="http://8.161.229.68")
+    parser.add_argument("--base-url", default="https://8.161.229.68")
     parser.add_argument("--shots", default="docs/worklogs/e2e-shots-lifecycle")
     parser.add_argument("--byok-key", required=True)
     args = parser.parse_args()
@@ -69,7 +69,8 @@ def main() -> int:
 
     with sync_playwright() as p:
         browser = p.chromium.launch(channel="msedge")
-        context = browser.new_context(viewport={"width": 1440, "height": 900})
+        context = browser.new_context(ignore_https_errors=True, viewport={"width": 1440, "height": 900})
+        context.add_init_script("localStorage.setItem('crayotter.onboardingDone.v1', '1')")
         page = context.new_page()
         page.on("pageerror", lambda exc: print(f"[pageerror] {exc}"))
         page.on("console", lambda msg: print(f"[console:{msg.type}] {msg.text}") if msg.type in ("error", "warning") else None)
@@ -81,6 +82,7 @@ def main() -> int:
         page.fill("#reg-username", username)
         page.fill("#reg-password", password)
         page.fill("#reg-confirm-password", password)
+        page.check("#reg-agree-terms")
         page.click("button[type=submit]")
         page.wait_for_selector("text=注册成功", timeout=15000)
         page.click("text=进入工作台")

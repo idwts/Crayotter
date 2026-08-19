@@ -80,6 +80,7 @@ export function AppSidebar({
   t,
   authUser,
   onLogout,
+  onOpenGuide,
 }) {
   return (
     <aside
@@ -155,6 +156,15 @@ export function AppSidebar({
         )}
 
         <div className="mt-auto grid gap-1.5 border-t border-slate-100 pt-3">
+          {!collapsed && (
+            <div className="flex items-center gap-2 px-3 pb-1 text-[11px] text-slate-400">
+              <button type="button" className="hover:text-app-brand" onClick={onOpenGuide}>{t("onboardingGuide")}</button>
+              <span>·</span>
+              <button type="button" className="hover:text-app-brand" onClick={() => setCurrentView("agreement")}>{t("userAgreement")}</button>
+              <span>·</span>
+              <button type="button" className="hover:text-app-brand" onClick={() => setCurrentView("tech")}>{t("techOverview")}</button>
+            </div>
+          )}
           {!collapsed && authUser && (
             <div className="px-3 pb-1 text-xs text-slate-500">
               {authUser.username}

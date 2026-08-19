@@ -15,19 +15,26 @@ import sys
 import uuid
 
 import requests
+requests.packages.urllib3.disable_warnings()  # 自签证书
+_ORIG_SESSION_REQUEST = requests.Session.request
+def _insecure_session_request(self, *args, **kwargs):
+    kwargs.setdefault("verify", False)
+    return _ORIG_SESSION_REQUEST(self, *args, **kwargs)
+requests.Session.request = _insecure_session_request
 
 sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
 
 def main() -> int:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--base-url", default="http://8.161.229.68")
+    parser.add_argument("--base-url", default="https://8.161.229.68")
     args = parser.parse_args()
     base = args.base_url.rstrip("/")
 
     session = requests.Session()
     username = f"hard_{uuid.uuid4().hex[:8]}"
-    resp = session.post(f"{base}/api/auth/register", json={"username": username, "password": "Hard123456"}, timeout=15)
+    resp = session.post(f"{base}/api/auth/register", json={"username": username, "password": "Hard123456",
+        "agree_terms": True}, timeout=15)
     assert resp.status_code == 201, f"register failed: {resp.status_code}"
     print("[PASS] 00 registered")
 

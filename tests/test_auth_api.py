@@ -71,20 +71,20 @@ def main() -> int:
     import uuid
     username = f"tester_{uuid.uuid4().hex[:8]}"
     password = "TestPass123!"
-    status, data = request(base, "POST", "/api/auth/register", {"username": username, "password": password})
+    status, data = request(base, "POST", "/api/auth/register", {"username": username, "password": password, "agree_terms": True})
     assert status == 201, f"register failed: {status} {data}"
     assert "user" in data and "recovery_codes" in data, f"register response malformed: {data}"
     recovery_code = data["recovery_codes"][0]
     print(f"[PASS] /api/auth/register created user {username}")
 
     # 4. 重复注册应失败
-    status, data = request(base, "POST", "/api/auth/register", {"username": username, "password": password})
+    status, data = request(base, "POST", "/api/auth/register", {"username": username, "password": password, "agree_terms": True})
     assert status == 400, f"duplicate register should fail: {status} {data}"
     print("[PASS] duplicate register rejected")
 
     # 5. 登录（使用 cookie jar 保持 session）
     jar = CookieJar()
-    status, login_data = request(base, "POST", "/api/auth/login", {"username": username, "password": password}, jar=jar)
+    status, login_data = request(base, "POST", "/api/auth/login", {"username": username, "password": password, "agree_terms": True}, jar=jar)
     assert status == 200, f"login failed: {status} {login_data}"
     assert login_data["user"]["username"] == username
     print("[PASS] /api/auth/login succeeded")
@@ -111,7 +111,7 @@ def main() -> int:
     print("[PASS] /api/auth/password changed")
 
     # 9. 旧密码登录应失败，新密码成功
-    status, data = request(base, "POST", "/api/auth/login", {"username": username, "password": password})
+    status, data = request(base, "POST", "/api/auth/login", {"username": username, "password": password, "agree_terms": True})
     assert status == 400, f"old password should fail: {status} {data}"
     status, data = request(base, "POST", "/api/auth/login", {"username": username, "password": new_password})
     assert status == 200, f"new password login failed: {status} {data}"

@@ -61,6 +61,8 @@
 | app/frontend_src/postcss.config.js | export default { |
 
 | app/frontend_src/src/components/AuthPages.jsx | 认证页面组件：LoginPage（记住我/记住用户名）/RegisterPage/ResetPasswordPage + Field 复用表单组件。 |
+| app/frontend_src/src/components/InfoPages.jsx | 信息页组件：UserAgreementPage（用户协议占位，内容开发中）/TechOverviewPage（技术概览占位），认证流与应用内视图共用。 |
+| app/frontend_src/src/components/OnboardingDialog.jsx | 首次登录使用引导：五步轮播（工作台/素材库/任务历史/产物中心/我的 API），localStorage 标记，侧栏可重开。 |
 
 | app/frontend_src/src/components/DashboardUI.jsx | import React, { useEffect, useRef, useState } from "react"; |
 

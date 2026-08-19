@@ -10,7 +10,7 @@
 |------|------|
 | 方法 | `POST` |
 | URL | `/api/auth/register` |
-| 请求体 | `{ username, password, security_question?, security_answer? }`；密保可选但问题与答案必须成对（2026-08-17 起） |
+| 请求体 | `{ username, password, security_question?, security_answer?, agree_terms }`；密保可选但问题与答案必须成对（2026-08-17 起）；`agree_terms` 必传 true，未同意用户协议 400（2026-08-19 起） |
 | 响应 201 | `{ user, tenant, recovery_codes }`；2026-08-02 起同时 `Set-Cookie: crayotter_auth_session`（注册即登录） |
 | 调用位置 | AuthPages.jsx `RegisterPage.submit` |
 
@@ -20,7 +20,7 @@
 |------|------|
 | 方法 | `POST` |
 | URL | `/api/auth/login` |
-| 请求体 | `{ username, password, remember_me }` |
+| 请求体 | `{ username, password, remember_me, agree_terms }`；`agree_terms` 必传 true，未同意 400（2026-08-19 起） |
 | 响应 200 | `{ user, expires_at }`，`Set-Cookie: crayotter_auth_session`；`remember_me=true` 时追加 `Set-Cookie: crayotter_remember`（30 天，HttpOnly+SameSite=Lax） |
 | 调用位置 | AuthPages.jsx `LoginPage.submit` |
 
@@ -256,6 +256,14 @@
 | 行为 | 纯前端功能，无新接口：任务历史详情「用作模板」按钮读取 JobRecord 的 `task/mode/enable_phase2_research/enable_plan_review/direct_phase3_execution/prefer_local_materials`，套用进创作面板草稿与创作选项并跳转工作台，用户确认后仍走 3.2 `POST /jobs` 创建 |
 | 键值 | `useAsTemplate` / `templateApplied` |
 | 调用位置 | main.jsx `useJobAsTemplate`、DashboardUI.jsx JobsView 详情操作区（2026-08-17 新增） |
+
+### 3.8a 使用引导与信息页（2026-08-19 新增）
+
+| 项目 | 内容 |
+|------|------|
+| 行为 | 首次登录自动弹出使用引导（OnboardingDialog 五步轮播：工作台/素材库/任务历史/产物中心/我的 API），完成或跳过写 `localStorage["crayotter.onboardingDone.v1"]="1"`；侧栏底部「使用引导 · 《用户协议》 · 技术概览」三个入口可随时重开 |
+| 信息页 | 用户协议/技术概览为占位页（内容开发中），登录前经登录/注册页《用户协议》链接打开（authView=agreement），登录后经侧栏 currentView=agreement/tech 打开；登录与注册必须勾选「我已阅读并同意《用户协议》」否则前端拦截+后端 400 |
+| 调用位置 | main.jsx（onboardingOpen/authReturnView 状态）、OnboardingDialog.jsx、InfoPages.jsx、AuthPages.jsx 勾选框 |
 
 ### 3.9 标签页标题状态
 

@@ -14,7 +14,7 @@ from playwright.sync_api import sync_playwright
 
 def main() -> int:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--base-url", default="http://8.161.229.68")
+    parser.add_argument("--base-url", default="https://8.161.229.68")
     parser.add_argument("--observe-seconds", type=int, default=45)
     args = parser.parse_args()
     base = args.base_url.rstrip("/")
@@ -32,6 +32,7 @@ def main() -> int:
         page.fill("#reg-username", username)
         page.fill("#reg-password", "PollPass123!")
         page.fill("#reg-confirm-password", "PollPass123!")
+        page.check("#reg-agree-terms")
         page.click("button[type=submit]")
         page.wait_for_selector("text=注册成功", timeout=15000)
         page.click("text=进入工作台")

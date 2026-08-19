@@ -25,19 +25,21 @@
 
 ### 组件名：Nginx HTTPS 配置
 - **负责人**：待定
-- **状态**：未开始
+- **状态**：已完成（自签 IP 证书过渡）
 - **关联文档**：[server-survey.md](./server-survey.md)
 - **已做**：
   - [x] 调研：当前 Nginx 仅监听 80，client_max_body_size 64k
+  - [x] 尝试 Let's Encrypt IP 证书：生产环境仍拒发 bare IP（shortlived profile 也不行）
+  - [x] 尝试 sslip.io 魔术域名证书：阿里云 ICP 拦截域名访问（403 Non-compliance ICP Filing），不可行
+  - [x] 自签 IP 证书（10 年，SAN=IP:8.161.229.68，/etc/ssl/）+ nginx 443 ssl + 80→308 跳转
+  - [x] ufw 放行 443（外网不通的根因，非安全组）
+  - [x] CRAYOTTER_COOKIE_SECURE=1 写入 systemd 主单元
 - **待做**：
-  - [ ] 申请 Let's Encrypt 短期 IP 证书
-  - [ ] 配置 443 与 80→443 跳转
-  - [ ] 将 client_max_body_size 改为 500m
-  - [ ] 配置证书自动续期
+  - [ ] 长期：购买域名 + ICP 备案后换 CA 签名证书（当前自签证书浏览器有警告，需手动信任）
 - **关键决策**：
-  - 短期使用 IP 证书，暂不使用域名证书。
+  - 无域名无备案的现实约束下，自签 IP 证书是唯一可用的 HTTPS 方案；加密有效，浏览器警告为已知妥协。
 - **阻塞/风险**：
-  - Let's Encrypt 对 IP 证书支持有限，可能需要 ZeroSSL 或自签过渡。
+  - 自签证书不被浏览器信任；备案前无法获得 CA 签名证书。
 
 ### 组件名：账号认证（注册/登录/注销/改密/恢复码）
 - **负责人**：待定
@@ -190,3 +192,4 @@
 | 2026-08-17 | Claude | 任务模板/一键复跑：任务历史详情操作区新增「用作模板」按钮（Copy 图标），点击后将该 JobRecord 的 task/mode/四个创作选项套用进创作面板草稿与选项并聚焦输入框，用户调整后发送——纯前端功能无新接口（复用 POST /jobs）；i18n `useAsTemplate`/`templateApplied`；E2E 4 步截图全过（含 Phase2 关/本地素材开的选项断言）。开发中发现并处理：demo 模式 ASCII 任务标题在 UI 显示为本地化「演示任务」。 |
 | 2026-08-17 | Claude | 可选密保问题找回通道：注册页新增可选密保问题+答案（必须成对，答案仅存 SHA-256 摘要且小写去空格归一，migration 005 users 加两列）；忘记密码页改为「恢复码找回/密保问题找回」双 tab，密保通道输入用户名失焦自动查询问题（GET /api/auth/security-question，无需登录），重置复用 POST /api/auth/reset 单端点双通道（security_answer 非空即走密保校验）并与登录共用失败锁定；重置成功同样吊销全部 session+remember token。验证：API 8 步（含归一化/成对校验/恢复码回归）+ E2E 5 步截图全过；部署时发现 cd 路径致 deploy 脚本 uploaded 0 files 的静默未部署，已核对线上资源 hash 修正。文档：frontend-messages §0.1/0.3/0.3a、backend-apis、directory-tree 同步。 |
 | 2026-08-18 | Claude | 多用户数据隔离两项（按用户指示只部署不提交）：①/files 属主校验补全——探针实证素材库上传文件预览在 public 模式下一律 403（artifact 白名单不含上传素材），修复为放行 `public_uploads/<owner>/` 前缀，他人上传/产物仍 403；②RuntimeManager 任务目录物理隔离——`_job_dir_for` 使新任务落 `JOBS_DIR/<owner_id>/<job_id>/`，`_load_existing_jobs` 兼容旧扁平+新嵌套双布局（零迁移），janitor/LRU 基于内存索引不受影响。单测 3 项 + 线上 8 步矩阵全过；janitor/LRU 回归全过。另完成移动端触控目标修复（≤720px 旧规则把 composer 控件压到 30/34px，层叠末尾恢复 44px，375px 实测 send 44×44/选项 106×44/模式 112×44）。文档：backend-apis /files 行、AGENTS.md jobs 目录说明、directory-tree 两条目。 |
+| 2026-08-19 | Claude | HTTPS + 协议/引导：①HTTPS 上线（自签 IP 证书，443+80→308 跳转，ufw 放行，COOKIE_SECURE=1；LE 拒发 IP 证书、sslip 域名被阿里云 ICP 拦截，决策记录于 Nginx 组件块）；②用户协议/技术概览占位页（InfoPages.jsx，登录前 authView + 应用内 currentView 双入口，侧栏底部三链接）；③登录/注册必须勾选同意《用户协议》（前端校验 + 后端 agree_terms 必传 true 否则 400）；④首次登录使用引导（OnboardingDialog 五步轮播，localStorage 标记，侧栏可重开）。验证：agree API 5 步 + onboarding E2E 8 步截图全过；全量测试 https+自签适配（verify=False/ignore_https_errors/onboarding 标记注入），密保 API 8+E2E 5、files owner 8、hardening、auth frontend 13 步回归全过。 |

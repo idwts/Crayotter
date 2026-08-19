@@ -7,7 +7,7 @@ from pathlib import Path
 
 from playwright.sync_api import sync_playwright
 
-BASE = "http://8.161.229.68"
+BASE = "https://8.161.229.68"
 SHOTS = Path("docs/worklogs/e2e-shots-security-question")
 
 
@@ -20,7 +20,8 @@ def main() -> int:
 
     with sync_playwright() as p:
         browser = p.chromium.launch(channel="msedge")
-        page = browser.new_context(viewport={"width": 1280, "height": 800}).new_page()
+        page = browser.new_context(ignore_https_errors=True, viewport={"width": 1280, "height": 800}).new_page()
+        page.add_init_script("localStorage.setItem('crayotter.onboardingDone.v1', '1')")
         page.goto(f"{BASE}/ui/")
         page.wait_for_timeout(2000)
 
@@ -32,6 +33,7 @@ def main() -> int:
         page.fill("#reg-confirm-password", "Sq12345678")
         page.fill("#reg-security-question", question)
         page.fill("#reg-security-answer", answer)
+        page.check("#reg-agree-terms")
         page.screenshot(path=str(SHOTS / "01-register-form.png"))
         page.click('button:has-text("注册")')
         page.wait_for_timeout(2000)
@@ -71,6 +73,7 @@ def main() -> int:
         # 4. 新密码登录
         page.fill("#username", username)
         page.fill("#password", new_password)
+        page.check("#login-agree-terms")
         page.click('button:has-text("登录")')
         page.wait_for_timeout(2500)
         page.screenshot(path=str(SHOTS / "05-logged-in.png"))

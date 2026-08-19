@@ -13,10 +13,16 @@ import sys
 import uuid
 
 import requests
+requests.packages.urllib3.disable_warnings()  # 自签证书
+_ORIG_SESSION_REQUEST = requests.Session.request
+def _insecure_session_request(self, *args, **kwargs):
+    kwargs.setdefault("verify", False)
+    return _ORIG_SESSION_REQUEST(self, *args, **kwargs)
+requests.Session.request = _insecure_session_request
 
 sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
-BASE = "http://8.161.229.68"
+BASE = "https://8.161.229.68"
 PASSWORD = "SecTest12345"
 
 
@@ -34,25 +40,30 @@ def main() -> int:
     # --- 登录失败锁定 ---
     username = f"lock_{uuid.uuid4().hex[:8]}"
     s = requests.Session()
-    r = s.post(f"{BASE}/api/auth/register", json={"username": username, "password": PASSWORD}, timeout=15)
+    r = s.post(f"{BASE}/api/auth/register", json={"username": username, "password": PASSWORD,
+        "agree_terms": True}, timeout=15)
     check("注册测试账号", r.status_code == 201, str(r.status_code))
 
     anon = requests.Session()  # 不带凭据的会话做爆破
     last = None
     for i in range(5):
-        last = anon.post(f"{BASE}/api/auth/login", json={"username": username, "password": "wrong-pass-1"}, timeout=15)
+        last = anon.post(f"{BASE}/api/auth/login", json={"username": username, "password": "wrong-pass-1",
+        "agree_terms": True}, timeout=15)
     check("前 5 次错误登录返回 400", last is not None and last.status_code == 400, str(last.status_code if last else None))
 
-    r = anon.post(f"{BASE}/api/auth/login", json={"username": username, "password": "wrong-pass-1"}, timeout=15)
+    r = anon.post(f"{BASE}/api/auth/login", json={"username": username, "password": "wrong-pass-1",
+        "agree_terms": True}, timeout=15)
     body = r.json() if r.headers.get("content-type", "").startswith("application/json") else {}
     check("第 6 次登录 429 + retry_after", r.status_code == 429 and body.get("retry_after", 0) > 0, f"{r.status_code} retry_after={body.get('retry_after')}")
 
-    r = anon.post(f"{BASE}/api/auth/login", json={"username": username, "password": PASSWORD}, timeout=15)
+    r = anon.post(f"{BASE}/api/auth/login", json={"username": username, "password": PASSWORD,
+        "agree_terms": True}, timeout=15)
     check("锁定期间正确密码也 429", r.status_code == 429, str(r.status_code))
 
     # --- 恢复码重置共享锁定器（用新账号避免与上面锁定键冲突） ---
     username2 = f"lock_{uuid.uuid4().hex[:8]}"
-    r = requests.post(f"{BASE}/api/auth/register", json={"username": username2, "password": PASSWORD}, timeout=15)
+    r = requests.post(f"{BASE}/api/auth/register", json={"username": username2, "password": PASSWORD,
+        "agree_terms": True}, timeout=15)
     check("注册第二个测试账号", r.status_code == 201, str(r.status_code))
     last = None
     for _ in range(5):
@@ -64,7 +75,8 @@ def main() -> int:
     # --- 改密全链路 ---
     username3 = f"pw_{uuid.uuid4().hex[:8]}"
     s3 = requests.Session()
-    r = s3.post(f"{BASE}/api/auth/register", json={"username": username3, "password": PASSWORD}, timeout=15)
+    r = s3.post(f"{BASE}/api/auth/register", json={"username": username3, "password": PASSWORD,
+        "agree_terms": True}, timeout=15)
     check("注册改密账号", r.status_code == 201, str(r.status_code))
 
     r = s3.post(f"{BASE}/api/auth/password", json={"old_password": "wrong-old-1", "new_password": "NewPass12345"}, timeout=15)
@@ -79,10 +91,12 @@ def main() -> int:
     r = s3.get(f"{BASE}/api/auth/me", timeout=15)
     check("改密后旧 session 失效 → 401", r.status_code == 401, str(r.status_code))
 
-    r = requests.post(f"{BASE}/api/auth/login", json={"username": username3, "password": PASSWORD}, timeout=15)
+    r = requests.post(f"{BASE}/api/auth/login", json={"username": username3, "password": PASSWORD,
+        "agree_terms": True}, timeout=15)
     check("旧密码登录 → 400", r.status_code == 400, str(r.status_code))
 
-    r = requests.post(f"{BASE}/api/auth/login", json={"username": username3, "password": "NewPass12345"}, timeout=15)
+    r = requests.post(f"{BASE}/api/auth/login", json={"username": username3, "password": "NewPass12345",
+        "agree_terms": True}, timeout=15)
     check("新密码登录 → 200", r.status_code == 200, str(r.status_code))
 
     print(f"\n== {'ALL PASS' if failures == 0 else f'{failures} FAILURES'} ==")

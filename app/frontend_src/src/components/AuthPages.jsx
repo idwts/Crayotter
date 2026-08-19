@@ -53,7 +53,7 @@ function Field({
 
 const REMEMBERED_USERNAME_KEY = "crayotter.rememberedUsername";
 
-export function LoginPage({ onLogin, onSwitchToRegister, onSwitchToReset, t, notify }) {
+export function LoginPage({ onLogin, onSwitchToRegister, onSwitchToReset, onOpenAgreement, t, notify }) {
   const [username, setUsername] = useState(() => localStorage.getItem(REMEMBERED_USERNAME_KEY) || "");
   const [password, setPassword] = useState("");
   const [showPassword, setShowPassword] = useState(false);
@@ -61,6 +61,7 @@ export function LoginPage({ onLogin, onSwitchToRegister, onSwitchToReset, t, not
   const [rememberUsername, setRememberUsername] = useState(() =>
     Boolean(localStorage.getItem(REMEMBERED_USERNAME_KEY))
   );
+  const [agreeTerms, setAgreeTerms] = useState(false);
   const [busy, setBusy] = useState(false);
   const [errors, setErrors] = useState({});
 
@@ -68,6 +69,7 @@ export function LoginPage({ onLogin, onSwitchToRegister, onSwitchToReset, t, not
     const next = {};
     if (!username.trim()) next.username = t("fieldRequired");
     if (!password) next.password = t("fieldRequired");
+    if (!agreeTerms) next.agreeTerms = t("agreeTermsRequired");
     setErrors(next);
     return Object.keys(next).length === 0;
   };
@@ -84,6 +86,7 @@ export function LoginPage({ onLogin, onSwitchToRegister, onSwitchToReset, t, not
           username: username.trim(),
           password,
           remember_me: rememberMe,
+          agree_terms: agreeTerms,
         }),
       });
       const data = await response.json();
@@ -151,6 +154,28 @@ export function LoginPage({ onLogin, onSwitchToRegister, onSwitchToReset, t, not
               />
               {t("rememberUsername")}
             </label>
+          </div>
+          <div className="text-sm text-app-soft">
+            <label className="flex items-center gap-2 cursor-pointer">
+              <input
+                id="login-agree-terms"
+                type="checkbox"
+                checked={agreeTerms}
+                onChange={(e) => setAgreeTerms(e.target.checked)}
+                className="h-4 w-4 accent-app-brand"
+              />
+              <span>
+                {t("agreeTermsPrefix")}
+                <button
+                  type="button"
+                  onClick={onOpenAgreement}
+                  className="font-medium text-app-brand hover:underline"
+                >
+                  {t("userAgreement")}
+                </button>
+              </span>
+            </label>
+            {errors.agreeTerms && <p className="mt-1 text-sm text-app-danger">{errors.agreeTerms}</p>}
           </div>
           <button
             type="submit"
@@ -374,12 +399,13 @@ export function ResetPasswordPage({ onDone, onBackToLogin, t, notify }) {
   );
 }
 
-export function RegisterPage({ onRegister, onSwitchToLogin, t, notify }) {
+export function RegisterPage({ onRegister, onSwitchToLogin, onOpenAgreement, t, notify }) {
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
   const [securityQuestion, setSecurityQuestion] = useState("");
   const [securityAnswer, setSecurityAnswer] = useState("");
+  const [agreeTerms, setAgreeTerms] = useState(false);
   const [showPassword, setShowPassword] = useState(false);
   const [busy, setBusy] = useState(false);
   const [errors, setErrors] = useState({});
@@ -395,6 +421,7 @@ export function RegisterPage({ onRegister, onSwitchToLogin, t, notify }) {
     // 密保可选，但问题与答案必须成对填写
     if (securityQuestion.trim() && !securityAnswer.trim()) next.securityAnswer = t("securityAnswerRequired");
     if (!securityQuestion.trim() && securityAnswer.trim()) next.securityQuestion = t("securityQuestionRequired");
+    if (!agreeTerms) next.agreeTerms = t("agreeTermsRequired");
     setErrors(next);
     return Object.keys(next).length === 0;
   };
@@ -404,7 +431,7 @@ export function RegisterPage({ onRegister, onSwitchToLogin, t, notify }) {
     if (!validate()) return;
     setBusy(true);
     try {
-      const body = { username: username.trim(), password };
+      const body = { username: username.trim(), password, agree_terms: agreeTerms };
       if (securityQuestion.trim()) {
         body.security_question = securityQuestion.trim();
         body.security_answer = securityAnswer.trim();
@@ -508,6 +535,28 @@ export function RegisterPage({ onRegister, onSwitchToLogin, t, notify }) {
             placeholder={t("securityAnswerPlaceholder")}
             error={errors.securityAnswer}
           />
+          <div className="text-sm text-app-soft">
+            <label className="flex items-center gap-2 cursor-pointer">
+              <input
+                id="reg-agree-terms"
+                type="checkbox"
+                checked={agreeTerms}
+                onChange={(e) => setAgreeTerms(e.target.checked)}
+                className="h-4 w-4 accent-app-brand"
+              />
+              <span>
+                {t("agreeTermsPrefix")}
+                <button
+                  type="button"
+                  onClick={onOpenAgreement}
+                  className="font-medium text-app-brand hover:underline"
+                >
+                  {t("userAgreement")}
+                </button>
+              </span>
+            </label>
+            {errors.agreeTerms && <p className="mt-1 text-sm text-app-danger">{errors.agreeTerms}</p>}
+          </div>
           <button
             type="submit"
             disabled={busy}

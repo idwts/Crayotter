@@ -307,6 +307,7 @@ class BackendHandler(BaseHTTPRequestHandler):
                     user_agent=self._client_user_agent(),
                     security_question=payload.get("security_question"),
                     security_answer=payload.get("security_answer"),
+                    agree_terms=bool(payload.get("agree_terms")),
                 )
                 # 注册成功后自动建立会话，前端可直接进入工作台
                 session_token, _ = auth_service.create_session(
@@ -328,6 +329,7 @@ class BackendHandler(BaseHTTPRequestHandler):
                         remember_me=bool(payload.get("remember_me")),
                         ip_address=self._client_ip(),
                         user_agent=self._client_user_agent(),
+                        agree_terms=bool(payload.get("agree_terms")),
                     )
                 except ValueError:
                     auth_service.login_lockout.record_failure(throttle_key)

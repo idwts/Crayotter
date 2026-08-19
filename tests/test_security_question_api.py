@@ -5,8 +5,14 @@ import sys
 import uuid
 
 import requests
+requests.packages.urllib3.disable_warnings()  # 自签证书
+_ORIG_SESSION_REQUEST = requests.Session.request
+def _insecure_session_request(self, *args, **kwargs):
+    kwargs.setdefault("verify", False)
+    return _ORIG_SESSION_REQUEST(self, *args, **kwargs)
+requests.Session.request = _insecure_session_request
 
-BASE = "http://8.161.229.68"
+BASE = "https://8.161.229.68"
 
 
 def main() -> int:
@@ -16,7 +22,8 @@ def main() -> int:
 
     # 1. 注册不带密保 → question 为 null
     u0 = f"sq0_{uuid.uuid4().hex[:8]}"
-    r = s.post(f"{BASE}/api/auth/register", json={"username": u0, "password": "Sq12345678"}, timeout=15)
+    r = s.post(f"{BASE}/api/auth/register", json={"username": u0, "password": "Sq12345678",
+        "agree_terms": True}, timeout=15)
     assert r.status_code == 201, r.text
     r = requests.get(f"{BASE}/api/auth/security-question", params={"username": u0}, timeout=15)
     assert r.status_code == 200 and r.json()["question"] is None, r.text
@@ -26,7 +33,7 @@ def main() -> int:
     r = s.post(f"{BASE}/api/auth/register", json={
         "username": u, "password": "Sq12345678",
         "security_question": q, "security_answer": a,
-    }, timeout=15)
+        "agree_terms": True}, timeout=15)
     assert r.status_code == 201, r.text
     print("[PASS] 02 register with security question")
 
@@ -34,7 +41,7 @@ def main() -> int:
     u_bad = f"sqb_{uuid.uuid4().hex[:8]}"
     r = requests.post(f"{BASE}/api/auth/register", json={
         "username": u_bad, "password": "Sq12345678", "security_question": q,
-    }, timeout=15)
+        "agree_terms": True}, timeout=15)
     assert r.status_code == 400, r.text
     print("[PASS] 03 question without answer → 400")
 
@@ -57,7 +64,8 @@ def main() -> int:
     assert r.status_code == 200, r.text
     print("[PASS] 06 correct answer reset → 200")
 
-    r = requests.post(f"{BASE}/api/auth/login", json={"username": u, "password": "SqNewPass99"}, timeout=15)
+    r = requests.post(f"{BASE}/api/auth/login", json={"username": u, "password": "SqNewPass99",
+        "agree_terms": True}, timeout=15)
     assert r.status_code == 200, r.text
     print("[PASS] 07 login with new password")
 

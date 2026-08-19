@@ -8,17 +8,24 @@ import argparse
 import uuid
 
 import requests
+requests.packages.urllib3.disable_warnings()  # 自签证书
+_ORIG_SESSION_REQUEST = requests.Session.request
+def _insecure_session_request(self, *args, **kwargs):
+    kwargs.setdefault("verify", False)
+    return _ORIG_SESSION_REQUEST(self, *args, **kwargs)
+requests.Session.request = _insecure_session_request
 
 
 def main() -> int:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--base-url", default="http://8.161.229.68")
+    parser.add_argument("--base-url", default="https://8.161.229.68")
     args = parser.parse_args()
     base = args.base_url.rstrip("/")
 
     username = f"chk_{uuid.uuid4().hex[:8]}"
     s = requests.Session()
-    r = s.post(f"{base}/api/auth/register", json={"username": username, "password": "ChkPass123!"}, timeout=30)
+    r = s.post(f"{base}/api/auth/register", json={"username": username, "password": "ChkPass123!",
+        "agree_terms": True}, timeout=30)
     assert r.status_code in (200, 201), r.text[:200]
 
     # 故意造 2 个分片：服务器 chunk_size 默认 1MB，这里用 1.5MB 内容确保分 2 片

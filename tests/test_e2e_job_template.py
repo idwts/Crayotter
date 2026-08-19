@@ -6,9 +6,15 @@ import uuid
 from pathlib import Path
 
 import requests
+requests.packages.urllib3.disable_warnings()  # 自签证书
+_ORIG_SESSION_REQUEST = requests.Session.request
+def _insecure_session_request(self, *args, **kwargs):
+    kwargs.setdefault("verify", False)
+    return _ORIG_SESSION_REQUEST(self, *args, **kwargs)
+requests.Session.request = _insecure_session_request
 from playwright.sync_api import sync_playwright
 
-BASE = "http://8.161.229.68"
+BASE = "https://8.161.229.68"
 SHOTS = Path("docs/worklogs/e2e-shots-job-template")
 TASK_TEXT = "demo template validation job"
 
@@ -17,7 +23,8 @@ def main() -> int:
     SHOTS.mkdir(parents=True, exist_ok=True)
     username = f"tpl_{uuid.uuid4().hex[:8]}"
     s = requests.Session()
-    r = s.post(f"{BASE}/api/auth/register", json={"username": username, "password": "Tpl123456"}, timeout=15)
+    r = s.post(f"{BASE}/api/auth/register", json={"username": username, "password": "Tpl123456",
+        "agree_terms": True}, timeout=15)
     assert r.status_code == 201, r.text
     r = s.post(f"{BASE}/jobs", json={
         "task": TASK_TEXT, "mode": "demo",
@@ -31,7 +38,8 @@ def main() -> int:
 
     with sync_playwright() as p:
         browser = p.chromium.launch(channel="msedge")
-        ctx = browser.new_context(viewport={"width": 1280, "height": 800})
+        ctx = browser.new_context(ignore_https_errors=True, viewport={"width": 1280, "height": 800})
+        ctx.add_init_script("localStorage.setItem('crayotter.onboardingDone.v1', '1')")
         for k, v in cookies.items():
             ctx.add_cookies([{"name": k, "value": v, "url": BASE}])
         page = ctx.new_page()

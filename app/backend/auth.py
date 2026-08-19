@@ -172,8 +172,11 @@ def register(
     user_agent: str | None = None,
     security_question: str | None = None,
     security_answer: str | None = None,
+    agree_terms: bool = False,
 ) -> dict[str, Any]:
     """用户注册。返回用户信息、租户信息、明文恢复码列表。密保问题可选，与答案必须成对提供。"""
+    if not agree_terms:
+        raise ValueError("请先阅读并同意用户协议")
     normalized = username.strip().lower()
     if len(normalized) < 2:
         raise ValueError("用户名过短")
@@ -260,8 +263,11 @@ def login(
     remember_me: bool = False,
     ip_address: str | None = None,
     user_agent: str | None = None,
+    agree_terms: bool = False,
 ) -> dict[str, Any]:
     """用户登录。返回 session token 和用户信息；remember_me=True 时附带持久 remember token。"""
+    if not agree_terms:
+        raise ValueError("请先阅读并同意用户协议")
     normalized = username.strip().lower()
 
     with db.get_connection() as conn:

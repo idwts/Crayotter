@@ -18,7 +18,7 @@ from playwright.sync_api import sync_playwright
 
 def main() -> int:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--base-url", default="http://8.161.229.68")
+    parser.add_argument("--base-url", default="https://8.161.229.68")
     parser.add_argument("--shots", default="docs/worklogs/e2e-shots-materials-advanced")
     args = parser.parse_args()
     base = args.base_url.rstrip("/")
@@ -36,7 +36,8 @@ def main() -> int:
 
     with sync_playwright() as p:
         browser = p.chromium.launch(channel="msedge")
-        context = browser.new_context(viewport={"width": 1440, "height": 900})
+        context = browser.new_context(ignore_https_errors=True, viewport={"width": 1440, "height": 900})
+        context.add_init_script("localStorage.setItem('crayotter.onboardingDone.v1', '1')")
         page = context.new_page()
         page.on("pageerror", lambda exc: print(f"[pageerror] {exc}"))
 
@@ -45,6 +46,7 @@ def main() -> int:
         page.fill("#reg-username", username)
         page.fill("#reg-password", "AdvPass123!")
         page.fill("#reg-confirm-password", "AdvPass123!")
+        page.check("#reg-agree-terms")
         page.click("button[type=submit]")
         page.wait_for_selector("text=注册成功", timeout=15000)
         page.click("text=进入工作台")

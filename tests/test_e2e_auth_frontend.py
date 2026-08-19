@@ -29,7 +29,8 @@ def main() -> int:
 
     with sync_playwright() as p:
         browser = p.chromium.launch(channel="msedge")
-        context = browser.new_context(viewport={"width": 1440, "height": 900})
+        context = browser.new_context(ignore_https_errors=True, viewport={"width": 1440, "height": 900})
+        context.add_init_script("localStorage.setItem('crayotter.onboardingDone.v1', '1')")
         page = context.new_page()
         page.on("console", lambda msg: print(f"[console:{msg.type}] {msg.text}") if msg.type == "error" else None)
         page.on("pageerror", lambda exc: print(f"[pageerror] {exc}"))
@@ -53,6 +54,7 @@ def main() -> int:
         page.fill("#reg-username", username)
         page.fill("#reg-password", password)
         page.fill("#reg-confirm-password", password)
+        page.check("#reg-agree-terms")
         page.click("button[type=submit]")
         page.wait_for_selector("text=注册成功", timeout=15000)
         page.screenshot(path=str(shots / "03-register-success-recovery-codes.png"), full_page=True)
@@ -88,6 +90,7 @@ def main() -> int:
         page.check("text=记住用户名")
         page.fill("#username", username)
         page.fill("#password", password)
+        page.check("#login-agree-terms")
         page.click("button[type=submit]")
         page.wait_for_selector(f"text={username}", timeout=15000)
         page.wait_for_timeout(1000)
@@ -102,7 +105,7 @@ def main() -> int:
         # 8. 草稿被服务端 preferences 记住（重新进入后仍可见已在 step5 验证写入，这里验证跨 session 恢复）
         # 模拟浏览器关闭重开：新 context 仅携带 remember cookie
         remember_cookie = cookies["crayotter_remember"]
-        context2 = browser.new_context(viewport={"width": 1440, "height": 900})
+        context2 = browser.new_context(ignore_https_errors=True, viewport={"width": 1440, "height": 900})
         context2.add_cookies([{
             "name": "crayotter_remember",
             "value": remember_cookie["value"],
@@ -154,6 +157,7 @@ def main() -> int:
         # 11. 新密码登录成功
         page.fill("#username", username)
         page.fill("#password", new_password)
+        page.check("#login-agree-terms")
         page.click("button[type=submit]")
         page.wait_for_selector(f"text={username}", timeout=15000)
         page.screenshot(path=str(shots / "13-login-with-new-password.png"), full_page=True)
