@@ -1035,7 +1035,7 @@ export function JobsView({
         <ContextEmpty
           icon={History}
           title={t("noJobs")}
-          body={t("jobsLibrarySubtitle")}
+          body={t("noJobsHint")}
           actionLabel={t("createTask")}
           onAction={createTask}
         />
@@ -1177,14 +1177,19 @@ export function MaterialsView(props) {
             hidden
             onChange={(event) => uploadLarge(event.target.files)}
           />
-          <button className="secondary-button" disabled={props.uploading} onClick={() => largeInputRef.current?.click()} type="button" title={props.t("uploadLargeHint")}>
+          <button className="secondary-button materials-upload-btn" disabled={props.uploading} onClick={() => largeInputRef.current?.click()} type="button" title={props.t("uploadLargeHint")}>
             <Upload size={16} />
-            {props.largeUploadProgress != null
-              ? props.t("uploadLargeProgress", { percent: props.largeUploadProgress })
-              : props.t("uploadLargeMaterial")}
+            <span className="materials-upload-label">
+              {props.largeUploadProgress != null
+                ? props.t("uploadLargeProgress", { percent: props.largeUploadProgress })
+                : props.t("uploadLargeMaterial")}
+            </span>
           </button>
-          <button className="primary-button" disabled={props.uploading} onClick={() => inputRef.current?.click()} type="button">
-            <Upload size={16} />{props.uploading && props.largeUploadProgress == null ? props.t("uploading") : props.t("uploadMaterial")}
+          <button className="primary-button materials-upload-btn" disabled={props.uploading} onClick={() => inputRef.current?.click()} type="button" title={props.t("uploadMaterial")}>
+            <Upload size={16} />
+            <span className="materials-upload-label">
+              {props.uploading && props.largeUploadProgress == null ? props.t("uploading") : props.t("uploadMaterial")}
+            </span>
           </button>
         </>
       )}

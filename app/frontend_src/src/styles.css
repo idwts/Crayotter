@@ -5642,3 +5642,15 @@ textarea:focus-visible {
     min-height: 44px;
   }
 }
+
+/* 素材库头部上传按钮：窄屏隐藏文字仅留图标，避免两行挤压标题区（design review Should-Fix 4） */
+@media (max-width: 640px) {
+  .materials-upload-label {
+    display: none;
+  }
+  .materials-upload-btn {
+    min-width: 44px;
+    justify-content: center;
+  }
+}
+
