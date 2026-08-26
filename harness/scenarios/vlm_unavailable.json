@@ -1,0 +1,20 @@
+{
+  "id": "vlm-unavailable-v1",
+  "description": "Permanent VLM denial must not consume unbounded retry time.",
+  "job_kind": "video_editing",
+  "mode": "fault_matrix",
+  "faults": [
+    {
+      "stage": "video_analysis",
+      "effect": "status_403",
+      "occurrence": 1,
+      "repeat": 100
+    }
+  ],
+  "assertions": {
+    "terminal_status": "completed",
+    "max_provider_retry_seconds": 5,
+    "maximum_fallbacks": 1
+  },
+  "tags": ["provider", "circuit-breaker", "phase3", "degradation"]
+}

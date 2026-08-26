@@ -12,6 +12,7 @@ runtime_logs/
 /logs/
 /output/
 /benchmark_runtime/
+.harness-runtime/
 /cache/
 .pytest_cache/
 .mypy_cache/

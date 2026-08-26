@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from pathlib import Path
 import threading
 from typing import Any, Callable
@@ -33,6 +34,29 @@ _FATAL_ANALYSIS_ERROR_LOCK = threading.Lock()
 _DASHSCOPE_MODEL_FALLBACKS: dict[str, str] = {}
 _DASHSCOPE_MODEL_FALLBACKS_LOCK = threading.Lock()
 _DASHSCOPE_RETRY_DELAYS_SECONDS = (5.0, 15.0, 30.0)
+_DASHSCOPE_RETRY_BUDGET_USED_SECONDS = 0.0
+_DASHSCOPE_RETRY_BUDGET_LOCK = threading.Lock()
+
+
+def _dashscope_retry_budget_seconds() -> float:
+    try:
+        return max(0.0, float(os.environ.get("CRAYOTTER_VIDEO_RETRY_BUDGET_SECONDS", "60")))
+    except ValueError:
+        return 60.0
+
+
+def _retry_budget_remaining() -> float:
+    with _DASHSCOPE_RETRY_BUDGET_LOCK:
+        return max(
+            0.0,
+            _dashscope_retry_budget_seconds() - _DASHSCOPE_RETRY_BUDGET_USED_SECONDS,
+        )
+
+
+def _consume_retry_budget(seconds: float) -> None:
+    global _DASHSCOPE_RETRY_BUDGET_USED_SECONDS
+    with _DASHSCOPE_RETRY_BUDGET_LOCK:
+        _DASHSCOPE_RETRY_BUDGET_USED_SECONDS += max(0.0, seconds)
 
 
 def _format_api_error(exc: Exception) -> str:
@@ -103,15 +127,29 @@ def _call_dashscope_with_retry(
     video_input: str,
 ) -> Any:
     for attempt in range(len(_DASHSCOPE_RETRY_DELAYS_SECONDS) + 1):
+        if attempt > 0 and _retry_budget_remaining() <= 0:
+            raise RuntimeError("DashScope video retry budget exhausted")
+        started = time.monotonic()
         try:
             return call()
         except Exception as exc:
+            _consume_retry_budget(time.monotonic() - started)
             if (
                 not _is_retryable_dashscope_error(exc)
                 or attempt >= len(_DASHSCOPE_RETRY_DELAYS_SECONDS)
             ):
                 raise
             delay = _DASHSCOPE_RETRY_DELAYS_SECONDS[attempt]
+            if delay >= _retry_budget_remaining():
+                emit_benchmark_event(
+                    "model_retry_suppressed",
+                    {
+                        "stage": "video_analysis",
+                        "model": model_name,
+                        "reason": "retry_budget_exhausted",
+                    },
+                )
+                raise RuntimeError("DashScope video retry budget exhausted") from exc
             logger.warning(
                 "⚠️ DashScope 视频分析网络异常，将在 %.0fs 后重试 "
                 "(retry=%d/%d, model=%s, video_input=%s): %s",
@@ -123,6 +161,7 @@ def _call_dashscope_with_retry(
                 _format_api_error(exc),
             )
             time.sleep(delay)
+            _consume_retry_budget(delay)
     raise RuntimeError("DashScope retry loop exited unexpectedly.")
 
 
@@ -139,9 +178,12 @@ def _set_fatal_analysis_error(message: str) -> None:
 
 
 def reset_analysis_failure_circuit() -> None:
-    global _FATAL_ANALYSIS_ERROR
+    global _FATAL_ANALYSIS_ERROR, _DASHSCOPE_RETRY_BUDGET_USED_SECONDS
     with _FATAL_ANALYSIS_ERROR_LOCK:
         _FATAL_ANALYSIS_ERROR = ""
+    with _DASHSCOPE_RETRY_BUDGET_LOCK:
+        _DASHSCOPE_RETRY_BUDGET_USED_SECONDS = 0.0
+    reset_analysis_model_fallbacks()
 
 
 def reset_analysis_model_fallbacks() -> None:

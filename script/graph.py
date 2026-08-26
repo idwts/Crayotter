@@ -131,6 +131,7 @@ try:
         build_react_budget,
         should_try_short_form_fallback,
     )
+    from .phases.editing_execution.voice_policy import resolve_narration_voice
     from .phases.editing_research import (
         build_research_execution_plan,
         select_research_mode,
@@ -159,6 +160,7 @@ except ImportError:
         build_react_budget,
         should_try_short_form_fallback,
     )
+    from phases.editing_execution.voice_policy import resolve_narration_voice
     from phases.editing_research import (
         build_research_execution_plan,
         select_research_mode,
@@ -2768,12 +2770,35 @@ def _run_phase1_downloads(
             ],
         )
 
-    states = scheduler.run(plan, execute, resume=True)
-    return [
+    states = scheduler.run(plan, execute, resume=True, allow_partial_failure=True)
+    completed = [
         str(state.result.get("path"))
         for state in states.values()
         if state.status == "completed" and state.result.get("path")
     ]
+    required_successes = max(1, math.ceil(len(tasks) * 2 / 3))
+    failed = [state for state in states.values() if state.status == "failed"]
+    if len(completed) < required_successes:
+        details = "; ".join(item.error[:240] for item in failed)
+        raise RuntimeError(
+            "素材下载成功数不足："
+            f"成功 {len(completed)}/{len(tasks)}，最低要求 {required_successes}。"
+            f"失败详情：{details or 'unknown'}"
+        )
+    if failed:
+        _emit_orchestration_event(
+            "download_batch_degraded",
+            {
+                "selected_count": len(tasks),
+                "downloaded_count": len(completed),
+                "failed_count": len(failed),
+                "required_successes": required_successes,
+                "failed_tasks": [
+                    {"task_id": item.task_id, "error": item.error[:500]} for item in failed
+                ],
+            },
+        )
+    return completed
 
 
 def _run_phase1_analyses(
@@ -4261,7 +4286,11 @@ def _controlled_plan_from_approved(plan: EditingPlan) -> ControlledEditPlan:
     return ControlledEditPlan(
         clips=clips,
         narration=narration,
-        voice="Ethan",
+        voice=resolve_narration_voice(
+            plan.narration_strategy,
+            plan.user_request,
+            default="Ethan",
+        ),
         output_name=f"approved_plan_{plan.version}",
         resolution=resolution,
     )
@@ -4385,6 +4414,7 @@ def _build_controlled_edit_plan(state: AgentState) -> ControlledEditPlan:
         )
         parsed = _parse_json_object(str(response.content))
         plan = ControlledEditPlan.model_validate(parsed)
+        plan.voice = resolve_narration_voice(state.user_request, default=plan.voice)
         if (
             0 < state.target_duration_seconds <= 20
             and not _user_explicitly_requested_high_resolution(state.user_request)

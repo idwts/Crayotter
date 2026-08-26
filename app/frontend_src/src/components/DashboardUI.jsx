@@ -7,6 +7,7 @@ import {
   Archive,
   ArrowLeft,
   Bot,
+  BookOpenText,
   Check,
   ChevronDown,
   ChevronLeft,
@@ -36,6 +37,7 @@ import {
   Workflow,
   X,
 } from "lucide-react";
+import { StoryReviewPanel } from "./StoryReviewPanel";
 import artifactCompactImage from "../assets/artifact-empty-compact.webp";
 import artifactWideImage from "../assets/artifact-empty-wide.webp";
 import brandMascotImage from "../assets/brand-mascot.png";
@@ -321,6 +323,7 @@ export function WorkbenchView(props) {
     approvePlan,
     rejectPlan,
     notify,
+    onVideoJobCreated,
     composerProps,
     copyFullLog,
     downloadFullLogUrl,
@@ -367,6 +370,7 @@ export function WorkbenchView(props) {
   const planDisplay = getPlanReviewDisplay(planInfo, planAnimation);
   const showInlineLogs = shouldShowInlineLogs(selectedJob, planDisplay);
   const inspectorPanelMode = getInspectorPanelMode(selectedJob);
+  const storyJob = selectedJob?.job_kind === "story_development";
 
   return (
     <div className="workspace-view">
@@ -396,7 +400,15 @@ export function WorkbenchView(props) {
                 />
               </div>
             )}
-            {!planDisplay.visible && (
+            {storyJob && (
+              <StoryReviewPanel
+                selectedJob={selectedJob}
+                onVideoJobCreated={onVideoJobCreated}
+                notify={notify}
+                t={t}
+              />
+            )}
+            {!storyJob && !planDisplay.visible && (
               <WorkbenchVideoStage
                 artifacts={primaryArtifacts}
                 artifactLabel={artifactLabel}
@@ -515,7 +527,9 @@ function PhaseTracker({ selectedJob, currentPhaseCode, t }) {
   const running = jobStatus === "running";
   const terminalStatus = jobStatus === "failed" ? "failed" : jobStatus === "cancelled" ? "stopped" : null;
   const activePhaseIndex = currentPhaseCode === "phase3" ? 2 : currentPhaseCode === "phase2" ? 1 : 0;
-  const labels = [t("materialPrep"), t("editingResearch"), t("finalAssembly")];
+  const labels = selectedJob?.job_kind === "story_development"
+    ? [t("storySourceAnalysis"), t("storyGeneration"), t("storyDelivery")]
+    : [t("materialPrep"), t("editingResearch"), t("finalAssembly")];
   const steps = labels.map((label, index) => {
     let status = "idle";
     if (completed || index < activePhaseIndex) {
@@ -840,6 +854,15 @@ function AgentTrace({ events, formatDate, describeEvent, t }) {
     "tool_result",
     "blueprint_created",
     "editing_plan_created",
+    "story_workflow_started",
+    "story_sources_ingested",
+    "story_dna_created",
+    "story_directions_created",
+    "story_package_created",
+    "story_similarity_completed",
+    "story_document_revised",
+    "story_document_approved",
+    "story_video_composition_created",
     "editing_plan_validated",
     "plan_review_waiting",
     "plan_revised",
@@ -1103,7 +1126,7 @@ export function MaterialsView(props) {
           <input
             ref={inputRef}
             type="file"
-            accept=".mp4,.mov,.mkv,.avi,.webm,.m4v,.mpeg,.mpg,video/*"
+            accept=".mp4,.mov,.mkv,.avi,.webm,.m4v,.mpeg,.mpg,.txt,.md,.markdown,.fountain,.fdx,.docx,.pdf,video/*"
             multiple
             hidden
             onChange={(event) => upload(event.target.files)}
@@ -1615,6 +1638,10 @@ export function Composer({
   setTaskText,
   mode,
   setMode,
+  jobKind,
+  setJobKind,
+  storyConfig,
+  setStoryConfig,
   selectedJob,
   planInfo,
   submitJob,
@@ -1824,7 +1851,7 @@ export function Composer({
               <input
                 ref={attachInputRef}
                 type="file"
-                accept=".mp4,.mov,.mkv,.avi,.webm,.m4v,.mpeg,.mpg,video/*"
+                accept={jobKind === "story_development" ? ".txt,.md,.markdown,.fountain,.fdx,.docx,.pdf" : ".mp4,.mov,.mkv,.avi,.webm,.m4v,.mpeg,.mpg,video/*"}
                 multiple
                 hidden
                 onChange={(event) => {
@@ -1891,6 +1918,14 @@ export function Composer({
                         <span><strong>{t("localFirst")}</strong><small>{localFirstActive ? t("localFirstOnTitle") : t("localFirstOffTitle")}</small></span>
                         {localFirstActive && <Check size={15} />}
                       </button>
+                      {jobKind === "story_development" && (
+                        <div className="story-config-menu">
+                          <label>{t("storyGenre")}<input value={storyConfig.genre} placeholder={t("storyGenrePlaceholder")} onChange={(event) => setStoryConfig((current) => ({ ...current, genre: event.target.value }))} /></label>
+                          <label>{t("storyEpisodeCount")}<input type="number" min="1" max="100" value={storyConfig.episode_count} onChange={(event) => setStoryConfig((current) => ({ ...current, episode_count: Number(event.target.value) }))} /></label>
+                          <label>{t("storyEpisodeDuration")}<input type="number" min="15" max="3600" value={storyConfig.episode_duration_seconds} onChange={(event) => setStoryConfig((current) => ({ ...current, episode_duration_seconds: Number(event.target.value) }))} /></label>
+                          <label className="story-rights-check"><input type="checkbox" checked={storyConfig.reference_rights_confirmed} onChange={(event) => setStoryConfig((current) => ({ ...current, reference_rights_confirmed: event.target.checked }))} />{t("storyRightsConfirmation")}</label>
+                        </div>
+                      )}
                 </div>
               )}
               </div>
@@ -1898,7 +1933,13 @@ export function Composer({
             {guidanceMode && <span className="composer-guidance-note">{planReviewMode ? t("enterToReviewPlan") : t("enterToGuide")}</span>}
           </div>
           <div className="flex shrink-0 items-center gap-2">
-            {!guidanceMode && <ModeSelector mode={mode} setMode={setMode} t={t} />}
+            {!guidanceMode && (
+              <div className="workflow-kind-toggle" role="group" aria-label={t("workflowKind")}>
+                <button className={jobKind === "video_editing" ? "active" : ""} onClick={() => setJobKind("video_editing")} type="button"><FileVideo2 size={14} />{t("videoWorkflow")}</button>
+                <button className={jobKind === "story_development" ? "active" : ""} onClick={() => { setJobKind("story_development"); setMode("agent"); }} type="button"><BookOpenText size={14} />{t("storyWorkflow")}</button>
+              </div>
+            )}
+            {!guidanceMode && <ModeSelector mode={mode} setMode={setMode} t={t} disabled={jobKind === "story_development"} />}
             {planReviewMode && (
               <button
                 className="composer-reject-button"
@@ -1925,7 +1966,7 @@ export function Composer({
   );
 }
 
-function ModeSelector({ mode, setMode, t }) {
+function ModeSelector({ mode, setMode, t, disabled = false }) {
   const [open, setOpen] = useState(false);
   const rootRef = useRef(null);
   const options = [
@@ -1955,6 +1996,7 @@ function ModeSelector({ mode, setMode, t }) {
       <button
         className="mode-selector-trigger"
         type="button"
+        disabled={disabled}
         aria-haspopup="listbox"
         aria-expanded={open}
         onClick={() => setOpen((current) => !current)}

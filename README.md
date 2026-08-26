@@ -111,6 +111,8 @@ This repository centers around four core components:
 - **`script/graph.py`** — Orchestration layer (LangGraph `StateGraph`). Defines the three-phase workflow and routing.
 - **`script/tools/`** — Modular toolset for search, download, analysis, cutting, transitions, narration, subtitles, and export.
 - **`script/visualize.py`** — Log parser + local trace server for inspecting phase progress and tool calls.
+- **`script/story/`** — Script generation, source ingestion, similarity review, immutable versions, approvals, and production exports.
+- **`script/harness/`** — Scenario replay, fault injection, provider preflight, and deterministic acceptance oracles.
 
 Supporting folders:
 
@@ -156,6 +158,10 @@ editing_research -> react_editor -> END
    - Keep timeline merge, mixing, subtitles, quality evaluation, and export serial.
    - Fall back to the existing ReAct editor when structured planning or validation fails.
    - Log full tool-call trajectory for later trace visualization.
+
+The web workbench also provides a **Script Development** workflow. It generates
+reviewable, versioned screenplay packages and can create a normal video-editing
+job directly from an approved episode. See [Script Development](./docs/story_development.md).
 
 ---
 

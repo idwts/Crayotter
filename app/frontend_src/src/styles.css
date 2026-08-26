@@ -2,6 +2,46 @@
 @tailwind components;
 @tailwind utilities;
 
+/* Crayotter script-development and approved-script video handoff. */
+.workflow-kind-toggle { display: inline-flex; gap: 2px; border: 1px solid #e3e6ef; border-radius: 9px; background: #f7f8fb; padding: 2px; }
+.workflow-kind-toggle button { display: inline-flex; align-items: center; gap: 5px; border: 0; border-radius: 7px; background: transparent; padding: 7px 9px; color: #8a91a3; font-size: 10px; font-weight: 700; }
+.workflow-kind-toggle button.active { background: white; color: #5f6fd8; box-shadow: 0 2px 7px rgb(67 76 132 / 12%); }
+.story-config-menu { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; border-top: 1px solid #eceef5; padding: 10px; }
+.story-config-menu label { display: grid; gap: 4px; color: #737b90; font-size: 9px; font-weight: 700; }
+.story-config-menu input { min-width: 0; border: 1px solid #dfe3ee; border-radius: 7px; padding: 7px 8px; color: #4f576b; font-size: 10px; }
+.story-config-menu .story-rights-check { display: flex; grid-column: 1 / -1; align-items: center; gap: 7px; font-weight: 600; }
+.story-config-menu .story-rights-check input { width: auto; }
+.story-review-panel { display: grid; gap: 14px; }
+.story-review-empty { place-items: center; min-height: 180px; color: #8790a5; text-align: center; }
+.story-review-actions { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 7px; }
+.story-risk-chip { display: inline-flex; align-items: center; gap: 5px; border-radius: 999px; background: #ecfdf3; padding: 5px 8px; color: #16805b; font-size: 9px; font-weight: 800; }
+.story-risk-chip.risk-medium { background: #fff7e8; color: #b56b14; }
+.story-risk-chip.risk-high { background: #fff0f1; color: #c34f5b; }
+.story-compose-card { display: flex; align-items: center; justify-content: space-between; gap: 16px; border: 1px solid #dce2ff; border-radius: 12px; background: linear-gradient(135deg, #f7f8ff, #f2f6ff); padding: 13px; }
+.story-compose-copy { display: flex; min-width: 0; align-items: center; gap: 10px; }
+.story-compose-copy > span { display: grid; width: 38px; height: 38px; flex: 0 0 auto; place-items: center; border-radius: 11px; background: linear-gradient(145deg, #6374e3, #7661d6); color: white; }
+.story-compose-copy strong { color: #39425e; font-size: 12px; }
+.story-compose-copy p { margin-top: 3px; color: #7b8398; font-size: 9px; }
+.story-compose-controls { display: flex; align-items: end; gap: 7px; }
+.story-compose-controls label { display: grid; gap: 4px; color: #81899d; font-size: 8px; font-weight: 700; }
+.story-compose-controls select, .story-compose-controls input { height: 34px; border: 1px solid #dfe3f0; border-radius: 8px; background: white; padding: 0 8px; color: #50596f; font-size: 10px; }
+.story-compose-controls select { width: 150px; }
+.story-compose-controls input { width: 86px; }
+.story-compose-controls > button { display: inline-flex; height: 34px; align-items: center; gap: 6px; border: 0; border-radius: 8px; background: linear-gradient(135deg, #5f71df, #7661d5); padding: 0 12px; color: white; font-size: 10px; font-weight: 800; }
+.story-editor-grid { display: grid; min-height: 300px; grid-template-columns: minmax(180px, .34fr) minmax(0, 1fr); overflow: hidden; border: 1px solid #e7e9f1; border-radius: 11px; background: white; }
+.story-scene-list { display: grid; align-content: start; max-height: 430px; overflow-y: auto; border-right: 1px solid #eceef4; background: #f9fafe; padding: 6px; }
+.story-scene-button { display: grid; gap: 3px; border: 0; border-radius: 8px; background: transparent; padding: 9px; color: #596176; text-align: left; }
+.story-scene-button.selected, .story-scene-button:hover { background: #eef1ff; color: #5367df; }
+.story-scene-button small, .story-scene-button span { overflow: hidden; color: #939aab; font-size: 8px; text-overflow: ellipsis; white-space: nowrap; }
+.story-scene-button strong { overflow: hidden; font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
+.story-scene-editor { display: grid; align-content: start; gap: 10px; padding: 12px; }
+.story-scene-editor > div { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.story-scene-editor textarea { min-height: 130px; resize: vertical; border: 1px solid #e3e6ef; border-radius: 9px; background: #fcfcfe; padding: 10px; color: #485065; font-size: 11px; line-height: 1.6; }
+.story-dialogue-line { display: grid; grid-template-columns: 90px 1fr; gap: 8px; border-left: 2px solid #dfe3fb; padding-left: 8px; color: #596176; font-size: 10px; }
+.story-dialogue-line strong { color: #6575dc; }
+.story-risk-disclaimer { color: #999faf; font-size: 8px; }
+@media (max-width: 767px) { .story-compose-card, .story-compose-controls { align-items: stretch; flex-direction: column; } .story-compose-controls select, .story-compose-controls input, .story-compose-controls > button { width: 100%; } .story-editor-grid { grid-template-columns: 1fr; } .story-scene-list { max-height: 160px; border-right: 0; border-bottom: 1px solid #eceef4; } .workflow-kind-toggle button { padding: 7px; } .workflow-kind-toggle button { font-size: 0; } .workflow-kind-toggle button svg { width: 16px; height: 16px; } }
+
 :root {
   color: #0f172a;
   font-family: Inter, "Alibaba PuHuiTi", "Microsoft YaHei", "PingFang SC", system-ui, sans-serif;

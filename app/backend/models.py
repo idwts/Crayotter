@@ -5,6 +5,8 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
+from script.story.models import StoryJobConfig
+
 
 TERMINAL_JOB_STATUSES = {"completed", "failed", "cancelled"}
 
@@ -87,6 +89,8 @@ class AppConfig(BaseModel):
 class JobRequest(BaseModel):
     task: str = Field(min_length=1)
     mode: Literal["agent", "demo"] = "agent"
+    job_kind: Literal["video_editing", "story_development"] = "video_editing"
+    story_config: StoryJobConfig | None = None
     profile: str | None = None
     enable_phase2_research: bool | None = None
     enable_plan_review: bool | None = None
@@ -99,6 +103,14 @@ class JobRequest(BaseModel):
     enabled_material_platforms: list[str] | None = None
     browser_auth_browser: str | None = None
     browser_auth_profile: str | None = None
+
+
+class StoryVideoComposeRequest(BaseModel):
+    episode_number: int = Field(default=1, ge=1)
+    target_duration_seconds: float | None = Field(default=None, gt=0, le=3600)
+    processing_mode: Literal["auto", "speed", "quality"] | None = None
+    prefer_local_materials: bool | None = None
+    enable_plan_review: bool = True
 
 
 class RuntimeEvent(BaseModel):
@@ -114,6 +126,8 @@ class JobRecord(BaseModel):
     task: str
     title: str = ""
     mode: Literal["agent", "demo"]
+    job_kind: Literal["video_editing", "story_development"] = "video_editing"
+    story_config: StoryJobConfig | None = None
     enable_phase2_research: bool = True
     enable_plan_review: bool = True
     direct_phase3_execution: bool = False

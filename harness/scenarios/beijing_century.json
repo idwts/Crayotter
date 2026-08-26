@@ -1,0 +1,22 @@
+{
+  "id": "beijing-century-v1",
+  "description": "One-minute Beijing timeline with locked female narration and hard dates.",
+  "job_kind": "video_editing",
+  "mode": "offline_replay",
+  "request": {
+    "target_duration_seconds": 60,
+    "aspect_ratio": "16:9",
+    "required_voice": "female"
+  },
+  "fixtures": {"media_pack": "beijing-timeline-v1"},
+  "assertions": {
+    "required_terms": ["1920", "1949", "1978", "2008", "2022", "2026"],
+    "forbidden_terms": ["ruler（尺子）", "mother."],
+    "duration": {"target": 60, "tolerance": 1},
+    "required_voice": "female",
+    "terminal_status": "completed",
+    "max_provider_retry_seconds": 60,
+    "maximum_fallbacks": 1
+  },
+  "tags": ["story", "editing", "duration", "voice", "hard-constraints"]
+}

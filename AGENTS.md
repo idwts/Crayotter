@@ -99,6 +99,12 @@ Tasks that may write the same path must share a conflict key. Resource requests 
 
 - `script/run_agent_worker.py`
   - Worker entry used by backend-managed real agent jobs.
+  - Dispatches `story_development` jobs to `script/story/runner.py` and normal
+    `video_editing` jobs to the existing editing agent.
+
+- `script/harness/`
+  - Production-boundary scenario runner with fault injection, replay, preflight,
+    and deterministic acceptance oracles.
 
 - `script/visualize.py`
   - Parses logs and serves or exports trace visualizations.
@@ -238,6 +244,11 @@ Important API routes:
 - `POST /uploads`
 - `DELETE /uploads?path=user_temp/<file>`
 - `GET /files?path=<absolute-or-project-relative-path>`
+- `GET /jobs/{job_id}/story/current`
+- `GET /jobs/{job_id}/story/versions`
+- `GET/PATCH /jobs/{job_id}/story/{version}`
+- `POST /jobs/{job_id}/story/{version}/approve`
+- `POST /jobs/{job_id}/story/{version}/compose-video`
 
 Frontend:
 
@@ -254,6 +265,8 @@ The workbench supports:
 - resource-pool settings
 - toggles for Phase 2, direct Phase 3, and local-material priority
 - structured scheduler/resource/retry/evaluator events and artifact previews
+- script-development generation, scene review, immutable revisions, approval,
+  and approved-episode video composition
 
 `JobRecord.status` includes `interrupted`. On backend restart, nonterminal persisted jobs become `interrupted`; resume is allowed only from that state. Resume must preserve the job workspace and must not perform the normal pre-run cleanup that would delete reusable checkpoints/artifacts.
 

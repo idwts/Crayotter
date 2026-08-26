@@ -1,0 +1,17 @@
+{
+  "id": "last-baton-v1",
+  "description": "Women's 4x100 relay drama ending in second place and psychological return.",
+  "job_kind": "video_editing",
+  "mode": "offline_replay",
+  "request": {"target_duration_seconds": 60, "aspect_ratio": "16:9"},
+  "fixtures": {"media_pack": "women-relay-v1"},
+  "assertions": {
+    "required_terms": ["女子", "接力", "第二名", "我回来了"],
+    "forbidden_terms": ["外卖", "骑手", "送达订单"],
+    "duration": {"target": 60, "tolerance": 1},
+    "terminal_status": "completed",
+    "max_provider_retry_seconds": 60,
+    "maximum_fallbacks": 1
+  },
+  "tags": ["story", "editing", "direction-relevance", "duration"]
+}

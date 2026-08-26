@@ -8,17 +8,27 @@ import threading
 import os
 import time
 import uuid
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
 from .config_store import JOBS_DIR, ConfigStore
 from .event_bus import EventBus
-from .models import AppConfig, JobRecord, JobRequest, RuntimeEvent, TERMINAL_JOB_STATUSES, utc_now_iso
+from .models import (
+    AppConfig,
+    JobRecord,
+    JobRequest,
+    RuntimeEvent,
+    StoryVideoComposeRequest,
+    TERMINAL_JOB_STATUSES,
+    utc_now_iso,
+)
 from .task_titles import summarize_task_title
 from .services import (
     ArtifactQueryService,
     JobRepository,
     PlanReviewService,
+    StoryReviewService,
     WorkerSupervisor,
 )
 from app.runtime_paths import configure_runtime_environment, get_bundle_root, get_runtime_root, is_frozen
@@ -73,6 +83,7 @@ class RuntimeManager:
         self._job_repository = JobRepository(JOBS_DIR)
         self._artifact_query = ArtifactQueryService(get_runtime_root())
         self._plan_reviews = PlanReviewService()
+        self._story_reviews = StoryReviewService()
         self._worker_supervisor = WorkerSupervisor()
         self._load_existing_jobs()
 
@@ -106,6 +117,152 @@ class RuntimeManager:
         if job is None:
             raise KeyError(job_id)
         return self._collect_artifacts(job)
+
+    def get_current_story(self, job_id: str) -> dict[str, Any]:
+        job = self.get_job(job_id)
+        if job is None:
+            raise KeyError(job_id)
+        self._require_story_job(job)
+        return self._story_reviews.get_current(job.job_dir / "workspace", job_id=job_id)
+
+    def get_story(self, job_id: str, version: str) -> dict[str, Any]:
+        job = self.get_job(job_id)
+        if job is None:
+            raise KeyError(job_id)
+        self._require_story_job(job)
+        return self._story_reviews.get(job.job_dir / "workspace", version, job_id=job_id)
+
+    def list_story_versions(self, job_id: str) -> dict[str, Any]:
+        job = self.get_job(job_id)
+        if job is None:
+            raise KeyError(job_id)
+        self._require_story_job(job)
+        return self._story_reviews.list_versions(job.job_dir / "workspace", job_id=job_id)
+
+    def revise_story(self, job_id: str, version: str, changes: dict[str, Any]) -> dict[str, Any]:
+        job = self.get_job(job_id)
+        if job is None:
+            raise KeyError(job_id)
+        self._require_story_job(job)
+        if job.record.status in {"queued", "running"}:
+            raise RuntimeError("A running story job cannot be revised.")
+        result = self._story_reviews.revise(
+            job.job_dir / "workspace",
+            version,
+            changes,
+            job_id=job_id,
+            revision=job.record.revision,
+            task=job.record.task,
+            user_workspace=get_runtime_root() / "user_temp",
+        )
+        self._publish(
+            job,
+            "story_document_revised",
+            {"from_version": version, "version": result["document"]["version"]},
+        )
+        return result
+
+    def approve_story(self, job_id: str, version: str) -> dict[str, Any]:
+        job = self.get_job(job_id)
+        if job is None:
+            raise KeyError(job_id)
+        self._require_story_job(job)
+        if job.record.status in {"queued", "running"}:
+            raise RuntimeError("A running story job cannot be approved.")
+        result = self._story_reviews.approve(
+            job.job_dir / "workspace",
+            version,
+            job_id=job_id,
+            revision=job.record.revision,
+        )
+        self._publish(job, "story_document_approved", {"version": version})
+        return result
+
+    def compose_story_video(
+        self,
+        job_id: str,
+        version: str,
+        request: StoryVideoComposeRequest,
+    ) -> dict[str, Any]:
+        story_job = self.get_job(job_id)
+        if story_job is None:
+            raise KeyError(job_id)
+        self._require_story_job(story_job)
+        if story_job.record.status in {"queued", "running"}:
+            raise RuntimeError("Wait for the script job to finish before generating a video.")
+
+        prepared = self._story_reviews.prepare_video_composition(
+            story_job.job_dir / "workspace",
+            version,
+            job_id=job_id,
+            episode_number=request.episode_number,
+            materials_dir=get_runtime_root() / "user_temp",
+        )
+        episode = prepared["episode"]
+        script_item = prepared["script_item"]
+        target_duration = float(
+            request.target_duration_seconds
+            or episode.get("target_duration_seconds")
+            or 60
+        )
+        title = str(episode.get("title") or "Approved screenplay")
+        approved_markdown = Path(str(script_item["path"])).read_text(encoding="utf-8")
+        task = (
+            f"Compose episode {request.episode_number} ‘{title}’ into a finished video using "
+            f"the approved, locked screenplay at {script_item['display_path']}. Target duration: "
+            f"{target_duration:g} seconds. Preserve the screenplay's scene order, ending, "
+            "dialogue, narration, subtitles, character intent, visual prompts and voice "
+            "requirements. Search for or reuse matching video materials, but do not rewrite "
+            "the approved story. Export a playable MP4.\n\n"
+            "--- APPROVED SCREENPLAY (LOCKED) ---\n"
+            f"{approved_markdown[:50000]}\n"
+            "--- END APPROVED SCREENPLAY ---"
+        )
+        child_job = self.create_job(
+            JobRequest(
+                task=task,
+                mode="agent",
+                job_kind="video_editing",
+                profile=story_job.record.profile,
+                enable_phase2_research=story_job.record.enable_phase2_research,
+                enable_plan_review=request.enable_plan_review,
+                direct_phase3_execution=False,
+                prefer_local_materials=(
+                    story_job.record.prefer_local_materials
+                    if request.prefer_local_materials is None
+                    else request.prefer_local_materials
+                ),
+                target_duration_seconds=target_duration,
+                deadline_seconds=story_job.record.deadline_seconds,
+                processing_mode=request.processing_mode or story_job.record.processing_mode,
+                output_profile=story_job.record.output_profile,
+                enabled_material_platforms=story_job.record.enabled_material_platforms,
+                browser_auth_browser=story_job.record.browser_auth_browser,
+            )
+        )
+        self._publish(
+            story_job,
+            "story_video_composition_created",
+            {
+                "version": version,
+                "episode_number": request.episode_number,
+                "child_job_id": child_job["job_id"],
+                "script_path": script_item["display_path"],
+                "target_duration_seconds": target_duration,
+            },
+        )
+        return {
+            "story_job_id": job_id,
+            "story_version": version,
+            "episode_number": request.episode_number,
+            "script_item": script_item,
+            "job": child_job,
+        }
+
+    @staticmethod
+    def _require_story_job(job: ManagedJob) -> None:
+        if job.record.job_kind != "story_development":
+            raise RuntimeError("This endpoint is only available for story-development jobs.")
 
     def get_current_plan(self, job_id: str) -> dict[str, Any]:
         job = self.get_job(job_id)
@@ -248,6 +405,8 @@ class RuntimeManager:
         config = self.config_store.load()
         if request.mode == "demo" and not config.allow_demo_jobs:
             raise ValueError("Demo jobs are disabled in configuration.")
+        if request.job_kind == "story_development" and request.mode != "agent":
+            raise ValueError("Story-development jobs require agent mode.")
 
         enable_phase2_research = (
             config.enable_phase2_research
@@ -290,6 +449,8 @@ class RuntimeManager:
                 task=request.task,
                 title=summarize_task_title(request.task),
                 mode=request.mode,
+                job_kind=request.job_kind,
+                story_config=request.story_config,
                 enable_phase2_research=enable_phase2_research,
                 enable_plan_review=enable_plan_review,
                 direct_phase3_execution=direct_phase3_execution,
@@ -319,7 +480,12 @@ class RuntimeManager:
         self._publish(
             job,
             "job_created",
-            {"task": request.task, "title": record.title, "mode": request.mode},
+            {
+                "task": request.task,
+                "title": record.title,
+                "mode": request.mode,
+                "job_kind": request.job_kind,
+            },
         )
 
         worker = threading.Thread(
@@ -376,6 +542,8 @@ class RuntimeManager:
             request = JobRequest(
                 task=job.record.task,
                 mode=job.record.mode,
+                job_kind=job.record.job_kind,
+                story_config=job.record.story_config,
                 profile=job.record.profile,
                 enable_phase2_research=job.record.enable_phase2_research,
                 enable_plan_review=job.record.enable_plan_review,
@@ -481,6 +649,8 @@ class RuntimeManager:
             request = JobRequest(
                 task=job.record.task,
                 mode=job.record.mode,
+                job_kind=job.record.job_kind,
+                story_config=job.record.story_config,
                 profile=job.record.profile,
                 enable_phase2_research=job.record.enable_phase2_research,
                 enable_plan_review=job.record.enable_plan_review,
@@ -662,6 +832,11 @@ class RuntimeManager:
         config_path = job.job_dir / "runtime_profile.json"
         task_path = job.job_dir / "task.txt"
         runtime_config = profile.to_runtime_config()
+        runtime_config["job_kind"] = job.record.job_kind
+        runtime_config["story_config"] = (
+            job.record.story_config.model_dump() if job.record.story_config is not None else None
+        )
+        runtime_config["job_id"] = job.record.job_id
         runtime_config["enable_phase2_research"] = job.record.enable_phase2_research
         runtime_config["enable_plan_review"] = job.record.enable_plan_review
         runtime_config["direct_phase3_execution"] = job.record.direct_phase3_execution
@@ -872,6 +1047,7 @@ class RuntimeManager:
                 return
             job.record.status = "completed"
             job.record.completed_at = utc_now_iso()
+            self._finalize_terminal_timing(job.record)
             job.record.final_output = final_output
             job.record.output_files = output_files
             job.record.steering_status = "idle"
@@ -894,6 +1070,7 @@ class RuntimeManager:
                 return
             job.record.status = "failed"
             job.record.completed_at = utc_now_iso()
+            self._finalize_terminal_timing(job.record)
             job.record.error = error_message
             self._write_summary(job)
         self._publish(job, "job_failed", {"error": error_message})
@@ -904,8 +1081,28 @@ class RuntimeManager:
                 return
             job.record.status = "cancelled"
             job.record.completed_at = utc_now_iso()
+            self._finalize_terminal_timing(job.record)
             self._write_summary(job)
         self._publish(job, "job_cancelled", {"completed_at": job.record.completed_at})
+
+    @staticmethod
+    def _finalize_terminal_timing(record: JobRecord) -> None:
+        """Persist useful timings even when a worker exits without SLA events."""
+
+        if not record.started_at or not record.completed_at:
+            return
+        try:
+            started = datetime.fromisoformat(record.started_at.replace("Z", "+00:00"))
+            completed = datetime.fromisoformat(record.completed_at.replace("Z", "+00:00"))
+        except ValueError:
+            return
+        wall = max(0.0, (completed - started).total_seconds())
+        record.total_wall_seconds = max(float(record.total_wall_seconds or 0.0), wall)
+        if record.processing_elapsed_seconds <= 0:
+            record.processing_elapsed_seconds = max(
+                0.0,
+                wall - float(record.authorization_wait_seconds or 0.0),
+            )
 
     def _publish(self, job: ManagedJob, event_type: str, payload: dict[str, Any]) -> dict[str, Any]:
         raw_event = RuntimeEvent(job_id=job.record.job_id, type=event_type, payload=payload).model_dump()

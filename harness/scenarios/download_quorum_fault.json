@@ -1,0 +1,20 @@
+{
+  "id": "download-quorum-fault-v1",
+  "description": "One selected material fails while two valid downloads satisfy quorum.",
+  "job_kind": "video_editing",
+  "mode": "fault_matrix",
+  "faults": [
+    {
+      "stage": "material_download",
+      "effect": "connection_reset",
+      "occurrence": 2,
+      "repeat": 1
+    }
+  ],
+  "assertions": {
+    "minimum_download_successes": 2,
+    "terminal_status": "completed",
+    "max_wall_seconds": 120
+  },
+  "tags": ["phase1", "fault", "quorum"]
+}

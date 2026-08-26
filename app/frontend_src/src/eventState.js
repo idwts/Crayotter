@@ -7,14 +7,17 @@ const PHASE_ORDER = {
 export const normalizePhaseCode = (value) => {
   const phase = String(value || "").trim().toLowerCase();
   if (["phase1", "planning", "preparing"].includes(phase)) return "phase1";
+  if (["intake", "sources", "dna_extraction", "story/intake", "story/sources"].includes(phase)) return "phase1";
   if (["phase2", "researching", "editing_research"].includes(phase)) return "phase2";
+  if (["direction_generation", "screenplay_generation", "localization"].includes(phase)) return "phase2";
   if (["phase3", "react", "react_editing", "done"].includes(phase)) return "phase3";
+  if (["similarity", "story/similarity", "story/completed", "completed"].includes(phase)) return "phase3";
   return "";
 };
 
 export const normalizeRuntimeEvent = (event) => {
   if (!event || typeof event !== "object") return event;
-  const normalizedPhase = normalizePhaseCode(event.payload?.phase);
+  const normalizedPhase = normalizePhaseCode(event.payload?.phase || event.payload?.stage || event.payload?.checkpoint);
   if (!normalizedPhase) return event;
   return {
     ...event,
@@ -52,6 +55,6 @@ export const mergeRuntimeEvents = (...eventLists) => {
 };
 
 export const getHighestPhase = (events) => events.reduce((highest, event) => {
-  const phase = normalizePhaseCode(event?.payload?.phase);
+  const phase = normalizePhaseCode(event?.payload?.phase || event?.payload?.stage || event?.payload?.checkpoint);
   return (PHASE_ORDER[phase] || 0) > (PHASE_ORDER[highest] || 0) ? phase : highest;
 }, "");

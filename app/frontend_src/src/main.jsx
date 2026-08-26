@@ -26,6 +26,7 @@ const STORAGE_KEYS = {
   language: "crayotter.language",
   sidebarCollapsed: "crayotter.sidebarCollapsed",
   lastMode: "crayotter.lastMode",
+  lastJobKind: "crayotter.lastJobKind",
   currentView: "crayotter.currentView",
   contextTab: "crayotter.contextTab",
 };
@@ -127,6 +128,18 @@ function App() {
   const [activeContextTab, setActiveContextTab] = useState(() => localStorage.getItem(STORAGE_KEYS.contextTab) || "details");
   const [configMessage, setConfigMessage] = useState("");
   const [mode, setMode] = useState(() => localStorage.getItem(STORAGE_KEYS.lastMode) || "demo");
+  const [jobKind, setJobKind] = useState(() => localStorage.getItem(STORAGE_KEYS.lastJobKind) || "video_editing");
+  const [storyConfig, setStoryConfig] = useState({
+    content_type: "short_drama",
+    source_language: "auto",
+    target_markets: ["CN"],
+    target_languages: ["zh"],
+    episode_count: 1,
+    episode_duration_seconds: 60,
+    genre: "",
+    reference_rights_confirmed: false,
+    generate_localizations: false,
+  });
   const [taskText, setTaskText] = useState("");
   const [toasts, setToasts] = useState([]);
   const [confirmDialog, setConfirmDialog] = useState(null);
@@ -330,6 +343,20 @@ function App() {
         return { title: toolLabel(payload.tool_name), body: safeDisplayText(payload.summary, t("eventToolResultBody")) };
       case "editing_plan_created":
         return { title: t("eventEditingPlanCreated"), body: t("eventEditingPlanCreatedBody", { version: payload.version || "" }) };
+      case "story_workflow_started":
+        return { title: t("eventStoryStarted"), body: t("eventStoryStartedBody") };
+      case "story_sources_ingested":
+        return { title: t("eventStorySources"), body: t("eventStorySourcesBody", { count: payload.count || 0 }) };
+      case "story_dna_created":
+        return { title: t("eventStoryDna"), body: t("eventStoryDnaBody", { count: payload.beats || 0 }) };
+      case "story_package_created":
+        return { title: t("eventStoryPackage"), body: t("eventStoryPackageBody", { count: payload.episodes || 0 }) };
+      case "story_document_revised":
+        return { title: t("eventStoryRevised"), body: `${payload.from_version || ""} → ${payload.version || ""}` };
+      case "story_document_approved":
+        return { title: t("eventStoryApproved"), body: payload.version || "" };
+      case "story_video_composition_created":
+        return { title: t("eventStoryVideoCreated"), body: t("eventStoryVideoCreatedBody", { count: payload.episode_number || 1 }) };
       case "editing_plan_validated":
         return { title: t("eventEditingPlanValidated"), body: t("eventEditingPlanValidatedBody", { version: payload.version || "" }) };
       case "plan_review_waiting":
@@ -614,6 +641,10 @@ function App() {
   }, [mode]);
 
   useEffect(() => {
+    localStorage.setItem(STORAGE_KEYS.lastJobKind, jobKind);
+  }, [jobKind]);
+
+  useEffect(() => {
     localStorage.setItem(STORAGE_KEYS.currentView, currentView);
   }, [currentView]);
 
@@ -621,8 +652,9 @@ function App() {
     localStorage.setItem(STORAGE_KEYS.contextTab, activeContextTab);
   }, [activeContextTab]);
 
-  const uploadAnalysisBadgeLabel = (item) => (item?.has_analysis ? t("analysisReady") : t("analysisMissing"));
+  const uploadAnalysisBadgeLabel = (item) => item?.kind !== "video" ? t("storySource") : item?.has_analysis ? t("analysisReady") : t("analysisMissing");
   const uploadAnalysisHint = (item) => {
+    if (item?.kind !== "video") return t("storySourceHint");
     if (item?.has_analysis) {
       const countSuffix = Number(item.analysis_count || 0) > 1 ? t("uploadCountSuffix", { count: Number(item.analysis_count) }) : "";
       const pathText = item.analysis_display_path || item.analysis_path || "";
@@ -779,7 +811,9 @@ function App() {
     const effectiveDirectPhase3 = directPhase3Execution;
     const payload = {
       task,
-      mode,
+      mode: jobKind === "story_development" ? "agent" : mode,
+      job_kind: jobKind,
+      story_config: jobKind === "story_development" ? storyConfig : null,
       enable_phase2_research: effectiveDirectPhase3 ? false : enablePhase2Research,
       enable_plan_review: enablePlanReview,
       direct_phase3_execution: effectiveDirectPhase3,
@@ -787,6 +821,16 @@ function App() {
     };
     const job = await request("/jobs", { method: "POST", body: JSON.stringify(payload) });
     setTaskText("");
+    setSelectedJobId(job.job_id);
+    setSelectedJob(job);
+    setSelectedEvents([]);
+    setSelectedMessages([]);
+    setSelectedPlan(null);
+    await refreshJobs(true);
+  };
+
+  const onVideoJobCreated = async (payload) => {
+    const job = payload.job;
     setSelectedJobId(job.job_id);
     setSelectedJob(job);
     setSelectedEvents([]);
@@ -898,6 +942,10 @@ function App() {
     setTaskText,
     mode,
     setMode,
+    jobKind,
+    setJobKind,
+    storyConfig,
+    setStoryConfig,
     selectedJob,
     submitJob,
     stopSelectedJob,
@@ -993,6 +1041,7 @@ function App() {
               copyFullLog={copyFullLog}
               downloadFullLogUrl={downloadFullLogUrl}
               notify={notify}
+              onVideoJobCreated={onVideoJobCreated}
               t={t}
             />
           )}

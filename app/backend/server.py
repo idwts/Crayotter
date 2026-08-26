@@ -15,7 +15,7 @@ from typing import Any
 from urllib.parse import parse_qs, quote, urlparse
 
 from .config_store import ConfigStore
-from .models import JobRequest
+from .models import JobRequest, StoryVideoComposeRequest
 from .runtime_manager import RuntimeManager
 from app.media_index import build_analysis_index, is_video_file, match_analysis_files
 from app.runtime_paths import configure_runtime_environment, get_bundle_root, get_runtime_root, resource_path, runtime_path
@@ -36,6 +36,7 @@ RUNTIME_ROOT = get_runtime_root()
 FRONTEND_DIR = resource_path("app", "frontend")
 UPLOADS_DIR = runtime_path("user_temp")
 UPLOADS_DIR.mkdir(parents=True, exist_ok=True)
+STORY_DOCUMENT_SUFFIXES = {".txt", ".md", ".markdown", ".fountain", ".fdx", ".docx", ".pdf"}
 
 
 class BackendHandler(BaseHTTPRequestHandler):
@@ -95,6 +96,12 @@ class BackendHandler(BaseHTTPRequestHandler):
                             "POST /jobs/{job_id}/plans/{version}/feedback",
                             "POST /jobs/{job_id}/plans/{version}/approve",
                             "POST /jobs/{job_id}/plans/{version}/reject",
+                            "GET /jobs/{job_id}/story/current",
+                            "GET /jobs/{job_id}/story/versions",
+                            "GET /jobs/{job_id}/story/{version}",
+                            "PATCH /jobs/{job_id}/story/{version}",
+                            "POST /jobs/{job_id}/story/{version}/approve",
+                            "POST /jobs/{job_id}/story/{version}/compose-video",
                             "DELETE /jobs/{job_id}",
                         ],
                     },
@@ -180,6 +187,19 @@ class BackendHandler(BaseHTTPRequestHandler):
                     self._write_json(HTTPStatus.OK, SERVICE.runtime_manager.get_plan(job_id, parts[4]))
                     return
 
+            if path.startswith("/jobs/") and "/story/" in path:
+                parts = path.split("/")
+                job_id = parts[2]
+                version = parts[4] if len(parts) > 4 else ""
+                if version == "current":
+                    result = SERVICE.runtime_manager.get_current_story(job_id)
+                elif version == "versions":
+                    result = SERVICE.runtime_manager.list_story_versions(job_id)
+                else:
+                    result = SERVICE.runtime_manager.get_story(job_id, version)
+                self._write_json(HTTPStatus.OK, result)
+                return
+
             if path.startswith("/jobs/"):
                 job_id = path.split("/")[2]
                 self._write_json(HTTPStatus.OK, SERVICE.runtime_manager.get_job_detail(job_id))
@@ -254,7 +274,12 @@ class BackendHandler(BaseHTTPRequestHandler):
                 self._write_json(HTTPStatus.OK, result)
                 return
 
-            if path.startswith("/jobs/") and path.endswith("/approve") and "/plans/" not in path:
+            if (
+                path.startswith("/jobs/")
+                and path.endswith("/approve")
+                and "/plans/" not in path
+                and "/story/" not in path
+            ):
                 job_id = path.split("/")[2]
                 payload = self._read_json()
                 result = SERVICE.runtime_manager.approve_job(
@@ -287,6 +312,48 @@ class BackendHandler(BaseHTTPRequestHandler):
                     self._write_json(HTTPStatus.OK, result)
                     return
 
+            if path.startswith("/jobs/") and "/story/" in path:
+                parts = path.split("/")
+                job_id = parts[2]
+                version = parts[4] if len(parts) > 4 else ""
+                action = parts[5] if len(parts) > 5 else ""
+                payload = self._read_json()
+                if action == "approve":
+                    result = SERVICE.runtime_manager.approve_story(job_id, version)
+                    self._write_json(HTTPStatus.OK, result)
+                    return
+                if action == "compose-video":
+                    result = SERVICE.runtime_manager.compose_story_video(
+                        job_id,
+                        version,
+                        StoryVideoComposeRequest.model_validate(payload),
+                    )
+                    self._write_json(HTTPStatus.CREATED, result)
+                    return
+
+            self._write_json(HTTPStatus.NOT_FOUND, {"error": f"Unknown route: {path}"})
+        except RuntimeError as exc:
+            self._write_json(HTTPStatus.CONFLICT, {"error": str(exc)})
+        except KeyError as exc:
+            self._write_json(HTTPStatus.NOT_FOUND, {"error": f"Not found: {exc.args[0]}"})
+        except Exception as exc:
+            self._write_json(HTTPStatus.BAD_REQUEST, {"error": str(exc)})
+
+    def do_PATCH(self) -> None:  # noqa: N802
+        parsed = urlparse(self.path)
+        path = parsed.path.rstrip("/") or "/"
+        try:
+            if path.startswith("/jobs/") and "/story/" in path:
+                parts = path.split("/")
+                job_id = parts[2]
+                version = parts[4] if len(parts) > 4 else ""
+                payload = self._read_json()
+                changes = payload.get("changes", payload)
+                if not isinstance(changes, dict):
+                    raise ValueError("Story revision changes must be a JSON object.")
+                result = SERVICE.runtime_manager.revise_story(job_id, version, changes)
+                self._write_json(HTTPStatus.CREATED, result)
+                return
             self._write_json(HTTPStatus.NOT_FOUND, {"error": f"Unknown route: {path}"})
         except RuntimeError as exc:
             self._write_json(HTTPStatus.CONFLICT, {"error": str(exc)})
@@ -531,7 +598,9 @@ class BackendHandler(BaseHTTPRequestHandler):
         analysis_index = build_analysis_index([UPLOADS_DIR])
         items: list[dict[str, Any]] = []
         for path in sorted(UPLOADS_DIR.rglob("*"), key=lambda item: item.stat().st_mtime, reverse=True):
-            if not is_video_file(path):
+            if not is_video_file(path) and path.suffix.lower() not in STORY_DOCUMENT_SUFFIXES:
+                continue
+            if path.name.lower().endswith("_analysis.json"):
                 continue
             items.append(cls._serialize_upload_item(path, analysis_index=analysis_index))
         return items

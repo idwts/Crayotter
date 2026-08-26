@@ -109,15 +109,28 @@ def main(argv: list[str] | None = None) -> int:
         )
 
     try:
-        final_output = agent.run_task(task, event_callback=on_event, verbose=False)
+        if str(config.get("job_kind") or "video_editing") == "story_development":
+            from story.runner import run_story_task
+
+            final_output, output_files = run_story_task(
+                task,
+                config,
+                event_callback=on_event,
+            )
+        else:
+            final_output = agent.run_task(task, event_callback=on_event, verbose=False)
+            output_files = agent._list_workspace_mp4_files()
         emitter.send(
             {
                 "kind": "result",
                 "final_output": final_output,
-                "output_files": agent._list_workspace_mp4_files(),
+                "output_files": output_files,
             }
         )
-        if getattr(agent, "POST_TASK_REVIEW_MODE", "async") == "async":
+        if (
+            str(config.get("job_kind") or "video_editing") == "video_editing"
+            and getattr(agent, "POST_TASK_REVIEW_MODE", "async") == "async"
+        ):
             agent.run_post_task_review(
                 task,
                 final_output,
