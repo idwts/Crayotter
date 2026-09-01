@@ -888,40 +888,55 @@ def generate_editing_plan_node(state: AgentState) -> dict[str, Any]:
         "bgm_strategy、scenes。scenes 每项包含 scene_id、start、end、narrative_purpose、source_path、"
         "source_start、source_end、crop、transition、subtitle、narration、alternatives、locked。只返回 JSON。"
     )
-    try:
-        response = _invoke_llm(
-            _get_llm(temperature=0.15).bind(max_tokens=5000),
-            [
-                SystemMessage(content=prompt),
-                HumanMessage(
-                    content=json.dumps(
-                        {
-                            "user_request": state.user_request,
-                            "target_duration_seconds": state.target_duration_seconds,
-                            "source_video_paths": source_paths,
-                            "source_analysis_paths": analysis_paths,
-                            "blueprint_markdown": state.editing_blueprint[:20000],
-                            "analysis": _build_full_analysis_context()[:30000],
-                        },
-                        ensure_ascii=False,
-                    )
-                ),
-            ],
-            "editing_plan_generator",
-        )
-        parsed = _parse_json_object(str(response.content))
-        parsed["version"] = "v001"
-        parsed["status"] = "DRAFT"
-        parsed["user_request"] = state.user_request
-        parsed["source_video_paths"] = source_paths
-        parsed["source_analysis_paths"] = analysis_paths
-        parsed["blueprint_markdown"] = state.editing_blueprint
-        plan = normalize_plan_timeline(EditingPlan.model_validate(parsed))
-    except ModelCallError:
-        raise
-    except Exception as exc:
-        graph_logger.warning("剪辑计划生成失败，使用降级计划: %s", exc)
-        _emit_orchestration_event("editing_plan_fallback", {"reason": str(exc)[:300]})
+    plan: EditingPlan | None = None
+    last_error = ""
+    for attempt in range(1, 3):
+        payload: dict[str, Any] = {
+            "user_request": state.user_request,
+            "target_duration_seconds": state.target_duration_seconds,
+            "source_video_paths": source_paths,
+            "source_analysis_paths": analysis_paths,
+            "blueprint_markdown": state.editing_blueprint[:20000],
+            "analysis": _build_full_analysis_context()[:30000],
+        }
+        if last_error:
+            # 把上一次失败原因反馈给 planner，让它针对性修正而不是盲目重试
+            payload["previous_error"] = last_error
+        try:
+            response = _invoke_llm(
+                _get_llm(temperature=0.15).bind(max_tokens=5000),
+                [
+                    SystemMessage(content=prompt),
+                    HumanMessage(content=json.dumps(payload, ensure_ascii=False)),
+                ],
+                "editing_plan_generator",
+            )
+            parsed = _parse_json_object(str(response.content))
+            parsed["version"] = "v001"
+            parsed["status"] = "DRAFT"
+            parsed["user_request"] = state.user_request
+            parsed["source_video_paths"] = source_paths
+            parsed["source_analysis_paths"] = analysis_paths
+            parsed["blueprint_markdown"] = state.editing_blueprint
+            candidate = normalize_plan_timeline(EditingPlan.model_validate(parsed))
+            report = validate_editing_plan(candidate, allowed_source_paths=candidate.source_video_paths)
+            if report.ok:
+                plan = candidate
+                break
+            last_error = "; ".join(
+                issue.message for issue in report.issues if issue.severity == "error"
+            )[:500]
+            _emit_orchestration_event(
+                "editing_plan_retry",
+                {"attempt": attempt, "issues": last_error[:300]},
+            )
+        except ModelCallError:
+            raise
+        except Exception as exc:
+            last_error = str(exc)[:500]
+    if plan is None:
+        graph_logger.warning("剪辑计划生成失败，使用降级计划: %s", last_error)
+        _emit_orchestration_event("editing_plan_fallback", {"reason": last_error[:300]})
         plan = _fallback_editing_plan(state)
 
     store.save_plan(plan)
