@@ -73,7 +73,10 @@ def add_subtitles(
                     size=(video.size[0] - 120, None),
                     duration=end - start,
                 )
-                txt_clip = txt_clip.with_position(("center", video.size[1] - 160))
+                # 底部对齐：扣除字幕块自身高度，避免多行字幕底部超出画布被裁切
+                bottom_margin = 110  # 与原单行视觉效果一致（原顶边=高-160，单行约50px高）
+                sub_y = max(0, video.size[1] - bottom_margin - txt_clip.h)
+                txt_clip = txt_clip.with_position(("center", sub_y))
                 txt_clip = txt_clip.with_start(start)
                 sub_clips.append(txt_clip)
             except Exception as se:
