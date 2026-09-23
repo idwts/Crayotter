@@ -75,6 +75,7 @@ A full end-to-end run: from a one-line text request, Crayotter prepares material
 
 ## News
 
+- **2026.9.24** — 🎬 Crayotter was accepted at **AACL 2026 as an Oral** presentation! This maintenance update also brings a native ffmpeg/ffprobe pipeline for cut/merge/export/mix (moviepy retained as fallback and for subtitle rendering), a unified tool result format, and an MCP server exposing every editing tool (`python -m script.mcp_server`).
 - **2026.8.5** — Our new work is now available! Towards long-horizon video editing agents: [Crayotter: Learning Long-Horizon Video Editing Agents via Group-Relative Preference Backpropagation](https://arxiv.org/abs/2608.02694)。
 - **2026.6.27** — Crayotter 1.0.0 adds multi-source material import, unified download cleanup, and refreshed Windows release packaging.
 - **2026.6.15** — Asynchronous scheduling upgrade accelerated the overall video generation workflow by ~1.6×.
@@ -297,6 +298,19 @@ http://127.0.0.1:8765/ui/
 ```
 
 > The GUI uses the runtime-root `.env` as the only configuration source of truth. Do not commit real `.env` values.
+
+---
+
+## MCP Server
+
+Every editing tool is also exposed over the [Model Context Protocol](https://modelcontextprotocol.io), so MCP clients (Claude Desktop, Cursor, …) can drive Crayotter directly:
+
+```bash
+pip install mcp
+python -m script.mcp_server
+```
+
+The server registers each tool from `script.tools.ALL_TOOLS` under its existing name, with the same arguments and return format as the agent graph.
 
 ---
 

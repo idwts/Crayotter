@@ -75,6 +75,7 @@ Crayotter 是一个多模态、Agent 驱动的视频自动编辑系统，可以�
 
 ## 近期动态
 
+- **2026.9.24** — 🎬 Crayotter 已被 **AACL 2026 录用为 Oral** 报告！本次维护更新还带来了原生 ffmpeg/ffprobe 剪辑/合并/导出/混音管线（moviepy 保留为兜底并继续负责字幕渲染）、统一的工具返回格式，以及暴露全部剪辑工具的 MCP 服务（`python -m script.mcp_server`）。
 - **2026.8.5** — 全新工作已公开！迈向长时序视频编辑智能体：[Crayotter: Learning Long-Horizon Video Editing Agents via Group-Relative Preference Backpropagation](https://arxiv.org/abs/2608.02694)。
 - **2026.6.27** — Crayotter 1.0.0 新增多素材源导入、统一下载清洗，并更新 Windows 发布包。
 - **2026.6.15** — 异步调度升级后，视频生成整体流程提速约 1.6 倍。
@@ -322,6 +323,19 @@ http://127.0.0.1:8765/ui/
 ```
 
 > 图形化工作台以运行根目录 `.env` 作为唯一配置真源。不要提交真实 `.env`。
+
+---
+
+## MCP 服务
+
+全部剪辑工具均已通过 [Model Context Protocol](https://modelcontextprotocol.io) 暴露，MCP 客户端（Claude Desktop、Cursor 等）可直接调用 Crayotter：
+
+```bash
+pip install mcp
+python -m script.mcp_server
+```
+
+服务将 `script.tools.ALL_TOOLS` 中的每个工具按原名注册，参数与返回格式与 Agent 工作流完全一致。
 
 ---
 

@@ -22,25 +22,29 @@ def cut_video(
             例如 "intro_highlight"
     """
     try:
-        from moviepy.video.io.VideoFileClip import VideoFileClip
+        from ._native_ffmpeg import binaries_available, cut_video_native
 
         resolved_input = _resolve_workspace_input_path(input_path, must_exist=True)
         if resolved_input is None:
-            return f"剪辑出错: 输入视频不在WORKSPACE或不存在: {input_path}"
+            return tool_error("剪辑", f"输入视频不在WORKSPACE或不存在: {input_path}")
 
         if not output_name:
             output_name = f"clip_{start_time:.0f}_{end_time:.0f}"
         output_path = _safe_output_video_path(output_name, default_stem="clip")
 
-        with VideoFileClip(str(resolved_input)) as clip:
-            sub_clip = clip.subclipped(start_time, end_time)
-            sub_clip.write_videofile(
-                str(output_path), codec="libx264", audio_codec="aac", logger=None
+        if binaries_available():
+            duration = cut_video_native(
+                resolved_input, output_path, start_time=start_time, end_time=end_time
             )
-        return json.dumps({
-            "status": "success",
-            "path": str(output_path),
-            "duration": round(end_time - start_time, 1),
-        }, ensure_ascii=False)
+        else:
+            from moviepy.video.io.VideoFileClip import VideoFileClip
+
+            with VideoFileClip(str(resolved_input)) as clip:
+                sub_clip = clip.subclipped(start_time, end_time)
+                sub_clip.write_videofile(
+                    str(output_path), codec="libx264", audio_codec="aac", logger=None
+                )
+            duration = end_time - start_time
+        return tool_success(path=str(output_path), duration=round(duration, 1))
     except Exception as e:
-        return f"剪辑出错: {e}"
+        return tool_error("剪辑", e)

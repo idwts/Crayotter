@@ -35,7 +35,8 @@ langgraph-prebuilt==1.0.8
 langgraph-sdk==0.3.11
 langsmith==0.7.17
 lxml==6.0.2
-moviepy==2.2.1
+moviepy==2.2.1  # subtitle/TextClip rendering path; core cut/merge/export/mix prefer native ffmpeg
+# optional MCP server support: pip install mcp (see script/mcp_server.py)
 multidict==6.7.1
 numpy==2.2.6
 openai==2.26.0

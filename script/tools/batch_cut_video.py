@@ -25,11 +25,15 @@ def batch_cut_video(
             仅当自动查找失败时才需要手动指定，例如 "/workspace/scut_intro_video_analysis.json"。
     """
     try:
-        from moviepy.video.io.VideoFileClip import VideoFileClip
+        from ._native_ffmpeg import binaries_available, cut_video_native
+
+        _use_native = binaries_available()
+        if not _use_native:
+            from moviepy.video.io.VideoFileClip import VideoFileClip
 
         resolved_input = _resolve_workspace_input_path(video_path, must_exist=True)
         if resolved_input is None:
-            return f"批量剪辑出错: 输入视频不存在或不在WORKSPACE: {video_path}"
+            return tool_error("批量剪辑", f"输入视频不存在或不在WORKSPACE: {video_path}")
 
         # ---------- 查找分析JSON ----------
         analysis_data = None
@@ -59,9 +63,9 @@ def batch_cut_video(
                     continue
 
         if analysis_data is None:
-            return (
-                f"批量剪辑出错: 未找到视频 {video_path} 的分析JSON。"
-                "请先调用 analyze_video 分析视频内容。"
+            return tool_error(
+                "批量剪辑",
+                f"未找到视频 {video_path} 的分析JSON。请先调用 analyze_video 分析视频内容。",
             )
 
         # ---------- 提取时间段 ----------
@@ -70,7 +74,7 @@ def batch_cut_video(
             analysis_text = analysis_data.get("analysis_text", "")
             segments = _extract_time_segments_from_analysis(analysis_text)
         if not segments:
-            return "批量剪辑出错: 分析结果中没有可用的时间段。请检查 analyze_video 的分析是否正常。"
+            return tool_error("批量剪辑", "分析结果中没有可用的时间段。请检查 analyze_video 的分析是否正常。")
 
         # 获取源视频时长以做边界裁剪
         meta = _get_video_meta(str(resolved_input))
@@ -133,7 +137,7 @@ def batch_cut_video(
             accum += seg_dur
 
         if not selected:
-            return "批量剪辑出错: 分析中没有有效可裁剪的时间段。"
+            return tool_error("批量剪辑", "分析中没有有效可裁剪的时间段。")
 
         # ---------- 执行批量裁剪 ----------
         clip_results: list[dict[str, Any]] = []
@@ -141,9 +145,14 @@ def batch_cut_video(
             out_name = f"{resolved_input.stem}_clip_{i}"
             out_path = _safe_output_video_path(out_name, default_stem=f"clip_{i}")
             try:
-                with VideoFileClip(str(resolved_input)) as clip:
-                    sub = clip.subclipped(seg["start"], seg["end"])
-                    sub.write_videofile(str(out_path), codec="libx264", audio_codec="aac", logger=None)
+                if _use_native:
+                    cut_video_native(
+                        resolved_input, out_path, start_time=seg["start"], end_time=seg["end"]
+                    )
+                else:
+                    with VideoFileClip(str(resolved_input)) as clip:
+                        sub = clip.subclipped(seg["start"], seg["end"])
+                        sub.write_videofile(str(out_path), codec="libx264", audio_codec="aac", logger=None)
                 clip_results.append({
                     "index": i,
                     "path": str(out_path),
@@ -156,21 +165,21 @@ def batch_cut_video(
                 continue
 
         if not clip_results:
-            return "批量剪辑出错: 所有片段裁剪均失败。"
+            return tool_error("批量剪辑", "所有片段裁剪均失败。")
 
         total_dur = sum(c["duration"] for c in clip_results)
         logger.info(
             "✂️ 批量剪辑完成: 源=%s, 片段=%d, 总时长=%.1fs, 目标=%.1fs",
             resolved_input.name, len(clip_results), total_dur, target_duration,
         )
-        return json.dumps({
-            "status": "success",
-            "source_video": str(resolved_input),
-            "clips": clip_results,
-            "clip_count": len(clip_results),
-            "total_duration": round(total_dur, 1),
-            "target_duration": target_duration,
-            "clip_paths": [c["path"] for c in clip_results],
-        }, ensure_ascii=False)
+        return tool_success(
+            source_video=str(resolved_input),
+            clips=clip_results,
+            clip_count=len(clip_results),
+            duration=round(total_dur, 1),
+            total_duration=round(total_dur, 1),
+            target_duration=target_duration,
+            clip_paths=[c["path"] for c in clip_results],
+        )
     except Exception as e:
-        return f"批量剪辑出错: {e}"
+        return tool_error("批量剪辑", e)

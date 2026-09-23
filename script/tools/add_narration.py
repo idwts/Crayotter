@@ -28,14 +28,10 @@ def add_narration(
             输出文件将保存为 /workspace/{output_name}.mp4。
     """
     try:
-        from moviepy.audio.AudioClip import CompositeAudioClip
-        from moviepy.audio.io.AudioFileClip import AudioFileClip
-        from moviepy.video.io.VideoFileClip import VideoFileClip
-
         resolved_video = _resolve_workspace_input_path(video_path, must_exist=True)
         if resolved_video is None:
-            return f"旁白添加出错: 输入视频不存在或不在WORKSPACE: {video_path}"
-        
+            return tool_error("旁白添加", f"输入视频不存在或不在WORKSPACE: {video_path}")
+
         client = OpenAI(base_url=TTS_BASE_URL, api_key=TTS_API_KEY)
 
         # client = _get_openai_client()
@@ -48,9 +44,27 @@ def add_narration(
 
         tts_error = _tts_generate(narration_text, voice, audio_path)
         if tts_error:
-            return f"旁白添加出错: {tts_error}"
+            return tool_error("旁白添加", tts_error)
 
         output_path = _safe_output_video_path(output_name, default_stem="narrated")
+
+        from ._native_ffmpeg import binaries_available, mix_narration_native, probe_video_optional
+
+        if binaries_available():
+            probe = probe_video_optional(resolved_video)
+            if probe is not None:
+                max_seconds = probe.duration if probe.duration > 0 else None
+                mix_narration_native(
+                    resolved_video,
+                    [(audio_path, 0.0, 1.0, max_seconds)],
+                    output_path,
+                )
+                return tool_success(path=str(output_path), narration_length=len(narration_text))
+
+        from moviepy.audio.AudioClip import CompositeAudioClip
+        from moviepy.audio.io.AudioFileClip import AudioFileClip
+        from moviepy.video.io.VideoFileClip import VideoFileClip
+
         video = VideoFileClip(str(resolved_video))
         narration_audio = AudioFileClip(str(audio_path))
 
@@ -72,12 +86,8 @@ def add_narration(
         narration_audio.close()
         final.close()
 
-        return json.dumps({
-            "status": "success",
-            "path": str(output_path),
-            "narration_length": len(narration_text),
-        }, ensure_ascii=False)
+        return tool_success(path=str(output_path), narration_length=len(narration_text))
     except ModelCallError:
         raise
     except Exception as e:
-        return f"旁白添加出错: {e}"
+        return tool_error("旁白添加", e)

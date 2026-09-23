@@ -34,6 +34,44 @@ def _positive_int_env(name: str, default: int) -> int:
         return default
 
 
+def binaries_available() -> bool:
+    """True when both ffmpeg and ffprobe are resolvable without raising."""
+    try:
+        _binary("FFMPEG_BIN", "ffmpeg")
+        _binary("FFPROBE_BIN", "ffprobe")
+    except RuntimeError:
+        return False
+    return True
+
+
+def probe_media_duration(path: Path) -> float:
+    """Container duration in seconds via ffprobe (also works for audio-only files)."""
+    result = subprocess.run(
+        [
+            _binary("CRAYOTTER_FFPROBE_BINARY", "ffprobe"),
+            "-v",
+            "error",
+            "-show_entries",
+            "format=duration",
+            "-of",
+            "json",
+            str(path),
+        ],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    return float(json.loads(result.stdout)["format"]["duration"])
+
+
+def probe_video_optional(path: Path) -> VideoProbe | None:
+    """probe_video that returns None instead of raising (for probe-with-fallback callers)."""
+    try:
+        return probe_video(path)
+    except Exception:
+        return None
+
+
 def _binary(env_name: str, executable: str) -> str:
     configured = os.environ.get(env_name, "").strip()
     if configured:
@@ -295,3 +333,57 @@ def merge_videos_native(
         raise
 
     return sum(item[2] for item in selected), len(selected), (target_w, target_h)
+
+def mix_narration_native(
+    video_path: Path,
+    narration_parts: Sequence[tuple[Path, float, float, float | None]],
+    output_path: Path,
+    *,
+    original_volume: float = 0.2,
+) -> None:
+    """Mix TTS narration clips onto a video's soundtrack with ffmpeg.
+
+    narration_parts is (audio_path, offset_seconds, volume, max_seconds) per segment
+    (max_seconds=None means no truncation); the video stream is copied untouched
+    (no re-encode) and only the mixed audio is encoded to aac. When the source
+    video has no audio track the narration parts are mixed on their own.
+    """
+    if not narration_parts:
+        raise ValueError("no narration parts supplied")
+
+    probe = probe_video(video_path)
+    command = [*_base_command(), "-i", str(video_path)]
+    for audio_path, _, _, _ in narration_parts:
+        command.extend(["-i", str(audio_path)])
+
+    filters: list[str] = []
+    mix_inputs: list[str] = []
+    if probe.has_audio:
+        filters.append(f"[0:a:0]volume={original_volume:.3f}[bg]")
+        mix_inputs.append("[bg]")
+    for index, (_, offset, volume, max_seconds) in enumerate(narration_parts):
+        delay_ms = max(0, int(round(offset * 1000)))
+        chain = (
+            f"[{index + 1}:a:0]aformat=sample_fmts=fltp:sample_rates=48000:channel_layouts=stereo,"
+            f"volume={volume:.3f}"
+        )
+        if max_seconds is not None and max_seconds > 0:
+            chain += f",atrim=duration={max_seconds:.6f},asetpts=PTS-STARTPTS"
+        filters.append(chain + f",adelay={delay_ms}|{delay_ms}[n{index}]")
+        mix_inputs.append(f"[n{index}]")
+    filters.append(
+        "".join(mix_inputs)
+        + f"amix=inputs={len(mix_inputs)}:duration=first:dropout_transition=0[aout]"
+    )
+
+    command.extend(["-filter_complex", ";".join(filters)])
+    command.extend(["-map", "0:v:0", "-map", "[aout]", "-c:v", "copy", "-c:a", "aac"])
+    command.extend(["-movflags", "+faststart", str(output_path)])
+
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        _run(command)
+    except Exception:
+        output_path.unlink(missing_ok=True)
+        raise
+

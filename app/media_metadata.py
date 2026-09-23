@@ -20,6 +20,13 @@ def video_duration_seconds(video_path: Path) -> float | None:
 
 
 def video_has_audio(video_path: Path) -> bool:
+    from script.tools._native_ffmpeg import binaries_available, probe_video_optional
+
+    if binaries_available():
+        probe = probe_video_optional(video_path)
+        if probe is not None:
+            return probe.has_audio
+
     from moviepy.video.io.VideoFileClip import VideoFileClip
 
     clip = VideoFileClip(str(video_path))

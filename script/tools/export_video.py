@@ -23,13 +23,23 @@ def export_video(
             - "4k"：3840×2160，超高清（编码耗时较长）
     """
     try:
-        from moviepy.video.io.VideoFileClip import VideoFileClip
+        from ._native_ffmpeg import binaries_available, export_video_native, probe_video_optional
 
         resolved_input = _resolve_workspace_input_path(input_path, must_exist=True)
         if resolved_input is None:
-            return f"导出出错: 输入视频不存在或不在WORKSPACE: {input_path}"
+            return tool_error("导出", f"输入视频不存在或不在WORKSPACE: {input_path}")
 
         output_path = _safe_output_video_path(output_name, default_stem="output_final")
+
+        probed = probe_video_optional(resolved_input) if binaries_available() else None
+        if probed is not None:
+            target = _pick_export_target_size(resolution, (probed.width, probed.height))
+            dur = export_video_native(resolved_input, output_path, target_size=target)
+            return tool_success(
+                path=str(output_path), resolution=resolution, duration=round(dur, 1)
+            )
+
+        from moviepy.video.io.VideoFileClip import VideoFileClip
 
         source_clip = VideoFileClip(str(resolved_input))
         target = _pick_export_target_size(resolution, source_clip.size)
@@ -43,11 +53,8 @@ def export_video(
         if clip is not source_clip:
             source_clip.close()
 
-        return json.dumps({
-            "status": "success",
-            "path": str(output_path),
-            "resolution": resolution,
-            "duration": round(dur, 1),
-        }, ensure_ascii=False)
+        return tool_success(
+            path=str(output_path), resolution=resolution, duration=round(dur, 1)
+        )
     except Exception as e:
-        return f"导出出错: {e}"
+        return tool_error("导出", e)

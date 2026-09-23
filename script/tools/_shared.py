@@ -992,7 +992,28 @@ def _match_analysis_json_files(video_path: Path) -> list[Path]:
         analysis_index=build_analysis_index([WORKSPACE, USER_WORKSPACE]),
     )
 
+def tool_success(**fields: Any) -> str:
+    """Canonical tool success payload: always a JSON object carrying status="success"."""
+    return json.dumps({"status": "success", **fields}, ensure_ascii=False)
+
+
+def tool_error(action: str, exc: Any) -> str:
+    """Canonical tool failure text: keeps the "出错" marker that graph.py and phase3_rl detect."""
+    return f"{action}出错: {exc}"
+
+
 def _get_video_meta(video_path: str) -> dict[str, Any]:
+    from ._native_ffmpeg import probe_video_optional
+
+    probed = probe_video_optional(Path(video_path))
+    if probed is not None:
+        return {
+            "duration_seconds": round(probed.duration, 2),
+            "fps": round(probed.fps, 2),
+            "resolution": f"{probed.width}x{probed.height}",
+            "width": probed.width,
+            "height": probed.height,
+        }
     cap = cv2.VideoCapture(video_path)
     fps = cap.get(cv2.CAP_PROP_FPS)
     frame_count = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))

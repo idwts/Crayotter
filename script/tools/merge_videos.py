@@ -26,12 +26,33 @@ def merge_videos(
             仅在 target_duration 不为 None 时生效，一般无需修改。
     """
     try:
-        from moviepy import concatenate_videoclips
-        from moviepy.video.io.VideoFileClip import VideoFileClip
+        from ._native_ffmpeg import binaries_available, merge_videos_native
 
         output_path = _safe_output_video_path(output_name, default_stem="merged")
         if not video_paths:
-            return "合并出错: 没有可用的视频片段"
+            return tool_error("合并", "没有可用的视频片段")
+
+        if binaries_available():
+            resolved_inputs = []
+            for raw_path in video_paths:
+                resolved_input = _resolve_workspace_input_path(raw_path, must_exist=True)
+                if resolved_input is None:
+                    return tool_error("合并", f"文件不存在或不在WORKSPACE: {raw_path}")
+                resolved_inputs.append(resolved_input)
+            total_dur, num_clips, (target_w, target_h) = merge_videos_native(
+                resolved_inputs, output_path, target_duration=target_duration, tolerance=tolerance
+            )
+            return tool_success(
+                path=str(output_path),
+                duration=round(total_dur, 1),
+                total_duration=round(total_dur, 1),
+                num_clips=num_clips,
+                target_duration=target_duration,
+                canvas_size=f"{target_w}x{target_h}",
+            )
+
+        from moviepy import concatenate_videoclips
+        from moviepy.video.io.VideoFileClip import VideoFileClip
 
         clips: list[Any] = []
         remaining = target_duration if target_duration and target_duration > 0 else None
@@ -41,7 +62,7 @@ def merge_videos(
                 break
             resolved_input = _resolve_workspace_input_path(raw_path, must_exist=True)
             if resolved_input is None:
-                return f"合并出错: 文件不存在或不在WORKSPACE: {raw_path}"
+                return tool_error("合并", f"文件不存在或不在WORKSPACE: {raw_path}")
             p = str(resolved_input)
             clip = VideoFileClip(p)
             if remaining is not None and clip.duration > remaining * (1 + tolerance):
@@ -52,7 +73,7 @@ def merge_videos(
                 remaining -= clip.duration
 
         if not clips:
-            return "合并出错: 没有可合并的有效片段"
+            return tool_error("合并", "没有可合并的有效片段")
 
         landscape_clips = [clip for clip in clips if clip.size[0] >= clip.size[1]]
         portrait_clips = [clip for clip in clips if clip.size[1] > clip.size[0]]
@@ -84,13 +105,13 @@ def merge_videos(
             except Exception:
                 pass
 
-        return json.dumps({
-            "status": "success",
-            "path": str(output_path),
-            "total_duration": round(total_dur, 1),
-            "num_clips": len(clips),
-            "target_duration": target_duration,
-            "canvas_size": f"{target_w}x{target_h}",
-        }, ensure_ascii=False)
+        return tool_success(
+            path=str(output_path),
+            duration=round(total_dur, 1),
+            total_duration=round(total_dur, 1),
+            num_clips=len(clips),
+            target_duration=target_duration,
+            canvas_size=f"{target_w}x{target_h}",
+        )
     except Exception as e:
-        return f"合并出错: {e}"
+        return tool_error("合并", e)

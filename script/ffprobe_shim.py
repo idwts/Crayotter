@@ -22,6 +22,15 @@ def _print_duration(video_path: Path) -> int:
 
 
 def _print_audio_presence(video_path: Path) -> int:
+    from script.tools._native_ffmpeg import binaries_available, probe_video_optional
+
+    if binaries_available():
+        probe = probe_video_optional(video_path)
+        if probe is not None:
+            if probe.has_audio:
+                print("0")
+            return 0
+
     from moviepy.video.io.VideoFileClip import VideoFileClip
 
     clip = VideoFileClip(str(video_path))
