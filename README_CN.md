@@ -277,6 +277,7 @@ CRAYOTTER_AGENT_STALL_TIMEOUT_SECONDS=150
 - 素材下载统一走 `download_material_video`；B 站仍是默认关键词搜索源，用户提供的第三方平台 URL 会进入同一下载与清洗管线。
 - `CRAYOTTER_STANDARDIZE_TARGET_FPS` 控制下载素材清洗后的目标帧率。`CRAYOTTER_AUDIO_LOUDNORM_TARGET=0` 表示关闭响度归一化；设置为 `-16` 等负 LUFS 值时启用两遍 EBU R128 loudnorm。
 - `CRAYOTTER_AGENT_STALL_TIMEOUT_SECONDS`：控制任务“长时间无新进展”判定阈值。
+- `CRAYOTTER_ENABLE_THINKING=false`：显式关闭推理模型的思考模式（如 Qwen3 系），避免长推理耗尽 `max_tokens` 后返回空内容；`true` 为强制开启，缺省保持服务商默认。
 - 环境隐式逻辑：图形化工作台中的 API 设置、Phase 2、直达 Phase 3、本地素材优先和超时设置，都会同步写回同一份 `.env`。
 - 成品画幅控制：候选素材排序现在会把目标横竖屏当成评分因子：默认优先横屏；如果用户明确要求竖屏，则优先竖屏。Phase 3 合并/导出也改成“放缩后居中裁切”，不再简单拉伸。
 - 隐式删除逻辑：对于 `user_temp` 里的用户视频，Crayotter 现在会把对应的 `*_analysis.json` 直接写回 `user_temp`，后续运行自动复用；如果你在 Web 工作台删除这个上传视频，也会一起删除同名分析文件。

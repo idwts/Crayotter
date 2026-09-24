@@ -186,6 +186,7 @@ ENABLE_PLAN_REVIEW: bool = True
 REVISION: int = max(1, int(os.environ.get("CRAYOTTER_REVISION", "1") or 1))
 DIRECT_PHASE3_EXECUTION: bool = False
 PREFER_LOCAL_MATERIALS: bool = False
+ENABLE_THINKING: str = str(os.environ.get("CRAYOTTER_ENABLE_THINKING", "") or "").strip().lower()
 SEARCH_POOL_SIZE: int = 4
 DOWNLOAD_POOL_SIZE: int = 3
 VIDEO_ANALYSIS_POOL_SIZE: int = 3
@@ -856,40 +857,55 @@ def generate_editing_plan_node(state: AgentState) -> dict[str, Any]:
         "bgm_strategy、scenes。scenes 每项包含 scene_id、start、end、narrative_purpose、source_path、"
         "source_start、source_end、crop、transition、subtitle、narration、alternatives、locked。只返回 JSON。"
     )
-    try:
-        response = _invoke_llm(
-            _get_llm(temperature=0.15).bind(max_tokens=5000),
-            [
-                SystemMessage(content=prompt),
-                HumanMessage(
-                    content=json.dumps(
-                        {
-                            "user_request": state.user_request,
-                            "target_duration_seconds": state.target_duration_seconds,
-                            "source_video_paths": source_paths,
-                            "source_analysis_paths": analysis_paths,
-                            "blueprint_markdown": state.editing_blueprint[:20000],
-                            "analysis": _build_full_analysis_context()[:30000],
-                        },
-                        ensure_ascii=False,
-                    )
-                ),
-            ],
-            "editing_plan_generator",
-        )
-        parsed = _parse_json_object(str(response.content))
-        parsed["version"] = "v001"
-        parsed["status"] = "DRAFT"
-        parsed["user_request"] = state.user_request
-        parsed["source_video_paths"] = source_paths
-        parsed["source_analysis_paths"] = analysis_paths
-        parsed["blueprint_markdown"] = state.editing_blueprint
-        plan = normalize_plan_timeline(EditingPlan.model_validate(parsed))
-    except ModelCallError:
-        raise
-    except Exception as exc:
-        graph_logger.warning("剪辑计划生成失败，使用降级计划: %s", exc)
-        _emit_orchestration_event("editing_plan_fallback", {"reason": str(exc)[:300]})
+    plan: EditingPlan | None = None
+    last_error = ""
+    for attempt in range(1, 3):
+        payload: dict[str, Any] = {
+            "user_request": state.user_request,
+            "target_duration_seconds": state.target_duration_seconds,
+            "source_video_paths": source_paths,
+            "source_analysis_paths": analysis_paths,
+            "blueprint_markdown": state.editing_blueprint[:20000],
+            "analysis": _build_full_analysis_context()[:30000],
+        }
+        if last_error:
+            # 把上一次失败原因反馈给 planner，让它针对性修正而不是盲目重试
+            payload["previous_error"] = last_error
+        try:
+            response = _invoke_llm(
+                _get_llm(temperature=0.15).bind(max_tokens=5000),
+                [
+                    SystemMessage(content=prompt),
+                    HumanMessage(content=json.dumps(payload, ensure_ascii=False)),
+                ],
+                "editing_plan_generator",
+            )
+            parsed = _parse_json_object(str(response.content))
+            parsed["version"] = "v001"
+            parsed["status"] = "DRAFT"
+            parsed["user_request"] = state.user_request
+            parsed["source_video_paths"] = source_paths
+            parsed["source_analysis_paths"] = analysis_paths
+            parsed["blueprint_markdown"] = state.editing_blueprint
+            candidate = normalize_plan_timeline(EditingPlan.model_validate(parsed))
+            report = validate_editing_plan(candidate, allowed_source_paths=candidate.source_video_paths)
+            if report.ok:
+                plan = candidate
+                break
+            last_error = "; ".join(
+                issue.message for issue in report.issues if issue.severity == "error"
+            )[:500]
+            _emit_orchestration_event(
+                "editing_plan_retry",
+                {"attempt": attempt, "issues": last_error[:300]},
+            )
+        except ModelCallError:
+            raise
+        except Exception as exc:
+            last_error = str(exc)[:500]
+    if plan is None:
+        graph_logger.warning("剪辑计划生成失败，使用降级计划: %s", last_error)
+        _emit_orchestration_event("editing_plan_fallback", {"reason": last_error[:300]})
         plan = _fallback_editing_plan(state)
 
     store.save_plan(plan)
@@ -1132,12 +1148,20 @@ def _resource_scheduler(registry: ArtifactRegistry) -> ResourceScheduler:
 # ═══════════════════════════════════════════════════════════════════════════
 def _get_llm(temperature: float = 0.2) -> ChatOpenAI:
     graph_logger.info("🔍 _get_llm() model=%s", MODEL_NAME)
+    kwargs: dict[str, Any] = {}
+    # Thinking 模型（如 qwen3 系开思考）会在 max_tokens 内耗尽推理预算而返回空内容；
+    # CRAYOTTER_ENABLE_THINKING=false 可显式关闭思考，避免阶段一解析为空。
+    if ENABLE_THINKING in {"0", "false", "no", "off"}:
+        kwargs["extra_body"] = {"enable_thinking": False}
+    elif ENABLE_THINKING in {"1", "true", "yes", "on"}:
+        kwargs["extra_body"] = {"enable_thinking": True}
     return ChatOpenAI(
         model=MODEL_NAME,
         temperature=temperature,
         api_key=API_KEY,
         base_url=BASE_URL,
         max_retries=0 if fail_fast_model_errors() else 2,
+        **kwargs,
     )
 
 

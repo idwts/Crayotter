@@ -256,6 +256,7 @@ Notes:
 - Material downloads are routed through `download_material_video`; Bilibili remains the default keyword-search source, while supported third-party URLs can be imported and cleaned through the same pipeline.
 - `CRAYOTTER_STANDARDIZE_TARGET_FPS` controls download cleanup frame rate. `CRAYOTTER_AUDIO_LOUDNORM_TARGET=0` disables loudness normalization; set a negative LUFS value such as `-16` to enable two-pass EBU R128 loudnorm.
 - `CRAYOTTER_AGENT_STALL_TIMEOUT_SECONDS` controls the “no new progress” watchdog threshold for running jobs.
+- `CRAYOTTER_ENABLE_THINKING=false` disables provider-side thinking for reasoning models (e.g. Qwen3) so long reasoning cannot exhaust `max_tokens` and return empty content; `true` forces it on, unset keeps the provider default.
 - The workbench UI writes API settings, Phase 2, direct Phase 3, local-first mode, and timeout changes back to the same `.env`.
 - Candidate ranking treats target orientation as a scoring factor: landscape by default, portrait when the user explicitly asks for it. Merge/export use scale-to-cover plus centered crop instead of direct stretching.
 - For videos under `user_temp`, Crayotter writes the matching `*_analysis.json` back into `user_temp`, reuses it on later runs, and removes the paired JSON when that upload is deleted from the workbench.
