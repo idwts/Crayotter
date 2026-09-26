@@ -1250,15 +1250,41 @@ class ArtifactGateTests(unittest.TestCase):
             verdict, category = _artifact_gate(Path("final.mp4"))
         self.assertEqual((verdict, category), (None, "io_error"))
 
-    def test_ffprobe_unparseable_output_is_io_error(self) -> None:
+    def test_ffprobe_unparseable_output_falls_back_to_cv2(self) -> None:
+        # rc=0 without the JSON contract (the bundled ffprobe_shim.py prints a
+        # bare duration): the gate must try cv2 for a real decode verdict.
         completed = subprocess.CompletedProcess(
             args=[], returncode=0, stdout="not json", stderr=""
         )
         with patch("shutil.which", return_value="/usr/bin/ffprobe"), patch(
             "subprocess.run", return_value=completed
-        ):
+        ), patch.dict(sys.modules, {"cv2": None}):
             verdict, category = _artifact_gate(Path("final.mp4"))
         self.assertEqual((verdict, category), (None, "io_error"))
+
+    def test_ffprobe_non_dict_json_falls_back_to_cv2(self) -> None:
+        # Real-world find: the bundled shim answers rc=0 with a bare scalar
+        # (json parses it as float, not dict) — must not crash, must probe on.
+        completed = subprocess.CompletedProcess(
+            args=[], returncode=0, stdout="1.500000", stderr=""
+        )
+
+        class _FakeCapture:
+            def isOpened(self) -> bool:
+                return True
+
+            def read(self) -> tuple[bool, object]:
+                return True, object()
+
+            def release(self) -> None:
+                return None
+
+        fake_cv2 = types.SimpleNamespace(VideoCapture=lambda _p: _FakeCapture())
+        with patch("shutil.which", return_value="/usr/bin/ffprobe"), patch(
+            "subprocess.run", return_value=completed
+        ), patch.dict(sys.modules, {"cv2": fake_cv2}):
+            verdict, category = _artifact_gate(Path("final.mp4"))
+        self.assertEqual((verdict, category), (True, "passed"))
 
     def test_no_probe_infrastructure_is_unavailable(self) -> None:
         with patch("shutil.which", return_value=None), patch.dict(

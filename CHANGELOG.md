@@ -35,6 +35,15 @@
 - 三态判负入口:**corrupt**(ffprobe 非零退出 / rc=0 结构性无视频流或时长≤0 / cv2 无法解码)、**io_error**(OSError/TimeoutExpired/rc=0 输出不可解析,回退旧存在性语义)、**unavailable**(无 ffprobe 且无 cv2,回退旧存在性语义)。
 - 门内置于 `find_final_video_path`(per-call `gate_cache` memoize + 可选 `gate_report` 出参)。**有意语义放宽(登记)**:最新 export 判 corrupt 时回退更早的有效 export;仅 corrupt 判负,io_error/unavailable 保持旧存在性语义。
 - `reward_payload["artifact_gate"]` 新字段:`{state, path, rejected_corrupt}`;无候选时 `state="no_candidate"`(与 infra unavailable 区分)。
+- **功能测试修正(2026-09-26 第二轮)**:仓内 `script/dep/windows/ffprobe.CMD` 实为 Python shim(`ffprobe_shim.py`),rc=0 输出裸时长(如 `1.500000`)而非 `-of json` 契约——原实现 `json.loads` 得 float 后 `.get` 直接 AttributeError 崩溃。现:rc=0 但输出非 JSON 契约(含空 stdout、非 dict、叶类型错误)→ 落入 cv2 真实解码分支拿真实判定;cv2 也不可用时才回退 io_error/unavailable 旧语义。`except` 覆盖 `(ValueError, TypeError, AttributeError)`。
+
+### 功能验证(真实文件/真实子进程,非 mock)
+`functional_checks_s1_s3.py`(仓库根,`python functional_checks_s1_s3.py` 可复跑):
+- S3-1:cv2 实写 3s mp4 → `(True,"passed")`;假字节文件 → `(False,"corrupt")`;moviepy 实剪 1.5s 片段 → 经 shim fallthrough 由 cv2 判 `(True,"passed")`;corrupt 最新 export 端到端回退更早有效文件。
+- S1-3:非法区间(0-999s/3s 视频)→ 真实 `tool_error("剪辑", "invalid cut range ...")`;合法区间 → status=success + 真实文件落盘。
+- S2-1:`CRAYOTTER_RL_TOOL_WORKER=1` 真实 worker 两次调用 `inspect_video_duration` 全成功(rc=0,时长 3.0s 正确)、单进程复用(calls=2)、未知工具显式 rc=1 失败。
+- S1-1:4 条**真实工具返回**(成功 JSON/tool_error 中文字符串)在 graph/strict 两档判定全部正确。
+- S1-2:新进程内 `_shared` 导入后全局 SSL 补丁不存在;`_download_via_bilibili_api` 真实调用流两处 urlopen 均携带 scoped 未验证 context(spy 验证)。
 
 ### 测试
 - `test_reward.py`:`EpisodeRewardTests.setUp` mock 门为 `(True, "passed")`(这些测试测 reward 组合语义,fixtures 为假视频字节,与改动前的存在性语义精确等价);新增 `ArtifactGateTests` ×11(ffprobe passed/结构性 corrupt/非零 corrupt/timeout io_error/不可解析 io_error/unavailable/cv2 corrupt/corrupt 回退更早 export/全 corrupt rejected/payload 字段/no_candidate)。

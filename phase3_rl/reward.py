@@ -198,14 +198,16 @@ def _artifact_gate(path: Path) -> tuple[bool | None, str]:
     Returns (verdict, category): (True, "passed") decodable with duration > 0;
     (False, "corrupt") deterministic damage — ffprobe exited non-zero, or
     parsed successfully and found no video stream / zero duration;
-    (None, "io_error") transient failure (OSError/TimeoutExpired/unparseable
-    ffprobe output on rc=0) — fall back to the legacy existence semantics;
+    (None, "io_error") transient failure (OSError/TimeoutExpired, or ffprobe
+    answered rc=0 without the JSON contract and no cv2 fallback exists) —
+    fall back to the legacy existence semantics;
     (None, "unavailable") no ffprobe and no cv2 to probe with.
     """
     import shutil
     import subprocess
 
     ffprobe = shutil.which(os.environ.get("FFPROBE_BIN", "ffprobe"))
+    ffprobe_unparseable = False
     if ffprobe:
         try:
             out = subprocess.run(
@@ -220,20 +222,25 @@ def _artifact_gate(path: Path) -> tuple[bool | None, str]:
         if out.returncode != 0:
             return False, "corrupt"
         try:
-            payload = json.loads(out.stdout or "{}")
-            has_video = any(
-                stream.get("codec_type") == "video"
-                for stream in payload.get("streams", [])
-            )
-            duration = float((payload.get("format") or {}).get("duration") or 0.0)
-        except (ValueError, TypeError):
-            return None, "io_error"
-        verdict = bool(has_video and duration > 0)
-        return verdict, "passed" if verdict else "corrupt"
+            payload = json.loads(out.stdout) if out.stdout.strip() else None
+            if isinstance(payload, dict):
+                has_video = any(
+                    stream.get("codec_type") == "video"
+                    for stream in payload.get("streams", [])
+                )
+                duration = float((payload.get("format") or {}).get("duration") or 0.0)
+                verdict = bool(has_video and duration > 0)
+                return verdict, "passed" if verdict else "corrupt"
+        except (ValueError, TypeError, AttributeError):
+            pass
+        # rc=0 without the JSON contract (e.g. the bundled ffprobe_shim.py
+        # prints a bare duration): fall through to cv2 for a real decode
+        # verdict instead of giving up on probing.
+        ffprobe_unparseable = True
     try:
         import cv2
     except ImportError:
-        return None, "unavailable"
+        return None, "io_error" if ffprobe_unparseable else "unavailable"
     try:
         cap = cv2.VideoCapture(str(path))
         ok = cap.isOpened()
