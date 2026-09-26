@@ -6,11 +6,16 @@ import unittest
 from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
-from phase3_rl.tool_runner import _configure_episode_environment
+from phase3_rl.tool_runner import (
+    _LATCH_RESETTERS,
+    _configure_episode_environment,
+    _reset_known_latches,
+)
 from phase3_rl.tool_runtime import (
     ToolExecutionResult,
     execute_tool_subprocess_async,
     parse_tool_result_text,
+    result_indicates_failure,
 )
 
 
@@ -148,6 +153,109 @@ class AsyncToolRuntimeTests(unittest.IsolatedAsyncioTestCase):
                 os.environ["CRAYOTTER_RL_TOOL_PROCESS_CONCURRENCY"] = old_value
 
         self.assertEqual(max_active, 2)
+
+
+class ResultIndicatesFailureTests(unittest.TestCase):
+    """S1-1: canonical verdict shared by graph.py and parse_tool_result_text."""
+
+    CASES = (
+        # (payload, expected)
+        ('{"status": "success", "path": "/tmp/a.mp4"}', False),
+        ('{"status": "error", "message": "boom"}', True),
+        ("```json\n{\"status\": \"success\"}\n```", False),
+        ('[{"path": "/tmp/a.mp4"}]', False),
+        ('下载失败: 网络超时', True),
+        ('处理完成，文件已保存', False),
+    )
+
+    def test_verdicts_match_expectations(self) -> None:
+        for payload, expected in self.CASES:
+            with self.subTest(payload=payload):
+                self.assertIs(result_indicates_failure(payload), expected)
+
+    def test_parse_tool_result_text_agrees_on_success(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            for payload, expected in self.CASES:
+                with self.subTest(payload=payload):
+                    _parsed, success, _paths, _dur = parse_tool_result_text(
+                        payload, temp_dir
+                    )
+                    self.assertIs(success, not expected)
+
+    def test_graph_marker_vocabulary_is_caller_supplied(self) -> None:
+        # graph.py passes its own narrower markers; the canonical function
+        # must honor them instead of the wider default set.
+        self.assertFalse(
+            result_indicates_failure("处理完成", markers=("出错", "失败", "error"))
+        )
+        self.assertTrue(
+            result_indicates_failure("下载失败: 网络超时", markers=("出错", "失败", "error"))
+        )
+
+    def test_empty_status_falls_back_to_markers(self) -> None:
+        # A dict with a blank status must not mask a first-line failure.
+        self.assertTrue(result_indicates_failure('{"status": ""} 失败'))
+
+    GRAPH_MARKERS = ("出错", "失败", "error", '"status": "fail"')
+
+    def _graph_verdict(self, text: str) -> bool:
+        # Exactly how script/graph.py calls the canonical function.
+        return result_indicates_failure(
+            text, markers=self.GRAPH_MARKERS, strict_status=False, full_text=True
+        )
+
+    def test_graph_vocabulary_accepts_non_success_statuses(self) -> None:
+        # graph.py historically did not special-case JSON status; tools emit
+        # allowed/empty/blocked on success paths and must not raise.
+        self.assertFalse(self._graph_verdict('{"status": "allowed"}'))
+        self.assertFalse(self._graph_verdict('{"status": "empty"}'))
+        self.assertFalse(self._graph_verdict('{"status": "blocked"}'))
+        # The same payloads stay failures under phase3_rl's strict tier.
+        self.assertTrue(result_indicates_failure('{"status": "allowed"}'))
+
+    def test_graph_vocabulary_scans_full_text(self) -> None:
+        multi_line = "处理完成\n部分片段出错: codec fallback"
+        # graph.py's historical whole-text scan catches second-line failures.
+        self.assertTrue(self._graph_verdict(multi_line))
+        # The phase3_rl default tier is first-line only — the documented
+        # strictness difference between the two callers.
+        self.assertFalse(result_indicates_failure(multi_line))
+
+    def test_graph_vocabulary_catches_json_failures(self) -> None:
+        self.assertTrue(self._graph_verdict('{"status": "fail", "reason": "x"}'))
+        self.assertTrue(self._graph_verdict('{"status": "error"}'))
+        self.assertFalse(self._graph_verdict('{"status": "success"}'))
+        # Parity quirk: the historical '"status": "fail"' marker has a closing
+        # quote, so "failed" was never caught either — kept verbatim.
+        self.assertFalse(self._graph_verdict('{"status": "failed"}'))
+
+
+class LatchRegistryTests(unittest.TestCase):
+    """S2-1: worker resets every registered cross-request latch per request."""
+
+    def test_registry_targets_real_reset_functions(self) -> None:
+        self.assertEqual(
+            set(_LATCH_RESETTERS),
+            {
+                ("script.tools.analyze_video", "reset_analysis_failure_circuit"),
+                ("script.tools.analyze_video", "reset_analysis_model_fallbacks"),
+            },
+        )
+
+    def test_reset_known_latches_invokes_every_registered_resetter(self) -> None:
+        calls = []
+        import types as _types
+
+        fake_module = _types.ModuleType("script.tools.analyze_video")
+        for _module_name, attr in _LATCH_RESETTERS:
+            setattr(fake_module, attr, lambda attr=attr: calls.append(attr))
+        with patch.dict(
+            "sys.modules", {"script.tools.analyze_video": fake_module}
+        ):
+            _reset_known_latches()
+        self.assertEqual(
+            sorted(calls), sorted(attr for _m, attr in _LATCH_RESETTERS)
+        )
 
 
 if __name__ == "__main__":

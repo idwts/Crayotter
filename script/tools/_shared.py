@@ -37,8 +37,6 @@ try:
 except ImportError:
     pass
 
-ssl._create_default_https_context = ssl._create_unverified_context
-
 import dashscope
 
 import ast

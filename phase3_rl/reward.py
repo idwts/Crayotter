@@ -192,7 +192,68 @@ def _event_paths(event: dict[str, Any]) -> list[str]:
     return list(dict.fromkeys(paths))
 
 
-def find_final_video_path(tool_events: list[dict[str, Any]]) -> str:
+def _artifact_gate(path: Path) -> tuple[bool | None, str]:
+    """Decodability gate for a candidate final artifact.
+
+    Returns (verdict, category): (True, "passed") decodable with duration > 0;
+    (False, "corrupt") deterministic damage — ffprobe exited non-zero, or
+    parsed successfully and found no video stream / zero duration;
+    (None, "io_error") transient failure (OSError/TimeoutExpired/unparseable
+    ffprobe output on rc=0) — fall back to the legacy existence semantics;
+    (None, "unavailable") no ffprobe and no cv2 to probe with.
+    """
+    import shutil
+    import subprocess
+
+    ffprobe = shutil.which(os.environ.get("FFPROBE_BIN", "ffprobe"))
+    if ffprobe:
+        try:
+            out = subprocess.run(
+                [
+                    ffprobe, "-v", "error", "-show_entries",
+                    "format=duration:stream=codec_type", "-of", "json", str(path),
+                ],
+                capture_output=True, text=True, timeout=60,
+            )
+        except (OSError, subprocess.TimeoutExpired):
+            return None, "io_error"
+        if out.returncode != 0:
+            return False, "corrupt"
+        try:
+            payload = json.loads(out.stdout or "{}")
+            has_video = any(
+                stream.get("codec_type") == "video"
+                for stream in payload.get("streams", [])
+            )
+            duration = float((payload.get("format") or {}).get("duration") or 0.0)
+        except (ValueError, TypeError):
+            return None, "io_error"
+        verdict = bool(has_video and duration > 0)
+        return verdict, "passed" if verdict else "corrupt"
+    try:
+        import cv2
+    except ImportError:
+        return None, "unavailable"
+    try:
+        cap = cv2.VideoCapture(str(path))
+        ok = cap.isOpened()
+        if ok:
+            # FRAME_COUNT lies for some valid container/codec combos; a real
+            # decode attempt is the reliable verdict.
+            grabbed, frame = cap.read()
+            ok = bool(grabbed and frame is not None)
+        cap.release()
+    except Exception:
+        return None, "io_error"
+    return ok, "passed" if ok else "corrupt"
+
+
+def find_final_video_path(
+    tool_events: list[dict[str, Any]],
+    gate_report: dict[str, Any] | None = None,
+) -> str:
+    gate_cache: dict[str, tuple[bool | None, str]] = {}
+    last_gate: tuple[bool | None, str] | None = None
     for event in reversed(tool_events):
         if event.get("tool_name") != "export_video" or not event.get("success"):
             continue
@@ -209,10 +270,29 @@ def find_final_video_path(tool_events: list[dict[str, Any]]) -> str:
             if any(_same_path_reference(raw_path, input_path) for input_path in input_paths):
                 continue
             try:
-                if path.is_file() and path.stat().st_size > 0:
-                    return str(path.resolve())
+                if not (path.is_file() and path.stat().st_size > 0):
+                    continue
             except OSError:
                 continue
+            resolved = str(path.resolve())
+            if resolved not in gate_cache:
+                gate_cache[resolved] = _artifact_gate(Path(resolved))
+            verdict, category = gate_cache[resolved]
+            last_gate = (verdict, category)
+            # Intentional relaxation: a corrupt latest export falls back to an
+            # earlier valid one; only "corrupt" rejects a candidate, transient
+            # or missing probe infrastructure keeps the legacy semantics.
+            if verdict is False:
+                continue
+            if gate_report is not None:
+                gate_report.update(
+                    {"state": category, "path": resolved, "rejected_corrupt": False}
+                )
+            return resolved
+    if gate_report is not None and last_gate is not None:
+        gate_report.update(
+            {"state": last_gate[1], "path": "", "rejected_corrupt": last_gate[0] is False}
+        )
     return ""
 
 
@@ -825,7 +905,8 @@ def compute_episode_reward(
         for item in tool_events
         if item.get("tool_name") == "export_video" and item.get("success")
     ]
-    final_video_path = find_final_video_path(tool_events)
+    artifact_gate: dict[str, Any] = {}
+    final_video_path = find_final_video_path(tool_events, gate_report=artifact_gate)
     export_success = bool(final_video_path)
     export_reward = 1.0 if export_success else -1.25
     artifact_validity_reward = 0.4 if export_success else -0.4
@@ -919,6 +1000,7 @@ def compute_episode_reward(
         "raw_step_total": round(raw_step_total, 4),
         "reported_export_success": bool(reported_export_events),
         "export_success": export_success,
+        "artifact_gate": artifact_gate or {"state": "no_candidate", "path": "", "rejected_corrupt": False},
         "export_reward": export_reward,
         "artifact_validity_reward": round(artifact_validity_reward, 4),
         "duration_reward": duration_reward,

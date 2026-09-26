@@ -1,18 +1,23 @@
 from __future__ import annotations
 
 import json
+import subprocess
+import sys
 import tempfile
+import types
 import unittest
 from pathlib import Path
 from unittest.mock import patch
 
 from phase3_rl.reward import (
+    _artifact_gate,
     _medium_semantic_grounding_reward,
     build_tool_signature,
     classify_tool_stage,
     compute_episode_reward,
     compute_stage_credit,
     compute_step_reward,
+    find_final_video_path,
 )
 from phase3_rl.preference_credit import (
     ALLOCATOR_VERSION,
@@ -124,6 +129,15 @@ class StepRewardTests(unittest.TestCase):
 
 
 class EpisodeRewardTests(unittest.TestCase):
+    def setUp(self) -> None:
+        # These tests exercise reward composition, not media probing; the
+        # decodability gate has dedicated coverage in ArtifactGateTests.
+        gate_patch = patch(
+            "phase3_rl.reward._artifact_gate", return_value=(True, "passed")
+        )
+        gate_patch.start()
+        self.addCleanup(gate_patch.stop)
+
     def test_stage_credit_allocates_outcome_residual(self) -> None:
         events = [
             {
@@ -1188,6 +1202,193 @@ class EpisodeRewardTests(unittest.TestCase):
         self.assertGreater(reward["milestone_progress_reward"], 0)
         self.assertGreater(reward["milestone_progress_components"]["valid_new_export"], 0)
         self.assertIsNone(reward["failure_cap"])
+
+
+class ArtifactGateTests(unittest.TestCase):
+    def test_ffprobe_valid_video_passes(self) -> None:
+        payload = json.dumps(
+            {
+                "streams": [{"codec_type": "video"}],
+                "format": {"duration": "12.5"},
+            }
+        )
+        completed = subprocess.CompletedProcess(
+            args=[], returncode=0, stdout=payload, stderr=""
+        )
+        with patch("shutil.which", return_value="/usr/bin/ffprobe"), patch(
+            "subprocess.run", return_value=completed
+        ):
+            verdict, category = _artifact_gate(Path("final.mp4"))
+        self.assertEqual((verdict, category), (True, "passed"))
+
+    def test_ffprobe_structural_failure_is_corrupt(self) -> None:
+        payload = json.dumps({"streams": [], "format": {"duration": "0"}})
+        completed = subprocess.CompletedProcess(
+            args=[], returncode=0, stdout=payload, stderr=""
+        )
+        with patch("shutil.which", return_value="/usr/bin/ffprobe"), patch(
+            "subprocess.run", return_value=completed
+        ):
+            verdict, category = _artifact_gate(Path("final.mp4"))
+        self.assertEqual((verdict, category), (False, "corrupt"))
+
+    def test_ffprobe_nonzero_exit_is_corrupt(self) -> None:
+        completed = subprocess.CompletedProcess(
+            args=[], returncode=1, stdout="", stderr="moov atom not found"
+        )
+        with patch("shutil.which", return_value="/usr/bin/ffprobe"), patch(
+            "subprocess.run", return_value=completed
+        ):
+            verdict, category = _artifact_gate(Path("final.mp4"))
+        self.assertEqual((verdict, category), (False, "corrupt"))
+
+    def test_ffprobe_timeout_is_io_error(self) -> None:
+        with patch("shutil.which", return_value="/usr/bin/ffprobe"), patch(
+            "subprocess.run",
+            side_effect=subprocess.TimeoutExpired(cmd="ffprobe", timeout=60),
+        ):
+            verdict, category = _artifact_gate(Path("final.mp4"))
+        self.assertEqual((verdict, category), (None, "io_error"))
+
+    def test_ffprobe_unparseable_output_is_io_error(self) -> None:
+        completed = subprocess.CompletedProcess(
+            args=[], returncode=0, stdout="not json", stderr=""
+        )
+        with patch("shutil.which", return_value="/usr/bin/ffprobe"), patch(
+            "subprocess.run", return_value=completed
+        ):
+            verdict, category = _artifact_gate(Path("final.mp4"))
+        self.assertEqual((verdict, category), (None, "io_error"))
+
+    def test_no_probe_infrastructure_is_unavailable(self) -> None:
+        with patch("shutil.which", return_value=None), patch.dict(
+            sys.modules, {"cv2": None}
+        ):
+            verdict, category = _artifact_gate(Path("final.mp4"))
+        self.assertEqual((verdict, category), (None, "unavailable"))
+
+    def test_cv2_unopenable_file_is_corrupt(self) -> None:
+        class _FakeCapture:
+            def isOpened(self) -> bool:
+                return False
+
+            def get(self, _prop: int) -> float:
+                return 0.0
+
+            def release(self) -> None:
+                return None
+
+        fake_cv2 = types.SimpleNamespace(
+            VideoCapture=lambda _path: _FakeCapture(), CAP_PROP_FRAME_COUNT=7
+        )
+        with patch("shutil.which", return_value=None), patch.dict(
+            sys.modules, {"cv2": fake_cv2}
+        ):
+            verdict, category = _artifact_gate(Path("final.mp4"))
+        self.assertEqual((verdict, category), (False, "corrupt"))
+
+    def test_corrupt_latest_export_falls_back_to_earlier_valid_one(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            earlier = Path(temp_dir) / "earlier.mp4"
+            later = Path(temp_dir) / "later.mp4"
+            earlier.write_bytes(b"old")
+            later.write_bytes(b"new")
+            events = [
+                {
+                    "tool_name": "export_video",
+                    "success": True,
+                    "arguments": {},
+                    "parsed_result": {"output_path": str(earlier)},
+                    "output_paths": [str(earlier)],
+                },
+                {
+                    "tool_name": "export_video",
+                    "success": True,
+                    "arguments": {},
+                    "parsed_result": {"output_path": str(later)},
+                    "output_paths": [str(later)],
+                },
+            ]
+            verdicts = {
+                str(later.resolve()): (False, "corrupt"),
+                str(earlier.resolve()): (True, "passed"),
+            }
+
+            def fake_gate(path: Path) -> tuple[bool | None, str]:
+                return verdicts[str(path)]
+
+            gate_report: dict = {}
+            with patch("phase3_rl.reward._artifact_gate", side_effect=fake_gate):
+                found = find_final_video_path(events, gate_report=gate_report)
+
+            self.assertEqual(found, str(earlier.resolve()))
+            self.assertEqual(gate_report["state"], "passed")
+            self.assertEqual(gate_report["path"], str(earlier.resolve()))
+            self.assertFalse(gate_report["rejected_corrupt"])
+
+    def test_all_exports_corrupt_reports_rejection(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            only = Path(temp_dir) / "only.mp4"
+            only.write_bytes(b"new")
+            events = [
+                {
+                    "tool_name": "export_video",
+                    "success": True,
+                    "arguments": {},
+                    "parsed_result": {"output_path": str(only)},
+                    "output_paths": [str(only)],
+                }
+            ]
+            gate_report: dict = {}
+            with patch(
+                "phase3_rl.reward._artifact_gate",
+                return_value=(False, "corrupt"),
+            ):
+                found = find_final_video_path(events, gate_report=gate_report)
+
+            self.assertEqual(found, "")
+            self.assertEqual(gate_report["state"], "corrupt")
+            self.assertTrue(gate_report["rejected_corrupt"])
+
+    def test_reward_payload_carries_gate_report(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            final_video = Path(temp_dir) / "final.mp4"
+            final_video.write_bytes(b"video")
+            events = [
+                {
+                    "tool_name": "export_video",
+                    "success": True,
+                    "output_paths": [str(final_video)],
+                    "arguments": {"output_path": str(final_video)},
+                    "step_reward": 0.1,
+                }
+            ]
+            with patch(
+                "phase3_rl.reward._artifact_gate", return_value=(True, "passed")
+            ):
+                reward = compute_episode_reward(
+                    tool_events=events,
+                    target_duration_seconds=10.0,
+                    final_output="done",
+                )
+
+        self.assertEqual(reward["artifact_gate"]["state"], "passed")
+        self.assertEqual(
+            reward["artifact_gate"]["path"], str(final_video.resolve())
+        )
+        self.assertFalse(reward["artifact_gate"]["rejected_corrupt"])
+
+    def test_reward_payload_no_candidate_state(self) -> None:
+        reward = compute_episode_reward(
+            tool_events=[],
+            target_duration_seconds=10.0,
+            final_output="done",
+        )
+
+        self.assertEqual(
+            reward["artifact_gate"],
+            {"state": "no_candidate", "path": "", "rejected_corrupt": False},
+        )
 
 
 if __name__ == "__main__":

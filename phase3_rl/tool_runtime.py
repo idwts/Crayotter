@@ -3,9 +3,11 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import queue
 import re
 import subprocess
 import sys
+import threading
 import time
 import weakref
 from contextlib import contextmanager
@@ -70,12 +72,46 @@ def _strip_fenced_json(text: str) -> str:
     return stripped
 
 
-def _looks_like_error(text: str) -> bool:
-    first_line = next(
-        (line.strip().lower() for line in text.splitlines() if line.strip()),
+def result_indicates_failure(
+    text: str,
+    markers: tuple[str, ...] = KNOWN_ERROR_MARKERS,
+    *,
+    strict_status: bool = True,
+    full_text: bool = False,
+) -> bool:
+    """Canonical failure verdict shared by graph.py and phase3_rl.
+
+    Default order matches parse_tool_result_text: fence-strip, then a JSON dict
+    with a non-empty status key decides, a JSON list always succeeds, anything
+    else falls back to first-line markers. Two caller-tunable strictness axes:
+
+    - ``strict_status=False`` skips the JSON status/list special-casing, for
+      callers whose success vocabulary is wider than ``status == "success"``
+      (e.g. graph.py accepts ``allowed``/``empty`` statuses).
+    - ``full_text=True`` matches markers against the whole stripped text
+      instead of the first non-empty line (graph.py's historical behavior).
+    """
+    stripped = _strip_fenced_json(str(text or ""))
+    if strict_status:
+        try:
+            payload = json.loads(stripped)
+        except Exception:
+            payload = None
+        if isinstance(payload, dict):
+            status = str(payload.get("status", "")).strip()
+            if status:
+                return status.lower() != "success"
+        elif isinstance(payload, list):
+            return False
+    haystack = stripped.lower() if full_text else next(
+        (line.strip().lower() for line in stripped.splitlines() if line.strip()),
         "",
     )
-    return any(marker in first_line for marker in KNOWN_ERROR_MARKERS)
+    return any(marker in haystack for marker in markers)
+
+
+def _looks_like_error(text: str) -> bool:
+    return result_indicates_failure(text)
 
 
 def _collect_paths(value: Any, runtime_root: Path, collector: set[str]) -> None:
@@ -143,6 +179,187 @@ def parse_tool_result_text(raw_result: str, runtime_root: str | Path) -> tuple[A
     return parsed, success, sorted(output_paths), duration_seconds
 
 
+def _tool_worker_enabled() -> bool:
+    return os.environ.get("CRAYOTTER_RL_TOOL_WORKER", "") == "1"
+
+
+def _worker_fingerprint(
+    python_executable: str, runtime_root: str | Path, api_config: dict[str, Any]
+) -> tuple[str, str, str]:
+    """One worker serves exactly one fingerprint for its whole life.
+
+    script/tools pins workspace paths as module constants at import time, so a
+    worker may never cross runtime_root; api_config feeds global client state,
+    so it joins the key as a canonical digest.
+    """
+    import hashlib
+
+    config_digest = hashlib.sha256(
+        json.dumps(api_config or {}, sort_keys=True, ensure_ascii=False).encode("utf-8")
+    ).hexdigest()
+    return (
+        python_executable,
+        str(Path(runtime_root).resolve()),
+        config_digest,
+    )
+
+
+class _ToolWorker:
+    """One long-lived `tool_runner --serve` process, serialized by a lock."""
+
+    def __init__(self, python_executable: str) -> None:
+        self.process = subprocess.Popen(
+            [python_executable, "-m", "phase3_rl.tool_runner", "--serve"],
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            cwd=str(Path(__file__).resolve().parents[1]),
+        )
+        self.lock = threading.Lock()
+        self.calls = 0
+        # A daemon pump thread owns the blocking readline so execute() can
+        # enforce its deadline with queue.get(timeout=...) — a plain peek/read
+        # on Windows pipes can block past the timeout and defeat it.
+        self._lines: queue.Queue[str] = queue.Queue()
+        self._reader = threading.Thread(target=self._pump_lines, daemon=True)
+        self._reader.start()
+
+    def _pump_lines(self) -> None:
+        try:
+            assert self.process.stdout is not None
+            for line in self.process.stdout:
+                self._lines.put(line)
+        except (OSError, ValueError):
+            pass
+        finally:
+            self._lines.put("")  # EOF sentinel, wakes any waiting execute()
+
+    def execute(self, payload: dict[str, Any], timeout_seconds: int) -> dict[str, Any]:
+        """Send one request and wait for its matching frame.
+
+        Raises _WorkerDead when the write failed before the request could have
+        been processed (safe to cold-retry), _WorkerDiedMidRequest when the
+        worker exited after accepting the request (the tool may already have
+        run — never retried), and _WorkerHung on timeout (explicit failure).
+        """
+        import uuid
+
+        request_id = uuid.uuid4().hex
+        frame = dict(payload)
+        frame["request_id"] = request_id
+        with self.lock:
+            try:
+                assert self.process.stdin is not None
+                self.process.stdin.write(json.dumps(frame, ensure_ascii=False) + "\n")
+                self.process.stdin.flush()
+            except (BrokenPipeError, OSError) as exc:
+                self.kill()
+                raise _WorkerDead(f"tool worker transport failed before send: {exc}") from exc
+            deadline = time.monotonic() + timeout_seconds
+            noise: list[str] = []
+            while True:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    self.kill()
+                    raise _WorkerHung(f"tool worker hung after {timeout_seconds}s; killed")
+                try:
+                    line = self._lines.get(timeout=remaining)
+                except queue.Empty:
+                    self.kill()
+                    raise _WorkerHung(f"tool worker hung after {timeout_seconds}s; killed")
+                if line == "":  # EOF after the request was accepted
+                    self.kill()
+                    raise _WorkerDiedMidRequest(
+                        "tool worker exited mid-request; tool may already have run"
+                    )
+                if not line.startswith(RESULT_SENTINEL):
+                    noise.append(line)  # fd1 leaks (ffmpeg & friends); keep as diagnostics
+                    continue
+                try:
+                    result = json.loads(line[len(RESULT_SENTINEL):].strip())
+                except json.JSONDecodeError:
+                    noise.append(line)
+                    continue
+                if result.get("request_id") != request_id:
+                    noise.append(line)
+                    continue
+                result["stdout"] = (result.get("stdout") or "") + "".join(noise)
+                self.calls += 1
+                return result
+
+    def kill(self) -> None:
+        try:
+            self.process.kill()
+        except OSError:
+            pass
+
+
+class _WorkerDead(Exception):
+    """Transport failed before the request could have been processed."""
+
+
+class _WorkerDiedMidRequest(Exception):
+    """Worker exited after accepting a request; the tool may already have run."""
+
+
+class _WorkerHung(Exception):
+    pass
+
+
+_TOOL_WORKER_POOLS: dict[tuple[str, str, str], list[_ToolWorker]] = {}
+_TOOL_WORKER_POOL_LOCK = threading.Lock()
+
+
+def _acquire_worker(fingerprint: tuple[str, str, str], python_executable: str) -> _ToolWorker:
+    max_calls = int(os.environ.get("CRAYOTTER_RL_TOOL_WORKER_MAX_CALLS", "200") or "200")
+    pool_size = _tool_process_concurrency()
+    with _TOOL_WORKER_POOL_LOCK:
+        pool = _TOOL_WORKER_POOLS.setdefault(fingerprint, [])
+        for worker in list(pool):
+            if worker.calls >= max_calls or worker.process.poll() is not None:
+                pool.remove(worker)
+                worker.kill()  # bound worker lifetime; restart imports fresh state
+        for worker in pool:
+            if not worker.lock.locked():
+                return worker
+        if len(pool) < pool_size:
+            worker = _ToolWorker(python_executable)
+            pool.append(worker)
+            return worker
+        # Pool exhausted: take the first worker; its lock serializes.
+        return pool[0]
+
+
+def _retire_worker(fingerprint: tuple[str, str, str], worker: _ToolWorker) -> None:
+    with _TOOL_WORKER_POOL_LOCK:
+        pool = _TOOL_WORKER_POOLS.get(fingerprint, [])
+        if worker in pool:
+            pool.remove(worker)
+    worker.kill()
+
+
+def _execute_via_worker(
+    payload: dict[str, Any],
+    python_executable: str,
+    timeout_seconds: int,
+) -> dict[str, Any]:
+    fingerprint = _worker_fingerprint(
+        python_executable, payload["runtime_root"], payload.get("api_config", {})
+    )
+    worker = _acquire_worker(fingerprint, python_executable)
+    try:
+        # Same cross-process throttle as the cold path: the per-fingerprint
+        # pool does not bound the global worker count across Ray workers.
+        with _global_tool_process_slot():
+            return worker.execute(payload, timeout_seconds)
+    except (_WorkerDead, _WorkerDiedMidRequest, _WorkerHung):
+        _retire_worker(fingerprint, worker)
+        raise
+
+
 def execute_tool_subprocess(
     *,
     tool_name: str,
@@ -158,6 +375,42 @@ def execute_tool_subprocess(
         "runtime_root": str(Path(runtime_root).resolve()),
         "api_config": api_config or {},
     }
+
+    if _tool_worker_enabled():
+        try:
+            result = _execute_via_worker(
+                payload, python_executable or sys.executable, timeout_seconds
+            )
+        except (_WorkerHung, _WorkerDiedMidRequest) as exc:
+            # Explicit failure, never a retry: tools are not idempotent.
+            return ToolExecutionResult(
+                tool_name=tool_name,
+                arguments=arguments,
+                raw_result=f"{tool_name} 执行失败: {exc}",
+                parsed_result="",
+                success=False,
+                returncode=1,
+                stdout="",
+                stderr="",
+            )
+        except _WorkerDead:
+            pass  # request never reached the tool; cold path below is safe
+        else:
+            returncode = int(result.get("returncode", 1))
+            success = bool(result.get("success", False)) and returncode == 0
+            duration = result.get("duration_seconds")
+            return ToolExecutionResult(
+                tool_name=tool_name,
+                arguments=arguments,
+                raw_result=str(result.get("raw_result", "")),
+                parsed_result=result.get("parsed_result"),
+                success=success,
+                returncode=returncode,
+                stdout=str(result.get("stdout", "")),
+                stderr=str(result.get("stderr", "")),
+                output_paths=[str(item) for item in result.get("output_paths", [])],
+                duration_seconds=float(duration) if isinstance(duration, (int, float)) else None,
+            )
 
     with _global_tool_process_slot():
         process = subprocess.run(

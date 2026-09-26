@@ -2,6 +2,10 @@ from __future__ import annotations
 
 from ._shared import *
 
+# Bilibili downloads historically relied on the process-wide unverified SSL
+# patch; keep that behavior scoped to this module's call points only.
+_BILIBILI_SSL_CONTEXT = ssl._create_unverified_context()
+
 
 def _download_via_bilibili_api(url: str, bvid: str, output_path: Path) -> None:
     """Use Bilibili's public play API when webpage extraction is blocked."""
@@ -20,7 +24,7 @@ def _download_via_bilibili_api(url: str, bvid: str, output_path: Path) -> None:
 
     def read_json(api_url: str) -> dict[str, Any]:
         request = urllib.request.Request(api_url, headers=headers)
-        with urllib.request.urlopen(request, timeout=30) as response:
+        with urllib.request.urlopen(request, timeout=30, context=_BILIBILI_SSL_CONTEXT) as response:
             payload = json.load(response)
         if payload.get("code") != 0:
             raise RuntimeError(
@@ -46,7 +50,7 @@ def _download_via_bilibili_api(url: str, bvid: str, output_path: Path) -> None:
     partial_path = output_path.with_suffix(output_path.suffix + ".part")
     media_request = urllib.request.Request(segments[0]["url"], headers=headers)
     try:
-        with urllib.request.urlopen(media_request, timeout=60) as response:
+        with urllib.request.urlopen(media_request, timeout=60, context=_BILIBILI_SSL_CONTEXT) as response:
             with partial_path.open("wb") as output:
                 shutil.copyfileobj(response, output, length=1024 * 1024)
         if not partial_path.exists() or partial_path.stat().st_size == 0:

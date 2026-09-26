@@ -40,6 +40,10 @@ def cut_video(
             from moviepy.video.io.VideoFileClip import VideoFileClip
 
             with VideoFileClip(str(resolved_input)) as clip:
+                if start_time < 0 or end_time <= start_time or end_time > clip.duration + 0.05:
+                    raise ValueError(
+                        f"invalid cut range {start_time}-{end_time}s for {clip.duration:.3f}s video"
+                    )
                 sub_clip = clip.subclipped(start_time, end_time)
                 sub_clip.write_videofile(
                     str(output_path), codec="libx264", audio_codec="aac", logger=None
