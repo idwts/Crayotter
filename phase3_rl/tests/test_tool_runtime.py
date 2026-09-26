@@ -11,10 +11,14 @@ from phase3_rl.tool_runner import (
     _configure_episode_environment,
     _reset_known_latches,
 )
+from phase3_rl import tool_runtime
 from phase3_rl.tool_runtime import (
     ToolExecutionResult,
+    _TOOL_WORKER_POOLS,
+    _TOOL_WORKER_POOL_LOCK,
     execute_tool_subprocess_async,
     parse_tool_result_text,
+    release_tool_workers,
     result_indicates_failure,
 )
 
@@ -256,6 +260,107 @@ class LatchRegistryTests(unittest.TestCase):
         self.assertEqual(
             sorted(calls), sorted(attr for _m, attr in _LATCH_RESETTERS)
         )
+
+
+class _FakeProcess:
+    def __init__(self, alive: bool = True) -> None:
+        self._alive = alive
+
+    def poll(self):
+        return None if self._alive else 0
+
+    def kill(self) -> None:
+        self._alive = False
+
+
+class _FakeWorker:
+    def __init__(self, calls: int = 0, alive: bool = True, idle_seconds: float = 0.0) -> None:
+        self.process = _FakeProcess(alive)
+        self.lock = threading.Lock()
+        self.calls = calls
+        self.last_used = time.monotonic() - idle_seconds
+        self.kill_count = 0
+
+    def kill(self) -> None:
+        self.kill_count += 1
+        self.process.kill()
+
+
+class WorkerPoolLifecycleTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self._saved = dict(_TOOL_WORKER_POOLS)
+        _TOOL_WORKER_POOLS.clear()
+        self.addCleanup(self._restore)
+
+    def _restore(self) -> None:
+        _TOOL_WORKER_POOLS.clear()
+        _TOOL_WORKER_POOLS.update(self._saved)
+
+    def _pool(self, root: str, *workers) -> None:
+        fingerprint = ("python", str(Path(root).resolve()), "digest")
+        _TOOL_WORKER_POOLS[fingerprint] = list(workers)
+
+    def test_release_retires_only_the_matching_root(self) -> None:
+        mine, other = _FakeWorker(), _FakeWorker()
+        self._pool("episode_a", mine)
+        self._pool("episode_b", other)
+
+        retired = release_tool_workers("episode_a")
+
+        self.assertEqual(retired, 1)
+        self.assertEqual(mine.kill_count, 1)
+        self.assertEqual(other.kill_count, 0)
+        self.assertEqual(len(_TOOL_WORKER_POOLS), 1)
+
+    def test_release_unknown_root_is_a_noop(self) -> None:
+        worker = _FakeWorker()
+        self._pool("episode_a", worker)
+
+        self.assertEqual(release_tool_workers("episode_missing"), 0)
+        self.assertEqual(worker.kill_count, 0)
+        self.assertEqual(len(_TOOL_WORKER_POOLS), 1)
+
+    def test_acquire_sweeps_idle_workers_across_all_pools(self) -> None:
+        stale = _FakeWorker(idle_seconds=10000.0)
+        fresh = _FakeWorker()
+        self._pool("episode_old", stale)
+        self._pool("episode_new", fresh)
+        fingerprint = ("python", str(Path("episode_new").resolve()), "digest")
+
+        with patch.dict(os.environ, {"CRAYOTTER_RL_TOOL_WORKER_IDLE_SECONDS": "900"}):
+            acquired = tool_runtime._acquire_worker(fingerprint, "python")
+
+        self.assertIs(acquired, fresh)
+        self.assertEqual(stale.kill_count, 1)
+        self.assertEqual(len(_TOOL_WORKER_POOLS), 1)  # stale pool deleted
+
+    def test_acquire_sweeps_maxed_and_dead_workers(self) -> None:
+        maxed = _FakeWorker(calls=10**9)
+        dead = _FakeWorker(alive=False)
+        fresh = _FakeWorker()
+        self._pool("episode_old", maxed, dead)
+        self._pool("episode_new", fresh)
+        fingerprint = ("python", str(Path("episode_new").resolve()), "digest")
+
+        acquired = tool_runtime._acquire_worker(fingerprint, "python")
+
+        self.assertIs(acquired, fresh)
+        self.assertEqual(maxed.kill_count, 1)
+        self.assertEqual(dead.kill_count, 1)
+
+    def test_locked_busy_worker_survives_the_idle_sweep(self) -> None:
+        busy = _FakeWorker(idle_seconds=10000.0)
+        busy.lock.acquire()
+        self.addCleanup(busy.lock.release)
+        fresh = _FakeWorker()
+        self._pool("episode_old", busy)
+        self._pool("episode_new", fresh)
+        fingerprint = ("python", str(Path("episode_new").resolve()), "digest")
+
+        with patch.dict(os.environ, {"CRAYOTTER_RL_TOOL_WORKER_IDLE_SECONDS": "900"}):
+            tool_runtime._acquire_worker(fingerprint, "python")
+
+        self.assertEqual(busy.kill_count, 0)
 
 
 if __name__ == "__main__":

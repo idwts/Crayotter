@@ -29,6 +29,11 @@
 - **闩锁重置注册表** `_LATCH_RESETTERS`:`reset_analysis_failure_circuit` + `reset_analysis_model_fallbacks`,每请求 invoke 前重置(冷路径同样经过 `_execute_request`,天然 parity);收录标准:跨请求存续且影响观测语义。
 - **显式失败语义**(对抗 review 第 4/5 项修正):读取侧用 daemon pump 线程 + `queue.get(timeout=)`,全平台兑现超时;写侧传输失败 → `_WorkerDead`(请求未达工具,安全回落冷路径);请求被接受后 worker 死亡/挂起 → 显式失败 `returncode=1`,**绝不重试**(工具非幂等)。
 - worker 路径同样经过 `_global_tool_process_slot()`(POSIX 跨 Ray worker 限流 parity)。
+- **可观察行为差异登记**:同一超时,冷路径向调用方抛 `subprocess.TimeoutExpired`,worker 路径返回显式失败 `returncode=1`——翻转 `CRAYOTTER_RL_TOOL_WORKER` 时调用方可观测,非仅内部差异(刻意语义,登记备查)。
+- **第二轮对抗 review 修正(2026-09-26)**:
+  - 池泄漏(HIGH):episode root 每 rollout 唯一 → 每 episode 泄漏一个常驻 serve 进程。修复:`CrayotterSubprocessTool.release(instance_id)` 按实例记录的 episode root 调 `release_tool_workers(root)` 精确拆除;`_acquire_worker` 增加**全池**清扫(空闲超 `CRAYOTTER_RL_TOOL_WORKER_IDLE_SECONDS` 默认 900s / 超 max_calls / 已死,锁定中的忙碌 worker 不动)。
+  - graph.py 双 ImportError 兜底:phase3_rl 整体缺失时回落旧内联全文 markers 扫描,保持 `ShortFormExecutionError` 软失败契约,不再裸抛 ImportError。
+  - 注:`release()` 钩子本机无 verl 无法单测(显式声明),其逻辑由 `release_tool_workers` 的 5 个单测 + 功能脚本 teardown 验证覆盖。
 
 ### S3-1 产物可解码性门 `_artifact_gate`
 - `phase3_rl/reward.py`:ffprobe(`FFPROBE_BIN` 可覆盖)→ cv2 回退(真实 `cap.read()` 解码尝试,不信 `CAP_PROP_FRAME_COUNT`)。

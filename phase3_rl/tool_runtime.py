@@ -220,6 +220,7 @@ class _ToolWorker:
         )
         self.lock = threading.Lock()
         self.calls = 0
+        self.last_used = time.monotonic()
         # A daemon pump thread owns the blocking readline so execute() can
         # enforce its deadline with queue.get(timeout=...) — a plain peek/read
         # on Windows pipes can block past the timeout and defeat it.
@@ -288,6 +289,7 @@ class _ToolWorker:
                     continue
                 result["stdout"] = (result.get("stdout") or "") + "".join(noise)
                 self.calls += 1
+                self.last_used = time.monotonic()
                 return result
 
     def kill(self) -> None:
@@ -315,13 +317,23 @@ _TOOL_WORKER_POOL_LOCK = threading.Lock()
 
 def _acquire_worker(fingerprint: tuple[str, str, str], python_executable: str) -> _ToolWorker:
     max_calls = int(os.environ.get("CRAYOTTER_RL_TOOL_WORKER_MAX_CALLS", "200") or "200")
+    idle_ttl = float(os.environ.get("CRAYOTTER_RL_TOOL_WORKER_IDLE_SECONDS", "900") or "900")
     pool_size = _tool_process_concurrency()
+    now = time.monotonic()
     with _TOOL_WORKER_POOL_LOCK:
+        # Sweep EVERY pool: episode roots are unique per rollout, so workers
+        # from past episodes would otherwise idle forever in a long-lived Ray
+        # worker (round-2 review finding 1).
+        for past_fingerprint, past_pool in list(_TOOL_WORKER_POOLS.items()):
+            for worker in list(past_pool):
+                expired = worker.calls >= max_calls or worker.process.poll() is not None
+                idle_expired = not worker.lock.locked() and (now - worker.last_used) > idle_ttl
+                if expired or idle_expired:
+                    past_pool.remove(worker)
+                    worker.kill()
+            if not past_pool:
+                del _TOOL_WORKER_POOLS[past_fingerprint]
         pool = _TOOL_WORKER_POOLS.setdefault(fingerprint, [])
-        for worker in list(pool):
-            if worker.calls >= max_calls or worker.process.poll() is not None:
-                pool.remove(worker)
-                worker.kill()  # bound worker lifetime; restart imports fresh state
         for worker in pool:
             if not worker.lock.locked():
                 return worker
@@ -331,6 +343,25 @@ def _acquire_worker(fingerprint: tuple[str, str, str], python_executable: str) -
             return worker
         # Pool exhausted: take the first worker; its lock serializes.
         return pool[0]
+
+
+def release_tool_workers(runtime_root: str | Path) -> int:
+    """Retire every pool worker bound to one runtime root (episode teardown).
+
+    Called from CrayotterSubprocessTool.release at episode end; returns the
+    number of workers killed.
+    """
+    resolved = str(Path(runtime_root).resolve())
+    retired = 0
+    with _TOOL_WORKER_POOL_LOCK:
+        for fingerprint, pool in list(_TOOL_WORKER_POOLS.items()):
+            if fingerprint[1] != resolved:
+                continue
+            for worker in pool:
+                worker.kill()
+                retired += 1
+            del _TOOL_WORKER_POOLS[fingerprint]
+    return retired
 
 
 def _retire_worker(fingerprint: tuple[str, str, str], worker: _ToolWorker) -> None:

@@ -7,7 +7,11 @@ from uuid import uuid4
 
 from .fixture import load_fixture, materialize_fixture
 from .reward import build_tool_signature, classify_tool_stage, compute_step_reward
-from .tool_runtime import execute_tool_subprocess_async, load_api_config_from_env
+from .tool_runtime import (
+    execute_tool_subprocess_async,
+    load_api_config_from_env,
+    release_tool_workers,
+)
 
 try:
     from verl.tools.base_tool import BaseTool
@@ -35,6 +39,7 @@ if BaseTool is not None:
             super().__init__(config, tool_schema)
             self.tool_name = str(config.get("tool_name") or self.name)
             self._instance_kwargs: dict[str, dict[str, Any]] = {}
+            self._instance_episode_roots: dict[str, set[str]] = {}
 
         async def create(self, instance_id: str | None = None, **kwargs):
             instance_id = instance_id or uuid4().hex
@@ -74,6 +79,7 @@ if BaseTool is not None:
                 episode_root = episode_base_dir / f"{fixture.fixture_id}_{uuid4().hex[:8]}"
                 materialize_fixture(fixture, episode_root)
                 prior_events = []
+            self._instance_episode_roots.setdefault(instance_id, set()).add(str(episode_root))
             return episode_root, prior_events
 
         def _record_execution(
@@ -148,6 +154,11 @@ if BaseTool is not None:
 
         async def release(self, instance_id: str, **kwargs) -> None:
             self._instance_kwargs.pop(instance_id, None)
+            # Episode teardown: retire the episode's tool workers so a
+            # long-lived Ray worker does not accumulate one idle serve
+            # process per rollout (round-2 review finding 1).
+            for root in self._instance_episode_roots.pop(instance_id, set()):
+                release_tool_workers(root)
 
 else:
 

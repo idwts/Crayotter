@@ -8,6 +8,7 @@ import json
 import os
 import sys
 import tempfile
+import time
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parent
@@ -100,8 +101,17 @@ r3 = execute_tool_subprocess(
 results["worker_unknown_tool_explicit_failure"] = {
     "success": r3.success, "returncode": r3.returncode,
 }
-for w in workers:
-    w.kill()
+
+# Episode teardown: release retires the episode's worker (round-2 finding 1).
+from phase3_rl.tool_runtime import release_tool_workers
+
+retired = release_tool_workers(RUNTIME)
+time.sleep(1.0)  # SIGKILL needs a moment before poll() reports the exit
+results["release_retired_episode_worker"] = retired == 1
+results["release_emptied_pool"] = not any(_TOOL_WORKER_POOLS.values())
+results["released_worker_process_dead"] = all(
+    w.process.poll() is not None for w in workers
+)
 
 # --- FC-1 (S1-1): two-tier verdicts on realistic real-tool payloads ------
 from phase3_rl.tool_runtime import result_indicates_failure

@@ -5837,14 +5837,25 @@ def _invoke_phase3_tool(tool_name: str, arguments: dict[str, Any]) -> str:
         from phase3_rl.tool_runtime import result_indicates_failure
     except ImportError:  # app launched without repo root on sys.path
         sys.path.insert(0, str(SCRIPT_DIR.parent))
-        from phase3_rl.tool_runtime import result_indicates_failure
+        try:
+            from phase3_rl.tool_runtime import result_indicates_failure
+        except ImportError:  # phase3_rl absent from the bundle entirely
+            result_indicates_failure = None
 
-    if result_indicates_failure(
-        result,
-        markers=("出错", "失败", "error", '"status": "fail"'),
-        strict_status=False,
-        full_text=True,
-    ):
+    if result_indicates_failure is not None:
+        failed = result_indicates_failure(
+            result,
+            markers=("出错", "失败", "error", '"status": "fail"'),
+            strict_status=False,
+            full_text=True,
+        )
+    else:  # preserve the historical inline scan's soft-failure contract
+        lowered = result.lower()
+        failed = any(
+            marker in lowered
+            for marker in ("出错", "失败", "error", '"status": "fail"')
+        )
+    if failed:
         raise ShortFormExecutionError(f"{tool_name} 返回失败: {result[:500]}")
     graph_logger.info(
         "📦 Phase3 工具完成: %s run_id=%s duration=%.3fs",
