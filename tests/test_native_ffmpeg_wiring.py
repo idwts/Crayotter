@@ -105,3 +105,67 @@ class MixNarrationCommandTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class FfprobeShimJsonContractTest(unittest.TestCase):
+    """The shim must answer exactly the -of json field sets it can measure
+    (duration; index/codec_type/width/height/frame rates) and fail loudly
+    (rc=1) for anything beyond, e.g. media_consistency's codec/size request."""
+
+    def _run_shim(self, entries: str, video: Path):
+        import subprocess
+
+        shim = SCRIPT_DIR / "ffprobe_shim.py"
+        return subprocess.run(
+            [sys.executable, str(shim), "-v", "error", "-show_entries", entries,
+             "-of", "json", str(video)],
+            capture_output=True, text=True, timeout=120,
+        )
+
+    def _make_clip(self) -> Path:
+        import cv2
+        import numpy as np
+
+        from script.tools._shared import WORKSPACE
+
+        clip = WORKSPACE / "shim_contract_test.mp4"
+        writer = cv2.VideoWriter(str(clip), cv2.VideoWriter_fourcc(*"mp4v"), 10.0, (64, 48))
+        frame = np.zeros((48, 64, 3), dtype="uint8")
+        for _ in range(20):
+            writer.write(frame)
+        writer.release()
+        self.addCleanup(clip.unlink, missing_ok=True)
+        return clip
+
+    def test_duration_only_query_returns_format_json(self):
+        clip = self._make_clip()
+        result = self._run_shim("format=duration", clip)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        payload = json.loads(result.stdout)
+        self.assertAlmostEqual(float(payload["format"]["duration"]), 2.0, delta=0.3)
+        self.assertNotIn("streams", payload)
+
+    def test_stream_query_returns_measured_video_stream(self):
+        clip = self._make_clip()
+        result = self._run_shim(
+            "format=duration:stream=index,codec_type,width,height,avg_frame_rate,r_frame_rate",
+            clip,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        payload = json.loads(result.stdout)
+        video = payload["streams"][0]
+        self.assertEqual(video["codec_type"], "video")
+        self.assertEqual((video["width"], video["height"]), (64, 48))
+        # consumed by _native_ffmpeg.probe_video without raising
+        probe = native.probe_video(clip)
+        self.assertEqual((probe.width, probe.height), (64, 48))
+        self.assertAlmostEqual(probe.duration, 2.0, delta=0.3)
+
+    def test_unmeasurable_fields_fail_loudly(self):
+        clip = self._make_clip()
+        # media_consistency's probe shape: codec_name/pix_fmt/size/bit_rate are
+        # beyond the shim — must NOT get silently fabricated values.
+        result = self._run_shim(
+            "format=duration,size,bit_rate:stream=index,codec_name,pix_fmt", clip
+        )
+        self.assertEqual(result.returncode, 1)

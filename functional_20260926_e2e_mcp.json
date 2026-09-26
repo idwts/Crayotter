@@ -1,0 +1,161 @@
+{
+  "sources": [
+    "C:\\u\\crayotter-maint\\temp\\e2e_src_0.mp4",
+    "C:\\u\\crayotter-maint\\temp\\e2e_src_1.mp4",
+    "C:\\u\\crayotter-maint\\temp\\e2e_src_2.mp4"
+  ],
+  "steps": [
+    {
+      "tool": "cut_video",
+      "args": {
+        "input_path": "C:\\u\\crayotter-maint\\temp\\e2e_src_0.mp4",
+        "start_time": 1.0,
+        "end_time": 3.0,
+        "output_name": "e2e_clip_0.mp4"
+      },
+      "is_error": false,
+      "payload": {
+        "status": "success",
+        "path": "C:\\u\\crayotter-maint\\temp\\e2e_clip_0.mp4",
+        "duration": 2.0
+      }
+    },
+    {
+      "tool": "cut_video",
+      "args": {
+        "input_path": "C:\\u\\crayotter-maint\\temp\\e2e_src_1.mp4",
+        "start_time": 1.0,
+        "end_time": 3.0,
+        "output_name": "e2e_clip_1.mp4"
+      },
+      "is_error": false,
+      "payload": {
+        "status": "success",
+        "path": "C:\\u\\crayotter-maint\\temp\\e2e_clip_1.mp4",
+        "duration": 2.0
+      }
+    },
+    {
+      "tool": "cut_video",
+      "args": {
+        "input_path": "C:\\u\\crayotter-maint\\temp\\e2e_src_2.mp4",
+        "start_time": 1.0,
+        "end_time": 3.0,
+        "output_name": "e2e_clip_2.mp4"
+      },
+      "is_error": false,
+      "payload": {
+        "status": "success",
+        "path": "C:\\u\\crayotter-maint\\temp\\e2e_clip_2.mp4",
+        "duration": 2.0
+      }
+    },
+    {
+      "tool": "merge_videos",
+      "args": {
+        "video_paths": [
+          "C:\\u\\crayotter-maint\\temp\\e2e_clip_0.mp4",
+          "C:\\u\\crayotter-maint\\temp\\e2e_clip_1.mp4",
+          "C:\\u\\crayotter-maint\\temp\\e2e_clip_2.mp4"
+        ],
+        "output_name": "e2e_merged.mp4"
+      },
+      "is_error": false,
+      "payload": {
+        "status": "success",
+        "path": "C:\\u\\crayotter-maint\\temp\\e2e_merged.mp4",
+        "duration": 6.0,
+        "total_duration": 6.0,
+        "num_clips": 3,
+        "target_duration": null,
+        "canvas_size": "160x120"
+      }
+    },
+    {
+      "tool": "inspect_video_duration",
+      "args": {
+        "video_path": "C:\\u\\crayotter-maint\\temp\\e2e_merged.mp4"
+      },
+      "is_error": false,
+      "payload": {
+        "status": "success",
+        "path": "C:\\u\\crayotter-maint\\temp\\e2e_merged.mp4",
+        "duration_seconds": 5.7,
+        "fps": 10.0,
+        "resolution": "160x120",
+        "width": 160,
+        "height": 120
+      }
+    },
+    {
+      "tool": "export_video",
+      "args": {
+        "input_path": "C:\\u\\crayotter-maint\\temp\\e2e_merged.mp4",
+        "output_name": "e2e_final.mp4",
+        "resolution": "720p"
+      },
+      "is_error": false,
+      "payload": {
+        "status": "success",
+        "path": "C:\\u\\crayotter-maint\\temp\\e2e_final.mp4",
+        "resolution": "720p",
+        "duration": 5.7
+      }
+    }
+  ],
+  "tools_listed": 27,
+  "verify": {
+    "merged": {
+      "fps": 10.0,
+      "frames": 57,
+      "duration_s": 5.7,
+      "size": "160x120",
+      "third_means_bgr": [
+        [
+          249.8,
+          4.2,
+          4.1
+        ],
+        [
+          4.1,
+          253.8,
+          4.1
+        ],
+        [
+          4.2,
+          4.2,
+          251.8
+        ]
+      ]
+    },
+    "exported": {
+      "fps": 10.0,
+      "frames": 57,
+      "duration_s": 5.7,
+      "size": "1280x720",
+      "third_means_bgr": [
+        [
+          249.8,
+          5.6,
+          5.5
+        ],
+        [
+          5.5,
+          253.8,
+          5.5
+        ],
+        [
+          5.6,
+          5.6,
+          251.8
+        ]
+      ]
+    }
+  },
+  "merged_thirds_dominant_color": [
+    "B",
+    "G",
+    "R"
+  ],
+  "PASS": true
+}

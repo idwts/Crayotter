@@ -40,19 +40,47 @@ def _print_duration(video_path: Path) -> int:
     return 0
 
 
+# Field sets this shim can honestly measure (cv2 + moviepy). Anything beyond
+# must fail loudly (rc=1) exactly as before, never fabricate values.
+_SHIM_FORMAT_FIELDS = {"duration"}
+_SHIM_STREAM_FIELDS = {"index", "codec_type", "width", "height", "avg_frame_rate", "r_frame_rate"}
+
+
+def _requested_entries(argv: list[str]) -> tuple[set[str], set[str]] | None:
+    """Parse `-show_entries format=a,b:stream=c,d` into (format_fields, stream_fields)."""
+    if "-show_entries" not in argv:
+        return None
+    spec = argv[argv.index("-show_entries") + 1]
+    format_fields: set[str] = set()
+    stream_fields: set[str] = set()
+    for group in spec.split(":"):
+        side, _, fields = group.partition("=")
+        target = format_fields if side == "format" else stream_fields
+        target.update(f for f in fields.split(",") if f)
+    return format_fields, stream_fields
+
+
 def _print_json_probe(video_path: Path, argv: list[str]) -> int:
     """Honor `-of json`: emit the shape _native_ffmpeg expects.
 
     `format=duration`-only queries get {"format": {"duration": ...}}; queries
     that also ask for streams (format=duration:stream=...) additionally get a
     streams array with the real cv2-measured video stream and an audio entry
-    when the container actually has one.
+    when the container actually has one. Requests for fields the shim cannot
+    measure (codec_name, pix_fmt, size, bit_rate, ...) fail loudly instead of
+    returning silently wrong metadata.
     """
+    requested = _requested_entries(argv)
+    if requested is not None:
+        format_fields, stream_fields = requested
+        if not format_fields <= _SHIM_FORMAT_FIELDS or not stream_fields <= _SHIM_STREAM_FIELDS:
+            print("ffprobe shim: requested fields beyond shim capability", file=sys.stderr)
+            return 1
     fps, duration, width, height = _cv2_props(video_path)
     if duration <= 0:
         return 1
     payload: dict = {"format": {"duration": f"{duration:.6f}"}}
-    if "stream=" in " ".join(argv):
+    if requested is None or requested[1]:
         streams: list[dict] = [
             {
                 "index": 0,
@@ -71,6 +99,11 @@ def _print_json_probe(video_path: Path, argv: list[str]) -> int:
 
 
 def _print_audio_presence(video_path: Path) -> int:
+    # The .CMD wrapper runs this file as a plain script, so sys.path[0] is
+    # script/ and the repo root is missing — add it for the package import.
+    repo_root = str(Path(__file__).resolve().parent.parent)
+    if repo_root not in sys.path:
+        sys.path.insert(0, repo_root)
     from script.tools._native_ffmpeg import binaries_available, probe_video_optional
 
     if binaries_available():

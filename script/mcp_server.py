@@ -28,10 +28,15 @@ def _build_server():
     from pathlib import Path
 
     # The tools package imports sibling top-level modules (model_runtime, ...)
-    # that live next to it in script/, mirroring how tests and graph.py run.
+    # that live next to it in script/, mirroring how tests and graph.py run;
+    # and the repo root is needed for `from script.tools import ...` when the
+    # server is launched directly (`python script/mcp_server.py`) rather than
+    # via `-m` from the repo root.
     script_dir = str(Path(__file__).resolve().parent)
-    if script_dir not in sys.path:
-        sys.path.insert(0, script_dir)
+    repo_root = str(Path(__file__).resolve().parent.parent)
+    for entry in (script_dir, repo_root):
+        if entry not in sys.path:
+            sys.path.insert(0, entry)
 
     from script.tools import ALL_TOOLS
 
