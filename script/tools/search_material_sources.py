@@ -120,6 +120,7 @@ def search_material_sources(
     _append_candidates_to_pool(merged)
     return json.dumps(
         {
+            "status": "success",
             "candidates": merged,
             "sources": source_results,
             "authorization": list(_AUTH_BROKER.events[auth_event_offset:]),

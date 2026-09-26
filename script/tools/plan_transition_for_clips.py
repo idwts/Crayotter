@@ -107,14 +107,14 @@ def plan_transition_for_clips(
     """
     try:
         if not clip_paths or not isinstance(clip_paths, list):
-            return "转场规划出错: clip_paths 必须是非空列表"
+            return tool_error("转场规划", "clip_paths 必须是非空列表")
 
         resolved_paths: list[Path] = []
         clip_durations: list[float] = []
         for p in clip_paths:
             resolved = _resolve_workspace_input_path(p, must_exist=True)
             if resolved is None:
-                return f"转场规划出错: 文件不存在或不在WORKSPACE: {p}"
+                return tool_error("转场规划", f"文件不存在或不在WORKSPACE: {p}")
             resolved_paths.append(resolved)
             clip_durations.append(float(_get_video_meta(str(resolved)).get("duration_seconds", 0.0) or 0.0))
 
@@ -193,4 +193,4 @@ def plan_transition_for_clips(
             ensure_ascii=False,
         )
     except Exception as e:
-        return f"转场规划出错: {e}"
+        return tool_error("转场规划", e)

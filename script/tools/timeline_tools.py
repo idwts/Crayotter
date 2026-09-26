@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from ._shared import Any, Path, json, tool, _resolve_workspace_input_path, _get_video_meta
+from ._shared import Any, Path, json, tool, tool_error, _resolve_workspace_input_path, _get_video_meta
 
 
 def _resolve_many_video_paths(video_paths: list[str]) -> tuple[list[Path], str | None]:
@@ -33,11 +33,11 @@ def build_edit_timeline_from_segments(
     """
     try:
         if not video_paths:
-            return "构建时间线出错: video_paths 为空"
+            return tool_error("构建时间线", "video_paths 为空")
 
         resolved, err = _resolve_many_video_paths(video_paths)
         if err:
-            return f"构建时间线出错: {err}"
+            return tool_error("构建时间线", err)
 
         timeline: list[dict[str, Any]] = []
         warnings: list[str] = []
@@ -93,7 +93,7 @@ def build_edit_timeline_from_segments(
             ensure_ascii=False,
         )
     except Exception as e:
-        return f"构建时间线出错: {e}"
+        return tool_error("构建时间线", e)
 
 
 @tool
@@ -114,16 +114,16 @@ def align_narration_to_timeline(
     """
     try:
         if not isinstance(timeline, list) or not timeline:
-            return "对齐出错: timeline 必须是非空列表"
+            return tool_error("对齐", "timeline 必须是非空列表")
         if not isinstance(narration_blocks, list) or not narration_blocks:
-            return "对齐出错: narration_blocks 必须是非空列表"
+            return tool_error("对齐", "narration_blocks 必须是非空列表")
 
         clips = sorted(
             [c for c in timeline if isinstance(c, dict)],
             key=lambda x: float(x.get("timeline_start", 0.0)),
         )
         if not clips:
-            return "对齐出错: timeline 中没有有效片段"
+            return tool_error("对齐", "timeline 中没有有效片段")
 
         total_start = float(clips[0].get("timeline_start", 0.0))
         total_end = float(clips[-1].get("timeline_end", 0.0))
@@ -206,7 +206,7 @@ def align_narration_to_timeline(
             ensure_ascii=False,
         )
     except Exception as e:
-        return f"对齐出错: {e}"
+        return tool_error("对齐", e)
 
 
 @tool
@@ -227,7 +227,7 @@ def validate_timeline_constraints(
     """
     try:
         if not isinstance(timeline, list) or not timeline:
-            return "校验出错: timeline 必须是非空列表"
+            return tool_error("校验", "timeline 必须是非空列表")
 
         rows = [r for r in timeline if isinstance(r, dict)]
         rows.sort(key=lambda x: float(x.get("timeline_start", 0.0)))
@@ -311,4 +311,4 @@ def validate_timeline_constraints(
             ensure_ascii=False,
         )
     except Exception as e:
-        return f"校验出错: {e}"
+        return tool_error("校验", e)

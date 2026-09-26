@@ -232,10 +232,10 @@ def add_narration_segments(
 
         resolved_video = _resolve_workspace_input_path(video_path, must_exist=True)
         if resolved_video is None:
-            return f"分段配音出错: 输入视频不存在或不在WORKSPACE: {video_path}"
+            return tool_error("分段配音", f"输入视频不存在或不在WORKSPACE: {video_path}")
 
         if not segments or not isinstance(segments, list):
-            return "分段配音出错: segments 参数必须是非空列表"
+            return tool_error("分段配音", "segments 参数必须是非空列表")
 
         # ── 1. 加载视频 ──
         video = VideoFileClip(str(resolved_video))
@@ -424,7 +424,7 @@ def add_narration_segments(
 
         if success_count == 0:
             video.close()
-            return f"分段配音出错: 所有 {len(segments)} 段均失败。详情: {'; '.join(fail_messages)}"
+            return tool_error("分段配音", f"所有 {len(segments)} 段均失败。详情: {'; '.join(fail_messages)}")
 
         # ── 3. 混合音频 ──
         all_audio_parts: list[Any] = []
@@ -483,4 +483,4 @@ def add_narration_segments(
     except ModelCallError:
         raise
     except Exception as e:
-        return f"分段配音出错: {e}"
+        return tool_error("分段配音", e)

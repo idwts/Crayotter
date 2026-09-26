@@ -309,7 +309,7 @@ class DownloadMaterialVideoTests(unittest.TestCase):
                 type(
                     "FakeSearchTool",
                     (),
-                    {"invoke": lambda self, arguments: json.dumps([bili_candidate], ensure_ascii=False)},
+                    {"invoke": lambda self, arguments: json.dumps({"status": "success", "candidates": [bili_candidate]}, ensure_ascii=False)},
                 )(),
                 create=True,
             ):

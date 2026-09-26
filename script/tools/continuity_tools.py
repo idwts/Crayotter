@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from ._shared import Path, cv2, json, tool, _resolve_workspace_input_path
+from ._shared import Path, cv2, json, tool, tool_error, _resolve_workspace_input_path
 
 
 def _sample_frames_signature(video_path: Path, from_tail: bool, sample_seconds: float = 1.0) -> dict[str, float]:
@@ -79,9 +79,9 @@ def score_cut_continuity(
         left = _resolve_workspace_input_path(left_video_path, must_exist=True)
         right = _resolve_workspace_input_path(right_video_path, must_exist=True)
         if left is None:
-            return f"评分出错: 左片段不存在或不在WORKSPACE: {left_video_path}"
+            return tool_error("评分", f"左片段不存在或不在WORKSPACE: {left_video_path}")
         if right is None:
-            return f"评分出错: 右片段不存在或不在WORKSPACE: {right_video_path}"
+            return tool_error("评分", f"右片段不存在或不在WORKSPACE: {right_video_path}")
 
         left_sig = _sample_frames_signature(left, from_tail=True, sample_seconds=sample_seconds)
         right_sig = _sample_frames_signature(right, from_tail=False, sample_seconds=sample_seconds)
@@ -102,7 +102,7 @@ def score_cut_continuity(
             ensure_ascii=False,
         )
     except Exception as e:
-        return f"评分出错: {e}"
+        return tool_error("评分", e)
 
 
 @tool
@@ -120,7 +120,7 @@ def recommend_transition_for_cut(
         left = _resolve_workspace_input_path(left_video_path, must_exist=True)
         right = _resolve_workspace_input_path(right_video_path, must_exist=True)
         if left is None or right is None:
-            return "推荐出错: 输入片段不存在或不在WORKSPACE"
+            return tool_error("推荐", "输入片段不存在或不在WORKSPACE")
 
         left_sig = _sample_frames_signature(left, from_tail=True, sample_seconds=sample_seconds)
         right_sig = _sample_frames_signature(right, from_tail=False, sample_seconds=sample_seconds)
@@ -167,4 +167,4 @@ def recommend_transition_for_cut(
             ensure_ascii=False,
         )
     except Exception as e:
-        return f"推荐出错: {e}"
+        return tool_error("推荐", e)

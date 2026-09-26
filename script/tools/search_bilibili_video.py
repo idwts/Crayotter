@@ -163,7 +163,7 @@ def search_bilibili_video(
         
         if not candidates:
             logger.warning(f"⚠️  未找到Bilibili相关视频: {query}")
-            return f"未找到相关视频: {query}"
+            return tool_success(candidates=[], note=f"未找到相关视频: {query}")
 
         logger.info(
             "📊 Bilibili搜索统计: 查询=%s, 原始结果=%s, 去重后=%s, 过滤后=%s, 超时长剔除=%s, 时长未知剔除=%s, 候选=%s",
@@ -176,11 +176,11 @@ def search_bilibili_video(
             len(candidates),
         )
         _append_candidates_to_pool(candidates)
-        return json.dumps(candidates, ensure_ascii=False, indent=2)
+        return tool_success(candidates=candidates)
     
     except ModelCallError:
         raise
     except Exception as e:
-        error_msg = f"搜索B站视频出错: {e}"
+        error_msg = tool_error("搜索B站视频", e)
         logger.error(f"❌ Bilibili搜索异常: {e}", exc_info=True)
         return error_msg

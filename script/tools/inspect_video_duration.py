@@ -15,7 +15,7 @@ def inspect_video_duration(video_path: str) -> str:
     try:
         resolved_input = _resolve_workspace_input_path(video_path, must_exist=True)
         if resolved_input is None:
-            return f"检测失败: 文件不存在或不在WORKSPACE: {video_path}"
+            return tool_error("检测", f"文件不存在或不在WORKSPACE: {video_path}")
         meta = _get_video_meta(str(resolved_input))
         logger.info(
             "📏 时长检测: %s -> %.2fs (%s)",
@@ -25,4 +25,4 @@ def inspect_video_duration(video_path: str) -> str:
         )
         return json.dumps({"status": "success", "path": str(resolved_input), **meta}, ensure_ascii=False)
     except Exception as e:
-        return f"时长检测出错: {e}"
+        return tool_error("时长检测", e)

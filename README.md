@@ -75,6 +75,7 @@ A full end-to-end run: from a one-line text request, Crayotter prepares material
 
 ## News
 
+- **2026.9.26** — Unified tool result format now covers the entire editing surface (every tool returns the canonical `{"status": ...}` JSON success or a marked error), and the MCP server is verified working over real stdio with both mcp 1.x and 2.x (`tests/test_mcp_server.py`). The bundled ffprobe shim now honors `-of json`, so the native pipeline also works on machines where the shim is the only ffprobe.
 - **2026.9.24** — 🎬 Crayotter was accepted at **AACL 2026 as an Oral** presentation! This maintenance update also brings a native ffmpeg/ffprobe pipeline for cut/merge/export/mix (moviepy retained as fallback and for subtitle rendering), a unified tool result format, and an MCP server exposing every editing tool (`python -m script.mcp_server`).
 - **2026.8.5** — Our new work is now available! Towards long-horizon video editing agents: [Crayotter: Learning Long-Horizon Video Editing Agents via Group-Relative Preference Backpropagation](https://arxiv.org/abs/2608.02694)。
 - **2026.6.27** — Crayotter 1.0.0 adds multi-source material import, unified download cleanup, and refreshed Windows release packaging.

@@ -16,6 +16,8 @@ from __future__ import annotations
 
 import base64
 
+import sys
+
 import ipaddress
 
 import ssl
@@ -117,13 +119,13 @@ MEMORY_EXPERIENCE_DIR.mkdir(parents=True, exist_ok=True)
 
 LOGS_DIR.mkdir(parents=True, exist_ok=True)
 
-print(f"[workspace] {WORKSPACE}")
+print(f"[workspace] {WORKSPACE}", file=sys.stderr)
 
-print(f"[user_workspace] {USER_WORKSPACE}")
+print(f"[user_workspace] {USER_WORKSPACE}", file=sys.stderr)
 
-print(f"[memory_experience] {MEMORY_EXPERIENCE_DIR}")
+print(f"[memory_experience] {MEMORY_EXPERIENCE_DIR}", file=sys.stderr)
 
-print(f"[logs] {LOGS_DIR}")
+print(f"[logs] {LOGS_DIR}", file=sys.stderr)
 
 log_filename = LOGS_DIR / f"video_agent_{datetime.now().strftime('%Y%m%d_%H%M%S')}.log"
 

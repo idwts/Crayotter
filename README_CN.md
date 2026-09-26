@@ -75,6 +75,7 @@ Crayotter 是一个多模态、Agent 驱动的视频自动编辑系统，可以�
 
 ## 近期动态
 
+- **2026.9.26** — 统一工具返回格式已覆盖全部剪辑工具（成功一律为 `{"status": ...}` JSON，失败一律带标准错误标记）；MCP 服务已在真实 stdio 传输上验证可用，兼容 mcp 1.x/2.x（`tests/test_mcp_server.py`）。自带 ffprobe shim 现在支持 `-of json`，在只有 shim 的机器上原生管线同样可用。
 - **2026.9.24** — 🎬 Crayotter 已被 **AACL 2026 录用为 Oral** 报告！本次维护更新还带来了原生 ffmpeg/ffprobe 剪辑/合并/导出/混音管线（moviepy 保留为兜底并继续负责字幕渲染）、统一的工具返回格式，以及暴露全部剪辑工具的 MCP 服务（`python -m script.mcp_server`）。
 - **2026.8.5** — 全新工作已公开！迈向长时序视频编辑智能体：[Crayotter: Learning Long-Horizon Video Editing Agents via Group-Relative Preference Backpropagation](https://arxiv.org/abs/2608.02694)。
 - **2026.6.27** — Crayotter 1.0.0 新增多素材源导入、统一下载清洗，并更新 Windows 发布包。

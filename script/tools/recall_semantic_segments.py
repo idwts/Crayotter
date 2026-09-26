@@ -25,13 +25,13 @@ def recall_semantic_segments(
     try:
         q = (query or "").strip()
         if not q:
-            return "语义召回出错: query 不能为空。"
+            return tool_error("语义召回", "query 不能为空。")
 
         retrieval_mode = "text"
 
         analysis_files = _iter_analysis_json_files()
         if not analysis_files:
-            return "语义召回出错: 未找到任何 *_analysis.json，请先执行 analyze_video。"
+            return tool_error("语义召回", "未找到任何 *_analysis.json，请先执行 analyze_video。")
 
         filters = [f.strip().lower() for f in (source_video_filters or []) if str(f).strip()]
         candidates: list[dict[str, Any]] = []
@@ -137,4 +137,4 @@ def recall_semantic_segments(
         }, ensure_ascii=False)
     except Exception as e:
         logger.error("❌ 语义片段召回异常: %s", e, exc_info=True)
-        return f"语义召回出错: {e}"
+        return tool_error("语义召回", e)

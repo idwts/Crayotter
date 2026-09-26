@@ -24,6 +24,7 @@ def import_material_urls(urls_json: str, query: str = "") -> str:
     _append_candidates_to_pool(merged)
     return json.dumps(
         {
+            "status": "success",
             "candidates": merged,
             "imported_count": len(merged),
             "failures": failures,

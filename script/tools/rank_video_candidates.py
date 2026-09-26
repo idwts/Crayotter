@@ -66,9 +66,10 @@ def rank_video_candidates(
             dropped_unknown = max(0, dropped_unknown - len(kept_unknown_imports))
 
         if not candidates:
-            return (
-                "筛选出错: 没有可用候选（超过10分钟或时长未知已剔除）。"
-                f" 超时长剔除={dropped_long}, 时长未知剔除={dropped_unknown}"
+            return tool_error(
+                "筛选",
+                "没有可用候选（超过10分钟或时长未知已剔除）。"
+                f" 超时长剔除={dropped_long}, 时长未知剔除={dropped_unknown}",
             )
 
         total_candidates = len(candidates)
@@ -256,6 +257,7 @@ def rank_video_candidates(
         )
 
         result_json = json.dumps({
+            "status": "success",
             "candidate_total": total_candidates,
             "reviewed": len(reviewed),
             "input_candidates": len(incoming_candidates),
@@ -272,6 +274,6 @@ def rank_video_candidates(
     except ModelCallError:
         raise
     except Exception as e:
-        error_msg = f"筛选出错: {e}"
+        error_msg = tool_error("筛选", e)
         logger.error(f"❌ MLLM筛选异常: {e}", exc_info=True)
         return error_msg

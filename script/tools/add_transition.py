@@ -221,13 +221,13 @@ def plan_transition_timeline(
     """
     try:
         if not video_paths or len(video_paths) < 2:
-            return "规划转场出错: video_paths 至少需要 2 个视频"
+            return tool_error("规划转场", "video_paths 至少需要 2 个视频")
 
         resolved: list[Path] = []
         for p in video_paths:
             rp = _resolve_workspace_input_path(p, must_exist=True)
             if rp is None:
-                return f"规划转场出错: 文件不存在或不在WORKSPACE: {p}"
+                return tool_error("规划转场", f"文件不存在或不在WORKSPACE: {p}")
             resolved.append(rp)
 
         durations: list[float] = []
@@ -271,7 +271,7 @@ def plan_transition_timeline(
             ensure_ascii=False,
         )
     except Exception as e:
-        return f"规划转场出错: {e}"
+        return tool_error("规划转场", e)
 
 
 @tool
@@ -321,7 +321,7 @@ def add_transition(
     """
     try:
         if not video_paths:
-            return "转场出错: 视频路径列表为空"
+            return tool_error("转场", "视频路径列表为空")
 
         # 去重: 防止同一个文件被传入多次导致时长翻倍
         seen: set[str] = set()
@@ -329,14 +329,14 @@ def add_transition(
         for p in video_paths:
             resolved = _resolve_workspace_input_path(p, must_exist=True)
             if resolved is None:
-                return f"转场出错: 文件不存在或不在WORKSPACE: {p}"
+                return tool_error("转场", f"文件不存在或不在WORKSPACE: {p}")
             key = str(resolved).replace("\\", "/")
             if key not in seen:
                 seen.add(key)
                 unique_paths.append(str(resolved))
         
         if not unique_paths:
-            return "转场出错: 去重后没有可用的视频片段"
+            return tool_error("转场", "去重后没有可用的视频片段")
 
         transition_type = _normalize_transition_name(transition_type)
         duration = max(0.15, float(duration))
@@ -360,7 +360,7 @@ def add_transition(
                 float(meta.get("fps", 30.0) or 30.0),
             )
             if not ok:
-                return f"转场出错: 单视频预处理失败: {err}"
+                return tool_error("转场", f"单视频预处理失败: {err}")
 
             dur = _get_video_meta(str(normalized)).get("duration_seconds", 0.0)
             out_start = max(0.0, float(dur) - d)
@@ -390,7 +390,7 @@ def add_transition(
                 timeout=900,
             )
             if not ok:
-                return f"转场出错: 单视频淡入淡出失败: {err}"
+                return tool_error("转场", f"单视频淡入淡出失败: {err}")
 
             out_dur = float(_get_video_meta(str(output_path)).get("duration_seconds", 0.0))
             return json.dumps({
@@ -427,12 +427,12 @@ def add_transition(
                 normalized = tmp_dir / f"norm_{i:02d}.mp4"
                 ok, err = _normalize_clip_for_transition(src, normalized, target_w, target_h, target_fps)
                 if not ok:
-                    return f"转场出错: 片段预处理失败({src.name}): {err}"
+                    return tool_error("转场", f"片段预处理失败({src.name}): {err}")
                 normalized_paths.append(normalized)
 
         durations = [float(_get_video_meta(str(p)).get("duration_seconds", 0.0)) for p in normalized_paths]
         if any(d <= 0.2 for d in durations):
-            return "转场出错: 存在时长过短片段(<0.2s)，无法应用稳定转场"
+            return tool_error("转场", "存在时长过短片段(<0.2s)，无法应用稳定转场")
 
         parsed_plan = _parse_transition_plan(transition_plan)
         plan_by_cut: dict[int, tuple[str, float]] = {}
@@ -506,11 +506,11 @@ def add_transition(
 
         if not _ffmpeg_supports_filter("xfade"):
             ffmpeg_path = _ffmpeg_binary()
-            return f"转场出错: 当前 ffmpeg 不支持 xfade（检测命令使用: {ffmpeg_path}），请确认运行时 PATH 指向包含 xfade 的 ffmpeg"
+            return tool_error("转场", f"当前 ffmpeg 不支持 xfade（检测命令使用: {ffmpeg_path}），请确认运行时 PATH 指向包含 xfade 的 ffmpeg")
 
         ok, err = _ffmpeg_run(cmd, timeout=1800)
         if not ok:
-            return f"转场出错: ffmpeg 合成失败: {err}"
+            return tool_error("转场", f"ffmpeg 合成失败: {err}")
 
         out_dur = float(_get_video_meta(str(output_path)).get("duration_seconds", 0.0))
 
@@ -528,4 +528,4 @@ def add_transition(
             "applied_transition_plan": applied_plan,
         }, ensure_ascii=False)
     except Exception as e:
-        return f"转场出错: {e}"
+        return tool_error("转场", e)

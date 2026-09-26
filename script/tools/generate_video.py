@@ -27,4 +27,4 @@ def generate_video(
         )
         return str(result)
     except Exception as e:
-        return f"生成视频出错: {e}"
+        return tool_error("生成视频", e)

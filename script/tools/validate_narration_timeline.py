@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from ._shared import Any, json, tool, _get_video_meta, _resolve_workspace_input_path
+from ._shared import Any, json, tool, tool_error, _get_video_meta, _resolve_workspace_input_path
 
 
 @tool
@@ -27,15 +27,15 @@ def validate_narration_timeline(
     try:
         resolved_video = _resolve_workspace_input_path(video_path, must_exist=True)
         if resolved_video is None:
-            return f"校验失败: 输入视频不存在或不在WORKSPACE: {video_path}"
+            return tool_error("校验", f"输入视频不存在或不在WORKSPACE: {video_path}")
 
         if not isinstance(segments, list) or not segments:
-            return "校验失败: segments 必须是非空列表"
+            return tool_error("校验", "segments 必须是非空列表")
 
         meta = _get_video_meta(str(resolved_video))
         video_dur = float(meta.get("duration_seconds", 0.0))
         if video_dur <= 0:
-            return "校验失败: 无法读取视频时长"
+            return tool_error("校验", "无法读取视频时长")
 
         normalized: list[dict[str, Any]] = []
         issues: list[dict[str, Any]] = []
@@ -171,4 +171,4 @@ def validate_narration_timeline(
             ensure_ascii=False,
         )
     except Exception as e:
-        return f"校验失败: {e}"
+        return tool_error("校验", e)

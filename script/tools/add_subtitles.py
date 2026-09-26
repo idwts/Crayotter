@@ -33,10 +33,10 @@ def add_subtitles(
 
         resolved_video = _resolve_workspace_input_path(video_path, must_exist=True)
         if resolved_video is None:
-            return f"字幕添加出错: 输入视频不存在或不在WORKSPACE: {video_path}"
+            return tool_error("字幕添加", f"输入视频不存在或不在WORKSPACE: {video_path}")
 
         if not subtitles or not isinstance(subtitles, list):
-            return "字幕添加出错: subtitles 参数必须是非空列表"
+            return tool_error("字幕添加", "subtitles 参数必须是非空列表")
 
         video = VideoFileClip(str(resolved_video))
         video_dur = video.duration
@@ -84,7 +84,7 @@ def add_subtitles(
 
         if not sub_clips:
             video.close()
-            return "字幕添加出错: 无有效字幕段"
+            return tool_error("字幕添加", "无有效字幕段")
 
         final = CompositeVideoClip([video] + sub_clips)
         if video.audio is not None:
@@ -109,4 +109,4 @@ def add_subtitles(
             "subtitle_count": len(sub_clips),
         }, ensure_ascii=False)
     except Exception as e:
-        return f"字幕添加出错: {e}"
+        return tool_error("字幕添加", e)

@@ -152,9 +152,10 @@ def download_bilibili_video(
                 try:
                     _download_via_bilibili_api(url, bvid, output_path)
                 except Exception as fallback_error:
-                    return (
-                        f"下载失败: yt-dlp={yt_dlp_error[:350]}; "
-                        f"api_fallback={fallback_error}"
+                    return tool_error(
+                        "下载",
+                        f"yt-dlp={yt_dlp_error[:350]}; "
+                        f"api_fallback={fallback_error}",
                     )
 
         # 获取视频基本信息
@@ -172,9 +173,10 @@ def download_bilibili_video(
                     output_path.unlink()
             except Exception:
                 pass
-            return (
-                f"下载失败: 下载后检测到时长 {duration:.1f} 秒，超过限制 "
-                f"{MAX_DOWNLOAD_DURATION_SECONDS} 秒（10分钟），文件已删除"
+            return tool_error(
+                "下载",
+                f"下载后检测到时长 {duration:.1f} 秒，超过限制 "
+                f"{MAX_DOWNLOAD_DURATION_SECONDS} 秒（10分钟），文件已删除",
             )
 
         if cache_path is not None and not cache_path.exists():
@@ -225,6 +227,6 @@ def download_bilibili_video(
             "cache_hit": result is None,
         }, ensure_ascii=False)
     except Exception as e:
-        error_msg = f"下载B站视频出错: {e}"
+        error_msg = tool_error("下载B站视频", e)
         logger.error(f"❌ Bilibili下载异常: {e}", exc_info=True)
         return error_msg

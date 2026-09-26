@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from ._shared import Path, json, tool, run_subprocess, _resolve_workspace_input_path, _safe_output_video_path
+from ._shared import Path, json, tool, tool_error, run_subprocess, _resolve_workspace_input_path, _safe_output_video_path
 
 
 def _run_ffmpeg(cmd: list[str], timeout: int = 900) -> tuple[bool, str]:
@@ -44,9 +44,9 @@ def duck_background_audio(
     try:
         resolved = _resolve_workspace_input_path(video_path, must_exist=True)
         if resolved is None:
-            return f"压背景音出错: 输入视频不存在或不在WORKSPACE: {video_path}"
+            return tool_error("压背景音", f"输入视频不存在或不在WORKSPACE: {video_path}")
         if not isinstance(narration_segments, list) or not narration_segments:
-            return "压背景音出错: narration_segments 必须是非空列表"
+            return tool_error("压背景音", "narration_segments 必须是非空列表")
 
         valid_segs: list[dict[str, float]] = []
         for seg in narration_segments:
@@ -61,7 +61,7 @@ def duck_background_audio(
             valid_segs.append({"start": s, "end": e})
 
         if not valid_segs:
-            return "压背景音出错: narration_segments 无有效时间段"
+            return tool_error("压背景音", "narration_segments 无有效时间段")
 
         factor = pow(10.0, float(duck_gain_db) / 20.0)
         factor = max(0.05, min(1.0, factor))
@@ -84,7 +84,7 @@ def duck_background_audio(
         ]
         ok, err = _run_ffmpeg(cmd, timeout=1200)
         if not ok:
-            return f"压背景音出错: {err}"
+            return tool_error("压背景音", err)
 
         return json.dumps(
             {
@@ -96,7 +96,7 @@ def duck_background_audio(
             ensure_ascii=False,
         )
     except Exception as e:
-        return f"压背景音出错: {e}"
+        return tool_error("压背景音", e)
 
 
 @tool
@@ -116,7 +116,7 @@ def normalize_loudness(
     try:
         resolved = _resolve_workspace_input_path(video_path, must_exist=True)
         if resolved is None:
-            return f"响度归一化出错: 输入视频不存在或不在WORKSPACE: {video_path}"
+            return tool_error("响度归一化", f"输入视频不存在或不在WORKSPACE: {video_path}")
 
         output_path = _safe_output_video_path(output_name, default_stem="loudnorm")
         af = (
@@ -139,7 +139,7 @@ def normalize_loudness(
         ]
         ok, err = _run_ffmpeg(cmd, timeout=1200)
         if not ok:
-            return f"响度归一化出错: {err}"
+            return tool_error("响度归一化", err)
 
         return json.dumps(
             {
@@ -152,4 +152,4 @@ def normalize_loudness(
             ensure_ascii=False,
         )
     except Exception as e:
-        return f"响度归一化出错: {e}"
+        return tool_error("响度归一化", e)

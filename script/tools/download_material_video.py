@@ -238,6 +238,10 @@ def _download_bilibili_fallback(
         candidates = json.loads(str(raw))
     except Exception as exc:
         raise RuntimeError(f"Bilibili fallback search returned invalid JSON: {str(raw)[:200]}") from exc
+    if isinstance(candidates, dict):
+        # Unified tool contract: search_bilibili_video returns
+        # {"status": "success", "candidates": [...]} since the format unification.
+        candidates = candidates.get("candidates") or []
     if not isinstance(candidates, list) or not candidates:
         raise RuntimeError("Bilibili fallback search returned no candidates")
 

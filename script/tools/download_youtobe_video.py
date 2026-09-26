@@ -25,7 +25,7 @@ def download_youtobe_video(url: str, filename: str = "downloaded") -> str:
         ]
         result = run_subprocess(cmd, capture_output=True, text=True, timeout=300)
         if result.returncode != 0:
-            return f"下载失败: {result.stderr[:500]}"
+            return tool_error("下载", result.stderr[:500])
 
         # 获取视频基本信息
         cap = cv2.VideoCapture(str(output_path))
@@ -42,9 +42,10 @@ def download_youtobe_video(url: str, filename: str = "downloaded") -> str:
                     output_path.unlink()
             except Exception:
                 pass
-            return (
-                f"下载失败: 下载后检测到时长 {duration:.1f} 秒，超过限制 "
-                f"{MAX_DOWNLOAD_DURATION_SECONDS} 秒（10分钟），文件已删除"
+            return tool_error(
+                "下载",
+                f"下载后检测到时长 {duration:.1f} 秒，超过限制 "
+                f"{MAX_DOWNLOAD_DURATION_SECONDS} 秒（10分钟），文件已删除",
             )
 
         return json.dumps({
@@ -55,6 +56,6 @@ def download_youtobe_video(url: str, filename: str = "downloaded") -> str:
             "fps": round(fps, 1),
         }, ensure_ascii=False)
     except Exception as e:
-        error_msg = f"下载出错: {e}"
+        error_msg = tool_error("下载", e)
         logger.error(f"❌ YouTube下载异常: {e}", exc_info=True)
         return error_msg
