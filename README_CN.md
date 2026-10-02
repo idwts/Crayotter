@@ -21,6 +21,9 @@
   <a href="https://arxiv.org/abs/2606.07636" target="_blank" rel="noopener noreferrer">
     <img src="https://img.shields.io/badge/arXiv-2606.07636-b31b1b?style=for-the-badge&logo=arxiv&logoColor=white" alt="arXiv 论文">
   </a>
+  <a href="https://arxiv.org/abs/2608.02694" target="_blank" rel="noopener noreferrer">
+    <img src="https://img.shields.io/badge/arXiv-2608.02694-b31b1b?style=for-the-badge&logo=arxiv&logoColor=white" alt="arXiv 论文">
+  </a>
   <a href="./LICENSE" target="_blank" rel="noopener noreferrer">
     <img src="https://img.shields.io/badge/License-PolyForm%20Noncommercial%201.0.0-blue?style=for-the-badge" alt="许可证">
   </a>
@@ -72,6 +75,7 @@ Crayotter 是一个多模态、Agent 驱动的视频自动编辑系统，可以�
 
 ## 近期动态
 
+- **2026.8.5** — 全新工作已公开！迈向长时序视频编辑智能体：[Crayotter: Learning Long-Horizon Video Editing Agents via Group-Relative Preference Backpropagation](https://arxiv.org/abs/2608.02694)。
 - **2026.6.27** — Crayotter 1.0.0 新增多素材源导入、统一下载清洗，并更新 Windows 发布包。
 - **2026.6.15** — 异步调度升级后，视频生成整体流程提速约 1.6 倍。
 - **2026.5.31** — 我们的论文已上线：[Crayotter: Traceable Multi-Agent Workflows for Long-Form Video Editing](https://arxiv.org/abs/2606.07636)。
@@ -354,13 +358,23 @@ python script/visualize.py --port 9000
 
 ```bibtex
 @misc{yan2026crayottertraceablemultiagentworkflows,
-      title={Crayotter: Traceable Multi-Agent Workflows for Long-Form Video Editing},
-      author={Lecheng Yan and Yichong Zhang and Ben Pan and Xiaoyu Zheng and Jiawei Qian and Anqi Wu and Wenxi Li and Chenyang Lyu},
+      title={Crayotter: Traceable Multi-Agent Workflows for Long-Form Video Editing}, 
+      author={Lecheng Yan and Yichong Zhang and Xiantao Xu and Jianze Lin and Ben Pan and Xiaoyu Zheng and Jiawei Qian and Anqi Wu and Jiahui Geng and Ruizhe Li and Fengyu Cai and Jingcheng Niu and Raymond Li and Wenxi Li and Chenyang Lyu},
       year={2026},
       eprint={2606.07636},
       archivePrefix={arXiv},
       primaryClass={cs.CV},
-      url={https://arxiv.org/abs/2606.07636},
+      url={https://arxiv.org/abs/2606.07636}, 
+}
+
+@misc{yan2026crayotterlearninglonghorizonvideo,
+      title={Crayotter: Learning Long-Horizon Video Editing Agents via Group-Relative Preference Backpropagation}, 
+      author={Lecheng Yan and Jianze Lin and Yichong Zhang and Ben Pan and Wenxi Li and Chenyang Lyu and Liting Zhou and Cathal Gurrin},
+      year={2026},
+      eprint={2608.02694},
+      archivePrefix={arXiv},
+      primaryClass={cs.CL},
+      url={https://arxiv.org/abs/2608.02694}, 
 }
 ```
 

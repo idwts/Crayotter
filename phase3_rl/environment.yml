@@ -1,0 +1,14 @@
+name: crayotter-phase3
+channels:
+  - pytorch
+  - nvidia
+  - conda-forge
+dependencies:
+  - python=3.12
+  - pip
+  - ffmpeg
+  - git
+  - cmake
+  - ninja
+  - pip:
+      - -r requirements.txt

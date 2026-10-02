@@ -1,0 +1,534 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+SESSION_TRAIN="${SESSION_TRAIN:-agent_back4_segment_ppo}"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "$SCRIPT_DIR/server_paths.sh"
+crayotter_resolve_server_paths
+crayotter_assert_owned_path "$PROJECT_DIR"
+crayotter_assert_owned_path "$VERL_DIR"
+
+SCREEN_BIN="${SCREEN_BIN:-}"
+for candidate in \
+  "$SCREEN_BIN" \
+  "$SERVER_ROOT/miniconda3/bin/screen" \
+  "$SERVER_ROOT/anaconda3/bin/screen" \
+  "$(command -v screen || true)"; do
+  if [[ -n "$candidate" && -x "$candidate" ]]; then
+    SCREEN_BIN="$candidate"
+    break
+  fi
+done
+if [[ -z "$SCREEN_BIN" || ! -x "$SCREEN_BIN" ]]; then
+  echo "screen not found; install screen in base conda first" >&2
+  exit 1
+fi
+
+TRAIN_CONDA_PREFIX="${TRAIN_CONDA_PREFIX:-$(cd "$(dirname "$PYTHON_BIN")/.." && pwd)}"
+export PATH="$TRAIN_CONDA_PREFIX/bin:$SERVER_ROOT/miniconda3/bin:$SERVER_ROOT/anaconda3/bin:$PATH"
+
+LOG_DIR="$PROJECT_DIR/phase3_rl/logs"
+GENERATED_DIR="$PROJECT_DIR/phase3_rl/generated"
+mkdir -p "$LOG_DIR" "$GENERATED_DIR"
+
+RESTART_TRAIN="${RESTART_TRAIN:-1}"
+START_TRAIN="${START_TRAIN:-1}"
+KEEP_SCREEN_ALIVE="${KEEP_SCREEN_ALIVE:-1}"
+TRAIN_GPU_INDICES="${TRAIN_GPU_INDICES:-0,1,2,3}"
+TRAIN_TMPDIR="${TRAIN_TMPDIR:-$SERVER_ROOT/tmp_front4_rankadv}"
+EXPERIMENT_NAME="${EXPERIMENT_NAME:-crayotter-qwen35-9b-rankadv-10cold190-v1}"
+RUN_TOOL_BOOTSTRAP="${RUN_TOOL_BOOTSTRAP:-1}"
+TOOL_BOOTSTRAP_STEPS="${TOOL_BOOTSTRAP_STEPS:-10}"
+HORIZON_TRAIN_STEPS="${HORIZON_TRAIN_STEPS:-190}"
+HORIZON_TOTAL_STEPS="${HORIZON_TOTAL_STEPS:-$((TOOL_BOOTSTRAP_STEPS + HORIZON_TRAIN_STEPS))}"
+RESUME_FROM_STAGE1="${RESUME_FROM_STAGE1:-0}"
+SOURCE_STAGE1_CKPT="${SOURCE_STAGE1_CKPT:-$VERL_DIR/checkpoints/crayotter-phase3-rl/${EXPERIMENT_NAME}/global_step_${TOOL_BOOTSTRAP_STEPS}}"
+DROP_RESUME_DATALOADER_STATE="${DROP_RESUME_DATALOADER_STATE:-1}"
+PRIVATE_ENV="${PRIVATE_ENV:-$SERVER_ROOT/.crayotter_judge_env}"
+CRAYOTTER_RL_ANALYZE_VIDEO_BACKEND="${CRAYOTTER_RL_ANALYZE_VIDEO_BACKEND:-local_rollout}"
+CRAYOTTER_RL_LOCAL_VIDEO_MAX_TOKENS="${CRAYOTTER_RL_LOCAL_VIDEO_MAX_TOKENS:-16384}"
+CRAYOTTER_RL_LOCAL_VIDEO_CONTEXT_LENGTH="${CRAYOTTER_RL_LOCAL_VIDEO_CONTEXT_LENGTH:-65536}"
+CRAYOTTER_RL_LOCAL_VIDEO_MODEL_TAG="${CRAYOTTER_RL_LOCAL_VIDEO_MODEL_TAG:-qwen3.5-9b-step20}"
+ROLLOUT_GPU_MEMORY_UTILIZATION="${ROLLOUT_GPU_MEMORY_UTILIZATION:-0.50}"
+ROLLOUT_MAX_MODEL_LEN="${ROLLOUT_MAX_MODEL_LEN:-65536}"
+CRAYOTTER_RL_PREFERENCE_VARIANT="${CRAYOTTER_RL_PREFERENCE_VARIANT:-grpb}"
+BOOTSTRAP_ONLY="${BOOTSTRAP_ONLY:-0}"
+
+case "$CRAYOTTER_RL_PREFERENCE_VARIANT" in
+  process_ppo|terminal_rank|uniform|grpb|no_lag|no_reliability|no_cap_projection|no_safeguards|no_group_centering) ;;
+  *)
+    echo "unsupported CRAYOTTER_RL_PREFERENCE_VARIANT: $CRAYOTTER_RL_PREFERENCE_VARIANT" >&2
+    exit 2
+    ;;
+esac
+
+if [[ -f "$PRIVATE_ENV" ]]; then
+  # shellcheck disable=SC1090
+  source "$PRIVATE_ENV"
+fi
+
+screen_has_session() {
+  "$SCREEN_BIN" -ls 2>/dev/null | grep -q "[.]$1[[:space:]]"
+}
+
+TRAIN_RUN_SCRIPT="$LOG_DIR/run_horizon_back4_api_dyncredit.sh"
+cat > "$TRAIN_RUN_SCRIPT" <<'RUNTRAIN'
+#!/usr/bin/env bash
+set -euo pipefail
+PROJECT_DIR="${PROJECT_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)}"
+source "$PROJECT_DIR/phase3_rl/server_paths.sh"
+crayotter_resolve_server_paths
+cd "$PROJECT_DIR"
+
+DROP_RESUME_DATALOADER_STATE="${DROP_RESUME_DATALOADER_STATE:-1}"
+
+export CUDA_VISIBLE_DEVICES="${TRAIN_GPU_INDICES:-0,1,2,3}"
+unset PYTORCH_CUDA_ALLOC_CONF
+export TRAIN_GPU_INDICES="${TRAIN_GPU_INDICES:-0,1,2,3}"
+export SERVER_ROOT PROJECT_DIR VERL_DIR PYTHON_BIN MODEL_PATH CASE_EVAL_ROOT CASE_EVAL_RAW_CASES_ROOT
+export TMPDIR="${TRAIN_TMPDIR:-$SERVER_ROOT/tmp_front4_rankadv}"
+export TEMP="$TMPDIR"
+export TMP="$TMPDIR"
+export RAY_TMPDIR="$TMPDIR/ray"
+export XDG_CACHE_HOME="$SERVER_ROOT/.cache"
+export HF_HOME="$XDG_CACHE_HOME/huggingface"
+export VLLM_CACHE_ROOT="$TMPDIR/vllm-cache"
+export TORCHINDUCTOR_CACHE_DIR="$TMPDIR/torchinductor"
+export TRAIN_CONDA_PREFIX="${TRAIN_CONDA_PREFIX:-$(cd "$(dirname "$PYTHON_BIN")/.." && pwd)}"
+export TRAIN_PYTHON_SITE="$("$PYTHON_BIN" -c 'import site; print(site.getsitepackages()[0])')"
+export PATH="$TRAIN_CONDA_PREFIX/bin:$SERVER_ROOT/miniconda3/bin:$SERVER_ROOT/anaconda3/bin:$PATH"
+export LD_LIBRARY_PATH="$TRAIN_CONDA_PREFIX/lib:$TRAIN_PYTHON_SITE/torch/lib:$TRAIN_PYTHON_SITE/nvidia/cuda_runtime/lib:${LD_LIBRARY_PATH:-}"
+export PYTHONPATH="$PROJECT_DIR:$VERL_DIR:${PYTHONPATH:-}"
+mkdir -p phase3_rl/logs phase3_rl/generated "$TMPDIR" "$RAY_TMPDIR"
+
+PRIVATE_ENV="${PRIVATE_ENV:-$SERVER_ROOT/.crayotter_judge_env}"
+if [[ -f "$PRIVATE_ENV" ]]; then
+  # shellcheck disable=SC1090
+  source "$PRIVATE_ENV"
+fi
+
+export CRAYOTTER_RL_JUDGE_BASE_URL="${CRAYOTTER_RL_JUDGE_BASE_URL:-https://dashscope.aliyuncs.com/compatible-mode/v1}"
+export CRAYOTTER_RL_JUDGE_MODEL="${CRAYOTTER_RL_JUDGE_MODEL:-qwen3.7-plus}"
+export CRAYOTTER_RL_JUDGE_API_KEY="${CRAYOTTER_RL_JUDGE_API_KEY:-${DASHSCOPE_API_KEY:-}}"
+export CRAYOTTER_VIDEO_API_KEY="${CRAYOTTER_VIDEO_API_KEY:-$CRAYOTTER_RL_JUDGE_API_KEY}"
+export CRAYOTTER_VIDEO_BASE_URL="${CRAYOTTER_VIDEO_BASE_URL:-$CRAYOTTER_RL_JUDGE_BASE_URL}"
+export CRAYOTTER_VIDEO_MODEL_NAME="${CRAYOTTER_VIDEO_MODEL_NAME:-$CRAYOTTER_RL_JUDGE_MODEL}"
+export CRAYOTTER_VIDEO_ANALYSIS_MAX_TOKENS="${CRAYOTTER_VIDEO_ANALYSIS_MAX_TOKENS:-8192}"
+export CRAYOTTER_VIDEO_ANALYSIS_ENABLE_AUDIO="${CRAYOTTER_VIDEO_ANALYSIS_ENABLE_AUDIO:-0}"
+export CRAYOTTER_RL_ANALYZE_VIDEO_BACKEND="${CRAYOTTER_RL_ANALYZE_VIDEO_BACKEND:-local_rollout}"
+export CRAYOTTER_RL_LOCAL_VIDEO_MAX_TOKENS="${CRAYOTTER_RL_LOCAL_VIDEO_MAX_TOKENS:-16384}"
+export CRAYOTTER_RL_LOCAL_VIDEO_CONTEXT_LENGTH="${CRAYOTTER_RL_LOCAL_VIDEO_CONTEXT_LENGTH:-65536}"
+export CRAYOTTER_RL_LOCAL_VIDEO_MODEL_TAG="${CRAYOTTER_RL_LOCAL_VIDEO_MODEL_TAG:-qwen3.5-9b-step20}"
+export CRAYOTTER_API_KEY="${CRAYOTTER_API_KEY:-$CRAYOTTER_RL_JUDGE_API_KEY}"
+export CRAYOTTER_BASE_URL="${CRAYOTTER_BASE_URL:-$CRAYOTTER_RL_JUDGE_BASE_URL}"
+export CRAYOTTER_MODEL_NAME="${CRAYOTTER_MODEL_NAME:-$CRAYOTTER_RL_JUDGE_MODEL}"
+
+export EXPERIMENT_NAME="${EXPERIMENT_NAME:-crayotter-qwen35-9b-rankadv-10cold190-v1}"
+export RUN_TOOL_BOOTSTRAP="${RUN_TOOL_BOOTSTRAP:-1}"
+export TOOL_BOOTSTRAP_STEPS="${TOOL_BOOTSTRAP_STEPS:-10}"
+export HORIZON_TRAIN_STEPS="${HORIZON_TRAIN_STEPS:-190}"
+export HORIZON_TOTAL_STEPS="${HORIZON_TOTAL_STEPS:-$((TOOL_BOOTSTRAP_STEPS + HORIZON_TRAIN_STEPS))}"
+export MULTI_TURN_FORMAT="${MULTI_TURN_FORMAT:-qwen3_coder}"
+export RUN_PREFLIGHT="${RUN_PREFLIGHT:-1}"
+export MIN_DISK_FREE_GIB="${MIN_DISK_FREE_GIB:-20}"
+export ATTN_IMPLEMENTATION="${ATTN_IMPLEMENTATION:-flash_attention_2}"
+export MODEL_DTYPE="${MODEL_DTYPE:-bfloat16}"
+export ROLLOUT_DTYPE="${ROLLOUT_DTYPE:-bfloat16}"
+# Keep the 20K rollout budget and shard each training sequence over all four
+# GPUs. Qwen3.5 is covered by verl's Ulysses model patch; remove-padding is
+# required for the sequence-parallel actor, reference, and critic paths.
+export MAX_RESPONSE_LENGTH="${MAX_RESPONSE_LENGTH:-10240}"
+export MAX_PROMPT_LENGTH="${MAX_PROMPT_LENGTH:-10240}"
+export ROLLOUT_MAX_MODEL_LEN="${ROLLOUT_MAX_MODEL_LEN:-65536}"
+export ROLLOUT_BACKEND="${ROLLOUT_BACKEND:-vllm}"
+export ROLLOUT_MODE="${ROLLOUT_MODE:-async}"
+export N_GPUS_PER_NODE="${N_GPUS_PER_NODE:-4}"
+export NNODES="${NNODES:-1}"
+export TRAINING_STRATEGY="${TRAINING_STRATEGY:-fsdp2}"
+export USE_REMOVE_PADDING="${USE_REMOVE_PADDING:-True}"
+export ULYSSES_SEQUENCE_PARALLEL_SIZE="${ULYSSES_SEQUENCE_PARALLEL_SIZE:-4}"
+export ACTOR_USE_TORCH_COMPILE="${ACTOR_USE_TORCH_COMPILE:-False}"
+export REF_USE_TORCH_COMPILE="${REF_USE_TORCH_COMPILE:-False}"
+export LORA_RANK="${LORA_RANK:-0}"
+export LORA_ALPHA="${LORA_ALPHA:-64}"
+export ACTOR_PARAM_OFFLOAD="${ACTOR_PARAM_OFFLOAD:-False}"
+export ACTOR_OPTIMIZER_OFFLOAD="${ACTOR_OPTIMIZER_OFFLOAD:-True}"
+
+# Four independent request groups per update, each with ROLLOUT_N trajectories.
+# Keep the per-GPU micro batch at one so the larger statistical batch is
+# accumulated without increasing the per-GPU micro batch for long sequences.
+export TRAIN_BATCH_SIZE="${TRAIN_BATCH_SIZE:-4}"
+export PPO_MINI_BATCH_SIZE="${PPO_MINI_BATCH_SIZE:-4}"
+export PPO_MICRO_BATCH_SIZE="${PPO_MICRO_BATCH_SIZE:-1}"
+export LOGPROB_MICRO_BATCH_SIZE="${LOGPROB_MICRO_BATCH_SIZE:-1}"
+export CRITIC_MICRO_BATCH_SIZE="${CRITIC_MICRO_BATCH_SIZE:-1}"
+export CRITIC_USE_DYNAMIC_BSZ="${CRITIC_USE_DYNAMIC_BSZ:-False}"
+export CRITIC_ENGINE_USE_DYNAMIC_BSZ="${CRITIC_ENGINE_USE_DYNAMIC_BSZ:-False}"
+export CRITIC_ENGINE_MICRO_BATCH_SIZE="${CRITIC_ENGINE_MICRO_BATCH_SIZE:-1}"
+export CRITIC_ENGINE_INFER_MICRO_BATCH_SIZE="${CRITIC_ENGINE_INFER_MICRO_BATCH_SIZE:-1}"
+export ACTOR_USE_DYNAMIC_BSZ="${ACTOR_USE_DYNAMIC_BSZ:-False}"
+export REF_USE_DYNAMIC_BSZ="${REF_USE_DYNAMIC_BSZ:-False}"
+export ROLLOUT_USE_DYNAMIC_BSZ="${ROLLOUT_USE_DYNAMIC_BSZ:-False}"
+# Use verl's chunked entropy path together with remove-padding and Ulysses.
+export ENTROPY_FROM_LOGITS_WITH_CHUNKING="${ENTROPY_FROM_LOGITS_WITH_CHUNKING:-True}"
+export ENTROPY_FROM_LOGITS_CHUNK_SIZE="${ENTROPY_FROM_LOGITS_CHUNK_SIZE:-512}"
+export ROLLOUT_TP_SIZE="${ROLLOUT_TP_SIZE:-4}"
+export ROLLOUT_GPU_MEMORY_UTILIZATION="${ROLLOUT_GPU_MEMORY_UTILIZATION:-0.50}"
+export ROLLOUT_MAX_NUM_SEQS="${ROLLOUT_MAX_NUM_SEQS:-4}"
+export ROLLOUT_N="${ROLLOUT_N:-4}"
+export AGENT_LOOP_WORKERS="${AGENT_LOOP_WORKERS:-8}"
+export MAX_PARALLEL_TOOL_CALLS="${MAX_PARALLEL_TOOL_CALLS:-2}"
+export CRAYOTTER_RL_TOOL_PROCESS_CONCURRENCY="${CRAYOTTER_RL_TOOL_PROCESS_CONCURRENCY:-6}"
+export CRAYOTTER_ANALYSIS_CACHE_DIR="${CRAYOTTER_ANALYSIS_CACHE_DIR:-$PROJECT_DIR/phase3_rl/cache/video_analysis}"
+export CRAYOTTER_RL_GLOBAL_TOOL_SLOTS="${CRAYOTTER_RL_GLOBAL_TOOL_SLOTS:-6}"
+export CRAYOTTER_RL_GLOBAL_TOOL_SLOT_DIR="${CRAYOTTER_RL_GLOBAL_TOOL_SLOT_DIR:-$TMPDIR/crayotter-tool-slots}"
+export CRAYOTTER_NATIVE_FFMPEG_PIPELINE="${CRAYOTTER_NATIVE_FFMPEG_PIPELINE:-1}"
+export CRAYOTTER_FFMPEG_THREADS="${CRAYOTTER_FFMPEG_THREADS:-8}"
+export CRAYOTTER_FFMPEG_FILTER_THREADS="${CRAYOTTER_FFMPEG_FILTER_THREADS:-4}"
+export CRAYOTTER_FFMPEG_PRESET="${CRAYOTTER_FFMPEG_PRESET:-veryfast}"
+export CRAYOTTER_FFMPEG_CRF="${CRAYOTTER_FFMPEG_CRF:-20}"
+export DATA_LOADER_NUM_WORKERS="${DATA_LOADER_NUM_WORKERS:-0}"
+export TRAINER_BALANCE_BATCH="${TRAINER_BALANCE_BATCH:-False}"
+export ACTOR_LR="${ACTOR_LR:-5e-7}"
+export KL_LOSS_COEF="${KL_LOSS_COEF:-0.006}"
+export ADV_ESTIMATOR="${ADV_ESTIMATOR:-gae}"
+export CRITIC_OFFLOAD="${CRITIC_OFFLOAD:-True}"
+export MAX_ASSISTANT_TURNS="${MAX_ASSISTANT_TURNS:-64}"
+
+export CRAYOTTER_RL_BRANCH_STRATEGY_PROMPTS="${CRAYOTTER_RL_BRANCH_STRATEGY_PROMPTS:-0}"
+export CRAYOTTER_RL_PER_ROLLOUT_STRATEGY="${CRAYOTTER_RL_PER_ROLLOUT_STRATEGY:-1}"
+export CRAYOTTER_RL_COMPACT_PROMPT="${CRAYOTTER_RL_COMPACT_PROMPT:-1}"
+export CRAYOTTER_RL_PROCESS_REWARD="${CRAYOTTER_RL_PROCESS_REWARD:-1}"
+export CRAYOTTER_RL_PROCESS_RESIDUAL="${CRAYOTTER_RL_PROCESS_RESIDUAL:-distributed}"
+export CRAYOTTER_RL_PROCESS_REWARD_CLIP="${CRAYOTTER_RL_PROCESS_REWARD_CLIP:-0}"
+export CRAYOTTER_RL_JUDGE_ENABLED="${CRAYOTTER_RL_JUDGE_ENABLED:-true}"
+export CRAYOTTER_RL_JUDGE_CREDIT_ONLY="${CRAYOTTER_RL_JUDGE_CREDIT_ONLY:-1}"
+export CRAYOTTER_RL_PREFERENCE_BACKPROP="${CRAYOTTER_RL_PREFERENCE_BACKPROP:-0}"
+export CRAYOTTER_RL_PREFERENCE_VARIANT="${CRAYOTTER_RL_PREFERENCE_VARIANT:-grpb}"
+export CRAYOTTER_RL_SEGMENT_ALLOCATOR_ENABLED="${CRAYOTTER_RL_SEGMENT_ALLOCATOR_ENABLED:-1}"
+export CRAYOTTER_RL_ALLOCATOR_UPDATE_ENABLED="${CRAYOTTER_RL_ALLOCATOR_UPDATE_ENABLED:-1}"
+export CRAYOTTER_RL_RANK_TIE_EPSILON="${CRAYOTTER_RL_RANK_TIE_EPSILON:-3.0}"
+export CRAYOTTER_RL_RANK_CREDIT_MAX_RETURN="${CRAYOTTER_RL_RANK_CREDIT_MAX_RETURN:-0.35}"
+export CRAYOTTER_RL_RANK_CREDIT_MAX_SEGMENT="${CRAYOTTER_RL_RANK_CREDIT_MAX_SEGMENT:-0.25}"
+export CRAYOTTER_RL_SEMANTIC_ARTIFACT_ENABLED="${CRAYOTTER_RL_SEMANTIC_ARTIFACT_ENABLED:-1}"
+export CRAYOTTER_RL_SEMANTIC_MAX_SEGMENTS="${CRAYOTTER_RL_SEMANTIC_MAX_SEGMENTS:-3}"
+export CRAYOTTER_RL_SEMANTIC_FRAMES_PER_ARTIFACT="${CRAYOTTER_RL_SEMANTIC_FRAMES_PER_ARTIFACT:-2}"
+export CRAYOTTER_RL_ALLOCATOR_STRUCTURAL_SCALE="${CRAYOTTER_RL_ALLOCATOR_STRUCTURAL_SCALE:-0.2}"
+export CRAYOTTER_RL_COUNTERFACTUAL_BRANCHING="${CRAYOTTER_RL_COUNTERFACTUAL_BRANCHING:-1}"
+export CRAYOTTER_RL_COUNTERFACTUAL_COUNTER_DIR="${CRAYOTTER_RL_COUNTERFACTUAL_COUNTER_DIR:-$PROJECT_DIR/phase3_rl/state/$EXPERIMENT_NAME/branch_counters}"
+export CRAYOTTER_RL_SEGMENT_ALLOCATOR_STATE="${CRAYOTTER_RL_SEGMENT_ALLOCATOR_STATE:-$PROJECT_DIR/phase3_rl/state/$EXPERIMENT_NAME/allocator.json}"
+export CRAYOTTER_RL_TRAJECTORY_MANIFEST_DIR="${CRAYOTTER_RL_TRAJECTORY_MANIFEST_DIR:-$PROJECT_DIR/phase3_rl/trajectory_manifests/$EXPERIMENT_NAME}"
+export CRAYOTTER_RL_TRAINING_METRICS_JSONL="${CRAYOTTER_RL_TRAINING_METRICS_JSONL:-$PROJECT_DIR/phase3_rl/results/$EXPERIMENT_NAME/training_metrics.jsonl}"
+export CRAYOTTER_RL_ALLOCATOR_WARMUP_PAIRS="${CRAYOTTER_RL_ALLOCATOR_WARMUP_PAIRS:-12}"
+export CRAYOTTER_RL_ALLOCATOR_LR="${CRAYOTTER_RL_ALLOCATOR_LR:-0.03}"
+export CRAYOTTER_RL_ALLOCATOR_L2="${CRAYOTTER_RL_ALLOCATOR_L2:-0.003}"
+export CRAYOTTER_RL_ALLOCATOR_TARGET_ACCURACY="${CRAYOTTER_RL_ALLOCATOR_TARGET_ACCURACY:-0.7}"
+export CRAYOTTER_RL_ALLOCATOR_MIN_RELIABILITY="${CRAYOTTER_RL_ALLOCATOR_MIN_RELIABILITY:-0.1}"
+export CRAYOTTER_RL_ALLOCATOR_SCORE_TEMPERATURE="${CRAYOTTER_RL_ALLOCATOR_SCORE_TEMPERATURE:-1.0}"
+export CRAYOTTER_RL_ALLOCATOR_CALIBRATION_EMA="${CRAYOTTER_RL_ALLOCATOR_CALIBRATION_EMA:-0.9}"
+export CRAYOTTER_RL_PREFERENCE_GROUP_MIN_SIZE="${CRAYOTTER_RL_PREFERENCE_GROUP_MIN_SIZE:-3}"
+export CRAYOTTER_RL_JUDGE_BASE_URL="${CRAYOTTER_RL_JUDGE_BASE_URL:-https://dashscope.aliyuncs.com/compatible-mode/v1}"
+export CRAYOTTER_RL_JUDGE_MODEL="${CRAYOTTER_RL_JUDGE_MODEL:-qwen3.7-plus}"
+export CRAYOTTER_RL_JUDGE_WEIGHT="${CRAYOTTER_RL_JUDGE_WEIGHT:-1.0}"
+export CRAYOTTER_RL_JUDGE_MAX_FRAMES="${CRAYOTTER_RL_JUDGE_MAX_FRAMES:-8}"
+export CRAYOTTER_RL_JUDGE_CREDIT_MAX_ABS="${CRAYOTTER_RL_JUDGE_CREDIT_MAX_ABS:-1.0}"
+
+export CRAYOTTER_RL_MIN_SUCCESSFUL_TOOLS="${CRAYOTTER_RL_MIN_SUCCESSFUL_TOOLS:-4}"
+export CRAYOTTER_RL_NO_TOOL_CAP="${CRAYOTTER_RL_NO_TOOL_CAP:--5.0}"
+export CRAYOTTER_RL_SHALLOW_TRAJECTORY_CAP="${CRAYOTTER_RL_SHALLOW_TRAJECTORY_CAP:--4.5}"
+export CRAYOTTER_RL_MIN_TOOL_CAP="${CRAYOTTER_RL_MIN_TOOL_CAP:--3.6}"
+export CRAYOTTER_RL_MISSING_CORE_STAGE_CAP="${CRAYOTTER_RL_MISSING_CORE_STAGE_CAP:--3.2}"
+export CRAYOTTER_RL_NO_EXPORT_CAP="${CRAYOTTER_RL_NO_EXPORT_CAP:--2.8}"
+
+export ENABLE_TRAINING_CLEANUP="${ENABLE_TRAINING_CLEANUP:-1}"
+export CLEANUP_INTERVAL_SECONDS="${CLEANUP_INTERVAL_SECONDS:-60}"
+export CLEANUP_MIN_AGE_MINUTES="${CLEANUP_MIN_AGE_MINUTES:-5}"
+export CLEANUP_TARGET_FREE_GIB="${CLEANUP_TARGET_FREE_GIB:-200}"
+export CLEANUP_MIN_FREE_GIB="${CLEANUP_MIN_FREE_GIB:-80}"
+export CLEANUP_DELETE_NONCURRENT_CHECKPOINTS="${CLEANUP_DELETE_NONCURRENT_CHECKPOINTS:-0}"
+export CLEANUP_KEEP_LATEST_CHECKPOINTS="${CLEANUP_KEEP_LATEST_CHECKPOINTS:-1}"
+export CLEANUP_PRESERVE_CHECKPOINT_STEPS="${CLEANUP_PRESERVE_CHECKPOINT_STEPS:-}"
+export CLEANUP_ALWAYS_DELETE_ROLLOUTS="${CLEANUP_ALWAYS_DELETE_ROLLOUTS:-1}"
+export RESET_EXPERIMENT="${RESET_EXPERIMENT:-1}"
+mkdir -p "$(dirname "$CRAYOTTER_RL_SEGMENT_ALLOCATOR_STATE")" "$CRAYOTTER_RL_TRAJECTORY_MANIFEST_DIR" "$CRAYOTTER_RL_COUNTERFACTUAL_COUNTER_DIR" "$(dirname "$CRAYOTTER_RL_TRAINING_METRICS_JSONL")"
+
+RESUME_FROM_STAGE1="${RESUME_FROM_STAGE1:-0}"
+SOURCE_STAGE1_CKPT="${SOURCE_STAGE1_CKPT:-$VERL_DIR/checkpoints/crayotter-phase3-rl/$EXPERIMENT_NAME/global_step_${TOOL_BOOTSTRAP_STEPS}}"
+TRAIN_FILE="$PROJECT_DIR/phase3_rl/generated/horizon_back4_api_dyncredit_train.jsonl"
+VAL_FILE="$PROJECT_DIR/phase3_rl/generated/horizon_back4_api_dyncredit_val.jsonl"
+TOOL_CONFIG="$PROJECT_DIR/phase3_rl/generated/horizon_back4_api_dyncredit_tool_config.yaml"
+EXPERIMENT_RUN_ROOT="$PROJECT_DIR/phase3_rl/runs/$EXPERIMENT_NAME"
+BOOTSTRAP_RUN_ROOT="$EXPERIMENT_RUN_ROOT/bootstrap"
+TRAIN_RUN_ROOT="$EXPERIMENT_RUN_ROOT/train"
+VAL_RUN_ROOT="$EXPERIMENT_RUN_ROOT/val"
+TRAIN_LIST="$PROJECT_DIR/phase3_rl/generated/horizon_suite_back4_lists/train_all.txt"
+EVAL_LIST="$PROJECT_DIR/phase3_rl/generated/horizon_suite_back4_lists/eval_all.txt"
+ALL_LIST="$PROJECT_DIR/phase3_rl/generated/horizon_suite_back4_lists/all.txt"
+
+if [[ "$RESET_EXPERIMENT" == "1" && "$RESUME_FROM_STAGE1" != "1" ]]; then
+  for path in \
+    "$EXPERIMENT_RUN_ROOT" \
+    "$PROJECT_DIR/phase3_rl/state/$EXPERIMENT_NAME" \
+    "$PROJECT_DIR/phase3_rl/trajectory_manifests/$EXPERIMENT_NAME" \
+    "$PROJECT_DIR/phase3_rl/results/$EXPERIMENT_NAME" \
+    "$VERL_DIR/checkpoints/crayotter-phase3-rl/$EXPERIMENT_NAME"; do
+    crayotter_assert_owned_path "$path"
+    rm -rf -- "$path"
+  done
+  mkdir -p "$(dirname "$CRAYOTTER_RL_SEGMENT_ALLOCATOR_STATE")" "$CRAYOTTER_RL_TRAJECTORY_MANIFEST_DIR" "$CRAYOTTER_RL_COUNTERFACTUAL_COUNTER_DIR" "$(dirname "$CRAYOTTER_RL_TRAINING_METRICS_JSONL")"
+fi
+
+required_paths=("$TRAIN_LIST" "$EVAL_LIST" "$ALL_LIST")
+if [[ "$RESUME_FROM_STAGE1" == "1" ]]; then
+  required_paths+=("$SOURCE_STAGE1_CKPT/actor" "$SOURCE_STAGE1_CKPT/critic")
+fi
+for p in "${required_paths[@]}"; do
+  if [[ ! -e "$p" ]]; then
+    echo "[back4-api] missing required path: $p" >&2
+    exit 1
+  fi
+done
+
+restore_allocator_snapshot() {
+  local snapshot="$SOURCE_STAGE1_CKPT/crayotter_allocator.json" temporary
+  if [[ ! -s "$snapshot" ]]; then
+    echo "[back4-api] allocator snapshot absent in $SOURCE_STAGE1_CKPT; allocator state is unchanged"
+    return 0
+  fi
+  crayotter_assert_owned_path "$snapshot"
+  crayotter_assert_owned_path "$CRAYOTTER_RL_SEGMENT_ALLOCATOR_STATE"
+  mkdir -p "$(dirname "$CRAYOTTER_RL_SEGMENT_ALLOCATOR_STATE")"
+  temporary="${CRAYOTTER_RL_SEGMENT_ALLOCATOR_STATE}.resume.$$"
+  cp -- "$snapshot" "$temporary"
+  mv -f -- "$temporary" "$CRAYOTTER_RL_SEGMENT_ALLOCATOR_STATE"
+  echo "[back4-api] restored allocator snapshot from $snapshot"
+}
+
+if [[ "$RESUME_FROM_STAGE1" == "1" ]]; then
+  restore_allocator_snapshot
+fi
+if [[ "$RESUME_FROM_STAGE1" == "1" && "$DROP_RESUME_DATALOADER_STATE" == "1" ]]; then
+  rm -f -- "$SOURCE_STAGE1_CKPT/data.pt"
+fi
+
+TRAIN_FIXTURES="$(cat "$TRAIN_LIST")"
+EVAL_FIXTURES="$(cat "$EVAL_LIST")"
+ALL_FIXTURES="$(cat "$ALL_LIST")"
+
+echo "[back4-api] exporting datasets with isolated episode dir $TRAIN_RUN_ROOT"
+"$PYTHON_BIN" -m phase3_rl.export_verl_phase3_dataset \
+  --fixtures $TRAIN_FIXTURES \
+  --repeat "${HORIZON_DATASET_REPEAT:-1}" \
+  --episode-base-dir "$TRAIN_RUN_ROOT" \
+  --output "$TRAIN_FILE"
+"$PYTHON_BIN" -m phase3_rl.export_verl_phase3_dataset \
+  --fixtures $EVAL_FIXTURES \
+  --repeat 1 \
+  --episode-base-dir "$VAL_RUN_ROOT" \
+  --output "$VAL_FILE"
+"$PYTHON_BIN" -m phase3_rl.generate_verl_tool_config \
+  --fixtures $ALL_FIXTURES \
+  --output "$TOOL_CONFIG"
+
+wait_limit="${TRAIN_WAIT_GPU_MAX_USED_MIB:-2048}"
+echo "[back4-api] waiting for GPUs ${TRAIN_GPU_INDICES} to each use <= ${wait_limit} MiB"
+while true; do
+  busy="$(nvidia-smi --query-gpu=index,memory.used --format=csv,noheader,nounits | awk -F',' -v limit="$wait_limit" -v indices="$TRAIN_GPU_INDICES" '
+    BEGIN { split(indices, raw, ","); for (i in raw) wanted[raw[i] + 0] = 1 }
+    { idx=$1+0; used=$2+0; if ((idx in wanted) && used > limit) printf "%s:%sMiB ", idx, used }
+  ')"
+  if [[ -z "$busy" ]]; then
+    echo "[back4-api] target GPUs are available at $(date)"
+    break
+  fi
+  echo "[back4-api] target GPUs not free yet: $busy; recheck in 60s"
+  sleep 60
+done
+
+cleanup_pid=""
+if [[ "$ENABLE_TRAINING_CLEANUP" == "1" ]]; then
+  echo "[back4-api] starting cleanup loop"
+  PROJECT_DIR="$PROJECT_DIR" \
+  SERVER_ROOT="$SERVER_ROOT" \
+  VERL_DIR="$VERL_DIR" \
+  RUNS_DIRS="$BOOTSTRAP_RUN_ROOT:$TRAIN_RUN_ROOT:$VAL_RUN_ROOT" \
+  MANIFEST_RUNS_DIRS="$TRAIN_RUN_ROOT" \
+  LOG_DIR="$PROJECT_DIR/phase3_rl/logs" \
+  CHECKPOINT_ROOT="$VERL_DIR/checkpoints/crayotter-phase3-rl" \
+  EXPERIMENT_NAME="$EXPERIMENT_NAME" \
+  CLEANUP_INTERVAL_SECONDS="$CLEANUP_INTERVAL_SECONDS" \
+  CLEANUP_MIN_AGE_MINUTES="$CLEANUP_MIN_AGE_MINUTES" \
+  CLEANUP_TARGET_FREE_GIB="$CLEANUP_TARGET_FREE_GIB" \
+  CLEANUP_MIN_FREE_GIB="$CLEANUP_MIN_FREE_GIB" \
+  CLEANUP_DELETE_NONCURRENT_CHECKPOINTS="$CLEANUP_DELETE_NONCURRENT_CHECKPOINTS" \
+  CLEANUP_KEEP_LATEST_CHECKPOINTS="$CLEANUP_KEEP_LATEST_CHECKPOINTS" \
+  CLEANUP_PRESERVE_CHECKPOINT_STEPS="$CLEANUP_PRESERVE_CHECKPOINT_STEPS" \
+  CLEANUP_ALWAYS_DELETE_ROLLOUTS="$CLEANUP_ALWAYS_DELETE_ROLLOUTS" \
+  CLEANUP_STEP_WATCH_LOG="${TRAIN_LOG_FILE:-}" \
+  bash phase3_rl/cleanup_training_artifacts.sh &
+  cleanup_pid="$!"
+  trap 'if [[ -n "$cleanup_pid" ]]; then kill "$cleanup_pid" 2>/dev/null || true; fi' EXIT
+fi
+
+if [[ "$RUN_TOOL_BOOTSTRAP" == "1" ]]; then
+  echo "[back4-api] stage1 tool-call bootstrap starts at $(date): ${TOOL_BOOTSTRAP_STEPS} steps"
+  CASE_EVAL_ROOT="$CASE_EVAL_ROOT"   CASE_EVAL_CASES="${TOOL_BOOTSTRAP_CASES:-001 002 003}"   CASE_EVAL_BUILDER_MODULE="phase3_rl.build_tool_call_bootstrap_fixtures"   CASE_EVAL_PREFIX="horizon_back4_api_tool_bootstrap"   CUDA_VISIBLE_DEVICES="$CUDA_VISIBLE_DEVICES"   CRAYOTTER_RL_JUDGE_ENABLED="false"   CRAYOTTER_RL_PROCESS_REWARD="0"   DATASET_REPEAT="${TOOL_BOOTSTRAP_REPEAT:-4}"   EPISODE_BASE_DIR="$BOOTSTRAP_RUN_ROOT"   TOTAL_TRAINING_STEPS="$TOOL_BOOTSTRAP_STEPS"   SAVE_FREQ="${TOOL_BOOTSTRAP_SAVE_FREQ:-$TOOL_BOOTSTRAP_STEPS}"   TEST_FREQ="${TOOL_BOOTSTRAP_TEST_FREQ:-$TOOL_BOOTSTRAP_STEPS}"   RESUME_MODE="disable"   RUN_PREFLIGHT="0"   TRAIN_FILE="$PROJECT_DIR/phase3_rl/generated/horizon_back4_api_tool_bootstrap_train.jsonl"   VAL_FILE="$PROJECT_DIR/phase3_rl/generated/horizon_back4_api_tool_bootstrap_train.jsonl"   TOOL_CONFIG="$PROJECT_DIR/phase3_rl/generated/horizon_back4_api_tool_bootstrap_tool_config.yaml"   MAX_ASSISTANT_TURNS="3"   ROLLOUT_N="${TOOL_BOOTSTRAP_ROLLOUT_N:-4}"   ROLLOUT_MAX_NUM_SEQS="${TOOL_BOOTSTRAP_ROLLOUT_MAX_NUM_SEQS:-8}"   AGENT_LOOP_WORKERS="${TOOL_BOOTSTRAP_AGENT_LOOP_WORKERS:-4}"   DATA_LOADER_NUM_WORKERS="0"   bash phase3_rl/run_server_tool_bootstrap_qwen35_9b_front4.sh
+
+  SOURCE_STAGE1_CKPT="$VERL_DIR/checkpoints/crayotter-phase3-rl/$EXPERIMENT_NAME/global_step_${TOOL_BOOTSTRAP_STEPS}"
+  if [[ ! -d "$SOURCE_STAGE1_CKPT/actor" ]]; then
+    echo "[back4-api] missing stage1 checkpoint: $SOURCE_STAGE1_CKPT/actor" >&2
+    exit 1
+  fi
+  if [[ "$DROP_RESUME_DATALOADER_STATE" == "1" ]]; then
+    rm -f -- "$SOURCE_STAGE1_CKPT/data.pt"
+  fi
+  export RESUME_FROM_STAGE1="1"
+  echo "[back4-api] stage1 checkpoint ready: $SOURCE_STAGE1_CKPT"
+  if [[ "${BOOTSTRAP_ONLY:-0}" == "1" ]]; then
+    echo "[back4-api] BOOTSTRAP_ONLY=1; stopping after shared stage1 checkpoint"
+    exit 0
+  fi
+elif [[ "$RESUME_FROM_STAGE1" == "1" ]]; then
+  echo "[back4-api] resume from existing stage1 checkpoint: $SOURCE_STAGE1_CKPT"
+fi
+
+if [[ "$RESUME_FROM_STAGE1" == "1" ]]; then
+  echo "[back4-api] stage2 long-horizon training starts at $(date): ${HORIZON_TRAIN_STEPS} new steps, target global_step=${HORIZON_TOTAL_STEPS}"
+else
+  echo "[back4-api] train from base model at $(date): ${HORIZON_TRAIN_STEPS} steps"
+fi
+set +e
+export CASE_EVAL_ROOT=""
+export FIXTURES="$TRAIN_FIXTURES"
+export TOOL_FIXTURES="$ALL_FIXTURES"
+export REGENERATE_ASSETS="0"
+export TRAIN_FILE="$TRAIN_FILE"
+export VAL_FILE="$VAL_FILE"
+export TOOL_CONFIG="$TOOL_CONFIG"
+export CRAYOTTER_RL_PROCESS_REWARD="1"
+export CRAYOTTER_RL_JUDGE_ENABLED="true"
+export CRAYOTTER_RL_JUDGE_CREDIT_ONLY="1"
+export DATASET_REPEAT="1"
+if [[ "$RESUME_FROM_STAGE1" == "1" ]]; then
+  export TOTAL_TRAINING_STEPS="${TOTAL_TRAINING_STEPS:-$HORIZON_TOTAL_STEPS}"
+else
+  export TOTAL_TRAINING_STEPS="${TOTAL_TRAINING_STEPS:-$HORIZON_TRAIN_STEPS}"
+fi
+export SAVE_FREQ="${SAVE_FREQ:-20}"
+export TEST_FREQ="${TEST_FREQ:-50}"
+export RESUME_MODE="${RESUME_MODE:-disable}"
+export MAX_ASSISTANT_TURNS="$MAX_ASSISTANT_TURNS"
+export ROLLOUT_N="$ROLLOUT_N"
+export ROLLOUT_MAX_NUM_SEQS="$ROLLOUT_MAX_NUM_SEQS"
+export AGENT_LOOP_WORKERS="$AGENT_LOOP_WORKERS"
+export MAX_PARALLEL_TOOL_CALLS="$MAX_PARALLEL_TOOL_CALLS"
+export CRAYOTTER_RL_TOOL_PROCESS_CONCURRENCY="$CRAYOTTER_RL_TOOL_PROCESS_CONCURRENCY"
+export CRAYOTTER_RL_GLOBAL_TOOL_SLOTS="$CRAYOTTER_RL_GLOBAL_TOOL_SLOTS"
+export CRAYOTTER_RL_GLOBAL_TOOL_SLOT_DIR="$CRAYOTTER_RL_GLOBAL_TOOL_SLOT_DIR"
+export CRAYOTTER_NATIVE_FFMPEG_PIPELINE="$CRAYOTTER_NATIVE_FFMPEG_PIPELINE"
+export CRAYOTTER_FFMPEG_THREADS="$CRAYOTTER_FFMPEG_THREADS"
+export CRAYOTTER_FFMPEG_FILTER_THREADS="$CRAYOTTER_FFMPEG_FILTER_THREADS"
+export CRAYOTTER_FFMPEG_PRESET="$CRAYOTTER_FFMPEG_PRESET"
+export CRAYOTTER_FFMPEG_CRF="$CRAYOTTER_FFMPEG_CRF"
+export DATA_LOADER_NUM_WORKERS="$DATA_LOADER_NUM_WORKERS"
+resume_args=("trainer.val_before_train=False")
+if [[ "$RESUME_FROM_STAGE1" == "1" ]]; then
+  export RESUME_MODE="resume_path"
+  resume_args=("trainer.resume_from_path=$SOURCE_STAGE1_CKPT" "trainer.val_before_train=False")
+fi
+bash phase3_rl/run_verl_phase3_grpo.sh "${resume_args[@]}"
+status="$?"
+set -e
+
+echo "[back4-api] finished with status $status at $(date)"
+exit "$status"
+RUNTRAIN
+chmod +x "$TRAIN_RUN_SCRIPT"
+
+SCREEN_RUN_SCRIPT="$LOG_DIR/run_horizon_back4_api_dyncredit_screen.sh"
+cat > "$SCREEN_RUN_SCRIPT" <<'RUNSCREEN'
+#!/usr/bin/env bash
+set -uo pipefail
+
+: "${TRAIN_RUN_SCRIPT:?TRAIN_RUN_SCRIPT is required}"
+: "${TRAIN_LOG_FILE:?TRAIN_LOG_FILE is required}"
+: "${TRAIN_STATUS_FILE:?TRAIN_STATUS_FILE is required}"
+
+rm -f -- "$TRAIN_STATUS_FILE"
+set +e
+bash "$TRAIN_RUN_SCRIPT" 2>&1 | tee "$TRAIN_LOG_FILE"
+status="${PIPESTATUS[0]}"
+set -e
+
+{
+  echo "status=$status"
+  echo "finished_at=$(date --iso-8601=seconds)"
+  echo "log=$TRAIN_LOG_FILE"
+} > "$TRAIN_STATUS_FILE"
+echo "[train] command exited with status $status; details: $TRAIN_STATUS_FILE"
+
+if [[ "${KEEP_SCREEN_ALIVE:-1}" == "1" ]]; then
+  echo "[train] screen remains attached to an interactive shell; exit it manually to close the session"
+  exec bash --noprofile --norc -i
+fi
+exit "$status"
+RUNSCREEN
+chmod +x "$SCREEN_RUN_SCRIPT"
+
+if [[ "$START_TRAIN" != "1" ]]; then
+  echo "[train] START_TRAIN=$START_TRAIN; not starting training"
+  exit 0
+fi
+
+if [[ "$RESTART_TRAIN" == "1" ]]; then
+  if screen_has_session "$SESSION_TRAIN"; then
+    echo "[train] stopping existing training screen $SESSION_TRAIN"
+    "$SCREEN_BIN" -S "$SESSION_TRAIN" -X quit 2>/dev/null || true
+    sleep 3
+  fi
+fi
+
+if screen_has_session "$SESSION_TRAIN"; then
+  echo "[train] screen $SESSION_TRAIN already exists; not starting duplicate"
+  exit 0
+fi
+
+train_log="$LOG_DIR/horizon_back4_api_dyncredit_train_$(date +%Y%m%d_%H%M%S).log"
+train_status="${train_log%.log}.status"
+echo "[train] starting screen $SESSION_TRAIN; log: $train_log"
+"$SCREEN_BIN" -dmS "$SESSION_TRAIN" env \
+  TRAIN_GPU_INDICES="$TRAIN_GPU_INDICES" \
+  TRAIN_TMPDIR="$TRAIN_TMPDIR" \
+  EXPERIMENT_NAME="$EXPERIMENT_NAME" \
+  RUN_TOOL_BOOTSTRAP="$RUN_TOOL_BOOTSTRAP" \
+  TOOL_BOOTSTRAP_STEPS="$TOOL_BOOTSTRAP_STEPS" \
+  HORIZON_TRAIN_STEPS="$HORIZON_TRAIN_STEPS" \
+  HORIZON_TOTAL_STEPS="$HORIZON_TOTAL_STEPS" \
+  SOURCE_STAGE1_CKPT="$SOURCE_STAGE1_CKPT" \
+  DROP_RESUME_DATALOADER_STATE="$DROP_RESUME_DATALOADER_STATE" \
+  PRIVATE_ENV="$PRIVATE_ENV" \
+  RESUME_FROM_STAGE1="${RESUME_FROM_STAGE1:-0}" \
+  TRAIN_RUN_SCRIPT="$TRAIN_RUN_SCRIPT" \
+  TRAIN_LOG_FILE="$train_log" \
+  TRAIN_STATUS_FILE="$train_status" \
+  KEEP_SCREEN_ALIVE="$KEEP_SCREEN_ALIVE" \
+  CRAYOTTER_RL_ANALYZE_VIDEO_BACKEND="$CRAYOTTER_RL_ANALYZE_VIDEO_BACKEND" \
+  CRAYOTTER_RL_LOCAL_VIDEO_MAX_TOKENS="$CRAYOTTER_RL_LOCAL_VIDEO_MAX_TOKENS" \
+  CRAYOTTER_RL_LOCAL_VIDEO_CONTEXT_LENGTH="$CRAYOTTER_RL_LOCAL_VIDEO_CONTEXT_LENGTH" \
+  CRAYOTTER_RL_LOCAL_VIDEO_MODEL_TAG="$CRAYOTTER_RL_LOCAL_VIDEO_MODEL_TAG" \
+  ROLLOUT_GPU_MEMORY_UTILIZATION="$ROLLOUT_GPU_MEMORY_UTILIZATION" \
+  ROLLOUT_MAX_MODEL_LEN="$ROLLOUT_MAX_MODEL_LEN" \
+  ROLLOUT_ENFORCE_EAGER="${ROLLOUT_ENFORCE_EAGER:-False}" \
+  VLLM_DISABLE_CUSTOM_ALL_REDUCE="${VLLM_DISABLE_CUSTOM_ALL_REDUCE:-}" \
+  ACTOR_PARAM_OFFLOAD="${ACTOR_PARAM_OFFLOAD:-False}" \
+  CRITIC_OFFLOAD_POLICY="${CRITIC_OFFLOAD_POLICY:-}" \
+  CRITIC_OPTIMIZER_FOREACH="${CRITIC_OPTIMIZER_FOREACH:-}" \
+  CRAYOTTER_RL_PREFERENCE_VARIANT="$CRAYOTTER_RL_PREFERENCE_VARIANT" \
+  CRAYOTTER_RL_SEGMENT_ALLOCATOR_ENABLED="${CRAYOTTER_RL_SEGMENT_ALLOCATOR_ENABLED:-1}" \
+  CRAYOTTER_RL_ALLOCATOR_UPDATE_ENABLED="${CRAYOTTER_RL_ALLOCATOR_UPDATE_ENABLED:-1}" \
+  BOOTSTRAP_ONLY="$BOOTSTRAP_ONLY" \
+  bash "$SCREEN_RUN_SCRIPT"
+
+echo "[train] launched. Attach with: $SCREEN_BIN -U -r $SESSION_TRAIN"
+echo "[train] status file after exit: $train_status"
+echo "[video] analyze_video backend: $CRAYOTTER_RL_ANALYZE_VIDEO_BACKEND"
