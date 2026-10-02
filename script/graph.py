@@ -890,6 +890,7 @@ def generate_editing_plan_node(state: AgentState) -> dict[str, Any]:
     )
     plan: EditingPlan | None = None
     last_error = ""
+    source_durations = _probe_source_durations(source_paths)
     for attempt in range(1, 3):
         payload: dict[str, Any] = {
             "user_request": state.user_request,
@@ -919,7 +920,11 @@ def generate_editing_plan_node(state: AgentState) -> dict[str, Any]:
             parsed["source_analysis_paths"] = analysis_paths
             parsed["blueprint_markdown"] = state.editing_blueprint
             candidate = normalize_plan_timeline(EditingPlan.model_validate(parsed))
-            report = validate_editing_plan(candidate, allowed_source_paths=candidate.source_video_paths)
+            report = validate_editing_plan(
+                candidate,
+                allowed_source_paths=candidate.source_video_paths,
+                source_durations=source_durations,
+            )
             if report.ok:
                 plan = candidate
                 break

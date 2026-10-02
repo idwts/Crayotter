@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+import json
 import tempfile
 import unittest
 from pathlib import Path
-from unittest.mock import patch
+from types import SimpleNamespace
+from unittest.mock import MagicMock, patch
 
 from script.editing_plan import (
     EditingPlan,
@@ -174,6 +176,67 @@ class EditingPlanTests(unittest.TestCase):
         self.assertEqual(plan.scenes[0].scene_id, "1")
         self.assertEqual(plan.scenes[0].crop, "")
         self.assertEqual(plan.scenes[0].alternatives, [])
+
+    def test_generate_plan_retries_source_out_of_bounds_before_accepting(self) -> None:
+        import script.graph as graph
+
+        with tempfile.TemporaryDirectory() as tmp:
+            source = Path(tmp) / "clip.mp4"
+            source.write_bytes(b"video")
+            resolved = str(source.resolve())
+            state = graph.AgentState(user_request="做 4 秒短片", target_duration_seconds=4)
+
+            def scene(source_end: float) -> dict:
+                return {
+                    "target_duration_seconds": 4,
+                    "scenes": [
+                        {
+                            "scene_id": "scene_01",
+                            "start": 0,
+                            "end": 4,
+                            "source_path": resolved,
+                            "source_start": 0.0,
+                            "source_end": source_end,
+                        }
+                    ],
+                }
+
+            responses = [scene(9.0), scene(3.0)]
+            calls: list[int] = []
+
+            def fake_invoke(*args, **kwargs):
+                calls.append(1)
+                return SimpleNamespace(
+                    content=json.dumps(responses[len(calls) - 1], ensure_ascii=False)
+                )
+
+            store = MagicMock()
+            store.approved.return_value = None
+            store.current.return_value = None
+            llm = MagicMock()
+
+            with patch.object(graph, "_iter_source_videos", return_value=[source]), patch.object(
+                graph, "_iter_analysis_json_files", return_value=[]
+            ), patch.object(
+                graph, "_probe_source_durations", return_value={resolved: 3.0}
+            ), patch.object(
+                graph, "_build_full_analysis_context", return_value=""
+            ), patch.object(
+                graph, "_get_llm", return_value=llm
+            ), patch.object(
+                graph, "_invoke_llm", side_effect=fake_invoke
+            ), patch.object(
+                graph, "_editing_plan_store", return_value=store
+            ), patch.object(
+                graph, "_register_plan_artifact"
+            ), patch.object(
+                graph, "_emit_orchestration_event"
+            ):
+                graph.generate_editing_plan_node(state)
+
+            self.assertEqual(len(calls), 2)
+            accepted = store.save_plan.call_args.args[0]
+            self.assertEqual(accepted.scenes[0].source_end, 3.0)
 
     def test_store_retries_current_plan_replace_when_windows_locks_target(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
