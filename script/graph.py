@@ -48,6 +48,12 @@ if str(SCRIPT_DIR) not in sys.path:
 
 from app.media_index import build_analysis_index, iter_analysis_files, iter_video_files, match_analysis_files
 from app.steering import SteeringCoordinator, classify_guidance
+from analysis_timeline import (
+    bounded_analysis_detail,
+    normalize_analysis_payload,
+    sample_timeline_segments,
+    timeline_covered_duration_seconds,
+)
 from editing_plan import (
     EditingPlan,
     EditingPlanStore,
@@ -57,7 +63,7 @@ from editing_plan import (
 )
 from memory_reference import INJECTION_MEMORY_CHAR_LIMIT, load_memory_reference
 from tools import ALL_TOOLS, MEMORY_EXPERIENCE_DIR, USER_WORKSPACE, WORKSPACE
-from tools._shared import _tts_generate, run_subprocess
+from tools._shared import VIDEO_ANALYSIS_VERSION, _tts_generate, run_subprocess
 from tools.narration_pipeline import compose_prepared_narration, narration_audio_path
 from model_runtime import (
     ModelCallError,
@@ -196,6 +202,10 @@ EXPORT_POOL_SIZE: int = 1
 REACT_MAX_MERGE_VIDEO_CALLS: int = max(
     1,
     int(os.environ.get("CRAYOTTER_REACT_MAX_MERGE_VIDEO_CALLS", "4") or 4),
+)
+MAX_REACT_ANALYSIS_CONTEXT_CHARS: int = max(
+    4096,
+    int(os.environ.get("CRAYOTTER_MAX_REACT_ANALYSIS_CONTEXT_CHARS", "20000") or 20000),
 )
 SHORT_FORM_OPTIMIZATIONS: bool = str(
     os.environ.get("CRAYOTTER_SHORT_FORM_OPTIMIZATIONS", "true")
@@ -788,15 +798,37 @@ def _register_plan_artifact(plan: EditingPlan, kind: str = "editing_plan") -> No
     )
 
 
+def _probe_source_durations(source_paths: list[str]) -> dict[str, float]:
+    durations: dict[str, float] = {}
+    for source in source_paths:
+        if not source:
+            continue
+        resolved = str(Path(source).resolve(strict=False))
+        try:
+            durations[resolved] = float(probe_media(resolved).duration_seconds)
+        except Exception as exc:
+            graph_logger.warning("素材时长探测失败: %s: %s", resolved, exc)
+    return durations
+
+
 def _fallback_editing_plan(state: AgentState) -> EditingPlan:
     source_paths = [str(path.resolve()) for path in _iter_source_videos()]
     analysis_paths = [str(path.resolve()) for path in _iter_analysis_json_files()]
     target = state.target_duration_seconds or _extract_target_duration_seconds(state.user_request) or 30.0
-    scene_count = max(1, min(6, len(source_paths) or 1))
+    scene_count = max(1, min(6, int(math.ceil(target / 5.0))))
     scene_duration = max(2.0, target / scene_count)
+    source_durations = _probe_source_durations(source_paths)
     scenes: list[EditingScene] = []
     for index in range(scene_count):
         source = source_paths[index % len(source_paths)] if source_paths else ""
+        source_duration = float(source_durations.get(source, 0.0) or 0.0)
+        position = index / max(1, scene_count - 1)
+        source_start = max(0.0, (source_duration - scene_duration) * position)
+        source_end = (
+            min(source_duration, source_start + scene_duration)
+            if source_duration > 0
+            else source_start + scene_duration
+        )
         start = round(index * scene_duration, 3)
         end = round(start + scene_duration, 3)
         scenes.append(
@@ -806,8 +838,8 @@ def _fallback_editing_plan(state: AgentState) -> EditingPlan:
                 end=end,
                 narrative_purpose=f"分镜 {index + 1}: 承接用户需求并展示核心素材",
                 source_path=source,
-                source_start=0.0,
-                source_end=scene_duration,
+                source_start=round(source_start, 3),
+                source_end=round(source_end, 3),
                 crop="fit_center_crop",
                 transition="crossfade" if index else "",
             )
@@ -856,40 +888,60 @@ def generate_editing_plan_node(state: AgentState) -> dict[str, Any]:
         "bgm_strategy、scenes。scenes 每项包含 scene_id、start、end、narrative_purpose、source_path、"
         "source_start、source_end、crop、transition、subtitle、narration、alternatives、locked。只返回 JSON。"
     )
-    try:
-        response = _invoke_llm(
-            _get_llm(temperature=0.15).bind(max_tokens=5000),
-            [
-                SystemMessage(content=prompt),
-                HumanMessage(
-                    content=json.dumps(
-                        {
-                            "user_request": state.user_request,
-                            "target_duration_seconds": state.target_duration_seconds,
-                            "source_video_paths": source_paths,
-                            "source_analysis_paths": analysis_paths,
-                            "blueprint_markdown": state.editing_blueprint[:20000],
-                            "analysis": _build_full_analysis_context()[:30000],
-                        },
-                        ensure_ascii=False,
-                    )
-                ),
-            ],
-            "editing_plan_generator",
-        )
-        parsed = _parse_json_object(str(response.content))
-        parsed["version"] = "v001"
-        parsed["status"] = "DRAFT"
-        parsed["user_request"] = state.user_request
-        parsed["source_video_paths"] = source_paths
-        parsed["source_analysis_paths"] = analysis_paths
-        parsed["blueprint_markdown"] = state.editing_blueprint
-        plan = normalize_plan_timeline(EditingPlan.model_validate(parsed))
-    except ModelCallError:
-        raise
-    except Exception as exc:
-        graph_logger.warning("剪辑计划生成失败，使用降级计划: %s", exc)
-        _emit_orchestration_event("editing_plan_fallback", {"reason": str(exc)[:300]})
+    plan: EditingPlan | None = None
+    last_error = ""
+    source_durations = _probe_source_durations(source_paths)
+    for attempt in range(1, 3):
+        payload: dict[str, Any] = {
+            "user_request": state.user_request,
+            "target_duration_seconds": state.target_duration_seconds,
+            "source_video_paths": source_paths,
+            "source_analysis_paths": analysis_paths,
+            "blueprint_markdown": state.editing_blueprint[:20000],
+            "analysis": _build_full_analysis_context()[:30000],
+        }
+        if last_error:
+            # 把上一次失败原因反馈给 planner，让它针对性修正而不是盲目重试
+            payload["previous_error"] = last_error
+        try:
+            response = _invoke_llm(
+                _get_llm(temperature=0.15).bind(max_tokens=5000),
+                [
+                    SystemMessage(content=prompt),
+                    HumanMessage(content=json.dumps(payload, ensure_ascii=False)),
+                ],
+                "editing_plan_generator",
+            )
+            parsed = _parse_json_object(str(response.content))
+            parsed["version"] = "v001"
+            parsed["status"] = "DRAFT"
+            parsed["user_request"] = state.user_request
+            parsed["source_video_paths"] = source_paths
+            parsed["source_analysis_paths"] = analysis_paths
+            parsed["blueprint_markdown"] = state.editing_blueprint
+            candidate = normalize_plan_timeline(EditingPlan.model_validate(parsed))
+            report = validate_editing_plan(
+                candidate,
+                allowed_source_paths=candidate.source_video_paths,
+                source_durations=source_durations,
+            )
+            if report.ok:
+                plan = candidate
+                break
+            last_error = "; ".join(
+                issue.message for issue in report.issues if issue.severity == "error"
+            )[:500]
+            _emit_orchestration_event(
+                "editing_plan_retry",
+                {"attempt": attempt, "issues": last_error[:300]},
+            )
+        except ModelCallError:
+            raise
+        except Exception as exc:
+            last_error = str(exc)[:500]
+    if plan is None:
+        graph_logger.warning("剪辑计划生成失败，使用降级计划: %s", last_error)
+        _emit_orchestration_event("editing_plan_fallback", {"reason": last_error[:300]})
         plan = _fallback_editing_plan(state)
 
     store.save_plan(plan)
@@ -911,7 +963,11 @@ def validate_editing_plan_node(state: AgentState) -> dict[str, Any]:
     plan = store.current()
     if plan is None:
         raise RuntimeError("缺少可校验的剪辑计划")
-    report = validate_editing_plan(plan, allowed_source_paths=plan.source_video_paths)
+    report = validate_editing_plan(
+        plan,
+        allowed_source_paths=plan.source_video_paths,
+        source_durations=_probe_source_durations(plan.source_video_paths),
+    )
     report_path = store.root / f"editing_plan_{plan.version}_validation.json"
     report_path.write_text(json.dumps(report.model_dump(), ensure_ascii=False, indent=2), encoding="utf-8")
     if not report.ok:
@@ -1683,6 +1739,8 @@ def _build_full_analysis_context() -> str:
     """读取所有分析 JSON，构建完整的分析上下文供 Phase 2/2 使用。
 
     Enhanced: 包含每个片段的时长计算和更结构化的输出，方便深度研究。
+    当素材较多时，会对分析详情做自适应截断，避免 ReAct fallback 时上下文
+    超过模型输入上限（如 qwen-max 的 30720 token）。
     """
     json_files = _iter_analysis_json_files()
     if not json_files:
@@ -1699,8 +1757,22 @@ def _build_full_analysis_context() -> str:
             continue
 
         source_video = str(data.get("source_video", ""))
+        source_duration = float(data.get("source_duration_seconds", 0.0) or 0.0)
+        source_path = Path(source_video).resolve(strict=False) if source_video else None
+        if source_path is not None and source_path.is_file():
+            try:
+                source_duration = float(probe_media(source_path).duration_seconds)
+            except Exception as exc:
+                graph_logger.warning("素材时长探测失败，沿用分析元数据: %s: %s", source_path, exc)
+
+        correction = {"clamped_count": 0, "dropped_count": 0}
+        if source_duration > 0:
+            data, correction = normalize_analysis_payload(data, source_duration)
         analysis_text = str(data.get("analysis_text", ""))
+        if correction["clamped_count"] or correction["dropped_count"]:
+            analysis_text = bounded_analysis_detail(data)
         segments = data.get("segments", [])
+        semantic_segments = data.get("semantic_segments", [])
 
         seg_lines: list[str] = []
         video_seg_duration = 0.0
@@ -1712,7 +1784,17 @@ def _build_full_analysis_context() -> str:
                     if s is not None and e is not None:
                         dur = round(float(e) - float(s), 2)
                         video_seg_duration += dur
-                        seg_lines.append(f"    t={s}s ~ t={e}s  (时长 {dur}s)")
+            sampled_segments = sample_timeline_segments(
+                segments,
+                40,
+                source_duration if source_duration > 0 else None,
+            )
+            for seg in sampled_segments:
+                s = seg.get("start")
+                e = seg.get("end")
+                seg_lines.append(
+                    f"    t={s}s ~ t={e}s  (时长 {round(float(e) - float(s), 2)}s)"
+                )
 
         total_available_duration += video_seg_duration
 
@@ -1720,20 +1802,67 @@ def _build_full_analysis_context() -> str:
             f"📽️ 源视频: {source_video}",
             f"   分析文件: {fp.name}",
         ]
+        if source_duration > 0:
+            block_parts.append(
+                f"   ffprobe 真实时长: {source_duration:.3f}s（所有素材入出点必须位于此范围内）"
+            )
+        if correction["clamped_count"] or correction["dropped_count"]:
+            block_parts.append(
+                "   ⚠️ 已忽略多模态模型在 EOF 之后生成的描述："
+                f"夹紧 {correction['clamped_count']} 段，丢弃 {correction['dropped_count']} 段"
+            )
         if seg_lines:
             block_parts.append(
-                f"   推荐片段 ({len(seg_lines)} 段, 总可用时长 {video_seg_duration:.1f}s):"
+                f"   推荐片段（时间均匀抽样 {len(seg_lines)}/{len(segments)} 段, "
+                f"总可用时长 {video_seg_duration:.1f}s）:"
             )
-            block_parts.extend(seg_lines[:40])
-        if analysis_text:
-            block_parts.append(f"   分析详情:\n{analysis_text[:3000]}")
+            block_parts.extend(seg_lines)
+        if analysis_text or semantic_segments:
+            detail_source = (
+                semantic_segments
+                if isinstance(semantic_segments, list) and semantic_segments
+                else segments
+            )
+            sampled_detail = sample_timeline_segments(
+                detail_source if isinstance(detail_source, list) else [],
+                32,
+                source_duration if source_duration > 0 else None,
+            )
+            detail = bounded_analysis_detail({"semantic_segments": sampled_detail})
+            if not detail:
+                detail = analysis_text
+                if len(detail) > 3000:
+                    detail = f"{detail[:1450]}\n...(中间内容省略)...\n{detail[-1450:]}"
+            block_parts.append(f"   分析详情:\n   （时间均匀抽样）\n{detail}")
         blocks.append("\n".join(block_parts))
 
     summary = (
         f"━━━ 素材总览: {len(blocks)} 个源视频, "
         f"总可用片段时长 {total_available_duration:.1f}s ━━━\n\n"
     )
-    return summary + "\n\n".join(blocks)
+    full_text = summary + "\n\n".join(blocks)
+
+    # 自适应截断：优先保留素材总览，再保留各块的结构化元数据，最后截断分析详情。
+    max_chars = MAX_REACT_ANALYSIS_CONTEXT_CHARS
+    if len(full_text) > max_chars:
+        # 预留 summary 空间
+        overhead = len(summary) + 200
+        budget_per_block = max(300, (max_chars - overhead) // max(1, len(blocks)))
+        truncated_blocks: list[str] = []
+        for block in blocks:
+            if len(block) > budget_per_block and "分析详情:" in block:
+                prefix, _, detail = block.partition("   分析详情:\n")
+                allowed_detail = max(0, budget_per_block - len(prefix) - 50)
+                block = f"{prefix}\n   分析详情:\n{detail[:allowed_detail]}\n   ...(已截断)"
+            truncated_blocks.append(block[:budget_per_block])
+        full_text = summary + "\n\n".join(truncated_blocks)
+        graph_logger.warning(
+            "分析上下文超长（%d 字），已自适应截断至 %d 字",
+            len(summary) + sum(len(b) for b in blocks),
+            len(full_text),
+        )
+
+    return full_text
 
 
 def _looks_like_tool_call_text(text: str) -> bool:
@@ -2776,23 +2905,33 @@ def _run_phase1_downloads(
     ]
 
 
+def _current_analysis_for(
+    video_path: Path,
+    analysis_index: dict[str, list[Path]],
+) -> Path | None:
+    for analysis_path in match_analysis_files(video_path, analysis_index=analysis_index):
+        try:
+            payload = json.loads(analysis_path.read_text(encoding="utf-8"))
+        except Exception:
+            continue
+        if payload.get("analysis_version") == VIDEO_ANALYSIS_VERSION:
+            return analysis_path
+    return None
+
+
 def _run_phase1_analyses(
     state: AgentState,
     scheduler: ResourceScheduler,
 ) -> list[str]:
     analysis_index = build_analysis_index([WORKSPACE, USER_WORKSPACE])
     source_videos = _iter_source_videos()
-    pending = [
-        path
+    current = {
+        path: _current_analysis_for(path, analysis_index)
         for path in source_videos
-        if not match_analysis_files(path, analysis_index=analysis_index)
-    ]
+    }
+    pending = [path for path, analysis_path in current.items() if analysis_path is None]
     if not pending:
-        return [
-            str(matches[0].resolve())
-            for video_path in source_videos
-            if (matches := match_analysis_files(video_path, analysis_index=analysis_index))
-        ]
+        return [str(path.resolve()) for path in current.values() if path is not None]
 
     tasks = [
         TaskSpec(
@@ -2800,7 +2939,7 @@ def _run_phase1_analyses(
             phase="phase1",
             kind="video_analysis",
             tool_name="analyze_video",
-            description=f"分析素材 {path.name}",
+            description=f"分析素材 {path.name} ({VIDEO_ANALYSIS_VERSION})",
             arguments={
                 "video_path": str(path.resolve()),
                 "analysis_goal": state.user_request,
@@ -2824,10 +2963,9 @@ def _run_phase1_analyses(
         raw = str(_TOOL_NAME_MAP["analyze_video"].invoke(task.arguments))
         video_path = Path(str(task.arguments["video_path"]))
         index = build_analysis_index([WORKSPACE, USER_WORKSPACE])
-        matches = match_analysis_files(video_path, analysis_index=index)
-        if not matches:
+        analysis_path = _current_analysis_for(video_path, index)
+        if analysis_path is None:
             raise RuntimeError(f"视频分析未生成 JSON: {raw[:500]}")
-        analysis_path = matches[0]
         return TaskExecutionResult(
             data={"analysis_path": str(analysis_path.resolve())},
             artifacts=[
@@ -2849,9 +2987,9 @@ def _run_phase1_analyses(
     )
     refreshed_index = build_analysis_index([WORKSPACE, USER_WORKSPACE])
     completed_paths = [
-        str(matches[0].resolve())
+        str(analysis_path.resolve())
         for video_path in source_videos
-        if (matches := match_analysis_files(video_path, analysis_index=refreshed_index))
+        if (analysis_path := _current_analysis_for(video_path, refreshed_index))
     ]
     required_successes = max(1, math.ceil(len(source_videos) * 2 / 3))
     failed_states = [item for item in states.values() if item.status == "failed"]
@@ -3073,7 +3211,9 @@ def _material_gap_metrics(state: AgentState) -> dict[str, Any]:
     quality_pass_count = 0
     scene_signatures: set[str] = set()
     segment_count = 0
+    timeline_coverages: list[float] = []
     for video in analyzed:
+        detected_duration = 0.0
         try:
             import cv2
 
@@ -3081,7 +3221,9 @@ def _material_gap_metrics(state: AgentState) -> dict[str, Any]:
             width = int(capture.get(cv2.CAP_PROP_FRAME_WIDTH))
             height = int(capture.get(cv2.CAP_PROP_FRAME_HEIGHT))
             fps = float(capture.get(cv2.CAP_PROP_FPS) or 0.0)
+            frame_count = float(capture.get(cv2.CAP_PROP_FRAME_COUNT) or 0.0)
             capture.release()
+            detected_duration = frame_count / fps if fps > 0 else 0.0
             if height > width:
                 portrait += 1
             elif width > 0 and height > 0:
@@ -3097,18 +3239,24 @@ def _material_gap_metrics(state: AgentState) -> dict[str, Any]:
             payload = json.loads(matches[0].read_text(encoding="utf-8"))
         except Exception:
             continue
+        source_duration = float(
+            payload.get("source_duration_seconds", 0.0) or detected_duration or 0.0
+        )
+        if source_duration > 0:
+            payload, _ = normalize_analysis_payload(payload, source_duration)
+            validation = payload.get("timeline_validation", {})
+            timeline_coverages.append(
+                float(validation.get("bucket_coverage_ratio", 0.0) or 0.0)
+            )
         topic_text_parts.append(str(payload.get("analysis_text", "")))
         segments = payload.get("semantic_segments") or payload.get("segments") or []
         if isinstance(segments, list):
+            usable_seconds += timeline_covered_duration_seconds(
+                segments,
+                source_duration if source_duration > 0 else None,
+            )
             for segment in segments:
                 if not isinstance(segment, dict):
-                    continue
-                try:
-                    usable_seconds += max(
-                        0.0,
-                        float(segment.get("end", 0)) - float(segment.get("start", 0)),
-                    )
-                except Exception:
                     continue
                 segment_count += 1
                 signature_text = str(
@@ -3143,17 +3291,31 @@ def _material_gap_metrics(state: AgentState) -> dict[str, Any]:
         if state.processing_budget is not None
         else material_budget_for_duration(target)
     )
-    required_sources = material_budget.source_min
     quality_floor_ratio = quality_pass_count / max(1, len(analyzed))
     duplicate_ratio = 1.0 - (len(scene_signatures) / max(1, segment_count))
+    duration_coverage_ratio = usable_seconds / target
+    timeline_coverage_ratio = (
+        sum(timeline_coverages) / len(timeline_coverages)
+        if timeline_coverages
+        else 0.0
+    )
+    single_source_complete = (
+        len(source_videos) == 1
+        and len(analyzed) == 1
+        and duration_coverage_ratio >= material_budget.coverage_ratio
+        and timeline_coverage_ratio >= 0.75
+    )
+    required_sources = 1 if single_source_complete else material_budget.source_min
     return {
         "source_count": len(source_videos),
         "analyzed_count": len(analyzed),
         "analysis_complete_ratio": len(analyzed) / max(1, len(source_videos)),
         "usable_seconds": round(usable_seconds, 2),
         "target_seconds": round(target, 2),
-        "duration_coverage_ratio": round(usable_seconds / target, 3),
+        "duration_coverage_ratio": round(duration_coverage_ratio, 3),
         "required_duration_coverage_ratio": material_budget.coverage_ratio,
+        "timeline_coverage_ratio": round(timeline_coverage_ratio, 3),
+        "required_timeline_coverage_ratio": 0.75,
         "topic_coverage_ratio": round(topic_coverage, 3),
         "orientation_match_ratio": round(orientation_ratio, 3),
         "required_sources": required_sources,
@@ -4326,6 +4488,61 @@ def _parse_json_object(text: str) -> dict[str, Any]:
     return json.loads(content)
 
 
+def _normalize_controlled_clip_bounds(
+    plan: ControlledEditPlan,
+    allowed_source_paths: list[str],
+) -> float:
+    """Resolve source paths, clamp partial EOF overlap, and reject empty cuts."""
+    available = {
+        str(Path(path).resolve(strict=False))
+        for path in allowed_source_paths
+        if path
+    }
+    source_durations = _probe_source_durations(sorted(available))
+    total = 0.0
+    for clip in plan.clips:
+        resolved = str(Path(clip.source_path).resolve(strict=False))
+        if resolved not in available:
+            raise RuntimeError(f"Phase 3 计划引用未知素材: {clip.source_path}")
+        clip.source_path = resolved
+        source_duration = float(source_durations.get(resolved, 0.0) or 0.0)
+        if source_duration <= 0:
+            raise RuntimeError(f"Phase 3 无法获取素材真实时长: {resolved}")
+        if clip.start >= source_duration - 0.001:
+            raise RuntimeError(
+                "Phase 3 计划裁剪入点越过源视频 EOF: "
+                f"source={Path(resolved).name}, start={clip.start:.3f}s, "
+                f"duration={source_duration:.3f}s"
+            )
+        if clip.end > source_duration:
+            original_end = clip.end
+            clip.end = source_duration
+            graph_logger.warning(
+                "Phase 3 裁剪出点越过 EOF，已夹紧: source=%s start=%.3fs end=%.3fs -> %.3fs",
+                Path(resolved).name,
+                clip.start,
+                original_end,
+                clip.end,
+            )
+            _emit_orchestration_event(
+                "phase3_clip_bounds_clamped",
+                {
+                    "source": resolved,
+                    "start_seconds": clip.start,
+                    "requested_end_seconds": original_end,
+                    "actual_end_seconds": clip.end,
+                },
+            )
+        if clip.end <= clip.start or clip.end - clip.start < 0.5:
+            raise RuntimeError(
+                "Phase 3 计划包含无效裁剪区间: "
+                f"source={Path(resolved).name}, start={clip.start:.3f}s, "
+                f"end={clip.end:.3f}s"
+            )
+        total += clip.end - clip.start
+    return total
+
+
 def _build_controlled_edit_plan(state: AgentState) -> ControlledEditPlan:
     registry = _artifact_registry()
     scheduler = _resource_scheduler(registry)
@@ -4390,16 +4607,7 @@ def _build_controlled_edit_plan(state: AgentState) -> ControlledEditPlan:
             and not _user_explicitly_requested_high_resolution(state.user_request)
         ):
             plan.resolution = "720p"
-        available = {str(Path(path).resolve()) for path in source_paths}
-        total = 0.0
-        for clip in plan.clips:
-            resolved = str(Path(clip.source_path).resolve())
-            if resolved not in available:
-                raise RuntimeError(f"Phase 3 计划引用未知素材: {clip.source_path}")
-            clip.source_path = resolved
-            if clip.end <= clip.start or clip.end - clip.start < 0.5:
-                raise RuntimeError("Phase 3 计划包含无效裁剪区间")
-            total += clip.end - clip.start
+        total = _normalize_controlled_clip_bounds(plan, source_paths)
         target = state.target_duration_seconds or total
         transition_overlap = (
             (0.3 if target <= 30 else 0.6) * max(0, len(plan.clips) - 1)
@@ -5069,6 +5277,10 @@ def _run_controlled_editor(state: AgentState) -> str:
         if approved_plan is not None
         else _build_controlled_edit_plan(state)
     )
+    _normalize_controlled_clip_bounds(
+        plan,
+        [str(path.resolve(strict=False)) for path in _iter_source_videos()],
+    )
     plan_version = approved_plan.version if approved_plan is not None else ""
     registry = _artifact_registry()
     media_profile = _media_profile_for_state(state)
@@ -5173,6 +5385,9 @@ def _run_controlled_editor(state: AgentState) -> str:
                     max(60.0, _budget_snapshot(state).get("remaining_seconds", 1200.0)),
                 ),
             )
+            output_probe = probe_media(output_path)
+            if output_probe.duration_seconds <= 0.001:
+                raise RuntimeError(f"裁剪输出时长无效，拒绝登记制品: {output_path}")
             path = str(output_path.resolve())
             return TaskExecutionResult(
                 data={"path": path},
@@ -5188,6 +5403,7 @@ def _run_controlled_editor(state: AgentState) -> str:
                             "execution_step_id": task.arguments.get("execution_step_id", task.id),
                             "media_profile_version": media_profile.version,
                             "source_probe": source_probe.to_dict(),
+                            "output_probe": output_probe.to_dict(),
                         },
                     )
                 ],

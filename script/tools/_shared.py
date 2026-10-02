@@ -74,6 +74,14 @@ from model_runtime import (
     fail_fast_model_errors,
     raise_model_failure,
 )
+try:
+    from analysis_timeline import normalize_analysis_payload
+except ImportError:
+    from script.analysis_timeline import normalize_analysis_payload
+try:
+    from media_consistency import probe_media as _probe_media
+except ImportError:
+    from script.media_consistency import probe_media as _probe_media
 
 configure_runtime_environment()
 
@@ -177,6 +185,7 @@ _CANDIDATE_POOL_LOCK = threading.RLock()
 _RANK_CACHE: dict[str, str] = {}
 
 MAX_DOWNLOAD_DURATION_SECONDS = 10 * 60
+VIDEO_ANALYSIS_VERSION = "video-analysis-v4-long-coverage"
 
 
 def _hidden_subprocess_kwargs() -> dict[str, Any]:
@@ -251,7 +260,7 @@ def _analysis_cache_key(source_video: Path, analysis_goal: str, model_name: str)
         "file": _file_digest(source_video),
         "goal": str(analysis_goal),
         "model": str(model_name),
-        "prompt_version": "video-analysis-v3-proxy",
+        "prompt_version": VIDEO_ANALYSIS_VERSION,
     }
     return hashlib.sha256(
         json.dumps(payload, ensure_ascii=False, sort_keys=True).encode("utf-8")
@@ -285,6 +294,9 @@ def _restore_cached_analysis(
     try:
         payload = json.loads(cache_path.read_text(encoding="utf-8"))
         payload["source_video"] = str(source_video)
+        source_duration = _get_source_duration_seconds(source_video)
+        if source_duration > 0:
+            payload, _ = normalize_analysis_payload(payload, source_duration)
         output_path = _analysis_output_path(source_video)
         _persist_analysis_payload(output_path, payload)
         emit_benchmark_event(
@@ -911,11 +923,28 @@ def _ensure_analysis_semantic_index(
     analysis_path: Path,
     payload: dict[str, Any],
 ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    original_payload = json.dumps(payload, ensure_ascii=False, sort_keys=True)
     semantic_segments = payload.get("semantic_segments", [])
     if not isinstance(semantic_segments, list) or not semantic_segments:
         semantic_segments = _extract_semantic_segments_from_analysis(str(payload.get("analysis_text", "")))
 
     semantic_segments = _prepare_semantic_segments(semantic_segments)
+    payload["semantic_segments"] = semantic_segments
+    if not isinstance(payload.get("segments"), list) or not payload.get("segments"):
+        payload["segments"] = _extract_time_segments_from_analysis(
+            str(payload.get("analysis_text", ""))
+        )
+
+    source_duration = float(payload.get("source_duration_seconds", 0.0) or 0.0)
+    source_video = Path(str(payload.get("source_video", "") or ""))
+    if source_duration <= 0 and source_video.is_file():
+        source_duration = _get_source_duration_seconds(source_video)
+    if source_duration > 0:
+        normalized, _ = normalize_analysis_payload(payload, source_duration)
+        payload.clear()
+        payload.update(normalized)
+        semantic_segments = list(payload.get("semantic_segments", []))
+
     semantic_index = _build_semantic_index_meta(semantic_segments)
 
     original_segments = payload.get("semantic_segments", [])
@@ -925,7 +954,8 @@ def _ensure_analysis_semantic_index(
     payload["semantic_segments"] = semantic_segments
     payload["semantic_index"] = semantic_index
 
-    if semantic_segments != original_segments or semantic_index != original_index:
+    current_payload = json.dumps(payload, ensure_ascii=False, sort_keys=True)
+    if current_payload != original_payload:
         _persist_analysis_payload(analysis_path, payload)
 
     return semantic_segments, semantic_index
@@ -964,7 +994,9 @@ def _save_analysis_json(
         output_path = _analysis_output_path(source_video)
         semantic_segments = _extract_semantic_segments_from_analysis(analysis_text)
         semantic_segments = _prepare_semantic_segments(semantic_segments)
+        source_duration = _get_source_duration_seconds(source_video)
         payload = {
+            "analysis_version": VIDEO_ANALYSIS_VERSION,
             "source_video": str(source_video),
             "analysis_video": str(analysis_video),
             "analysis_goal": analysis_goal,
@@ -976,6 +1008,17 @@ def _save_analysis_json(
             "analysis_text": analysis_text,
             "saved_at": datetime.now().isoformat(),
         }
+        if source_duration > 0:
+            payload, correction = normalize_analysis_payload(payload, source_duration)
+            if correction["clamped_count"] or correction["dropped_count"]:
+                logger.warning(
+                    "⚠️ 多模态分析时间戳越过源视频 EOF，已修正: source=%s duration=%.3fs "
+                    "clamped=%d dropped=%d",
+                    source_video.name,
+                    source_duration,
+                    correction["clamped_count"],
+                    correction["dropped_count"],
+                )
         if not _persist_analysis_payload(output_path, payload):
             return None
         return output_path
@@ -1007,6 +1050,19 @@ def _get_video_meta(video_path: str) -> dict[str, Any]:
         "width": width,
         "height": height,
     }
+
+
+def _get_source_duration_seconds(video_path: str | Path) -> float:
+    """Use ffprobe as the authority, with OpenCV only as a compatibility fallback."""
+    try:
+        duration = float(_probe_media(video_path).duration_seconds)
+        if duration > 0:
+            return duration
+    except Exception as exc:
+        logger.warning("⚠️ ffprobe 获取素材时长失败，回退 OpenCV: %s: %s", video_path, exc)
+    return float(
+        _get_video_meta(str(video_path)).get("duration_seconds", 0.0) or 0.0
+    )
 
 def _to_file_url(path: Path) -> str:
     return path.resolve().as_uri()
@@ -1171,26 +1227,8 @@ def _extract_audio_for_analysis(video_path: Path) -> Path | None:
         logger.warning("⚠️ 提取音频异常: %s", e)
     return None
 
-def _prepare_timestamped_video_for_analysis(video_path: Path) -> Path | None:
-    proxy_enabled = str(
-        os.environ.get("CRAYOTTER_SHORT_FORM_OPTIMIZATIONS", "true")
-    ).strip().lower() not in {"0", "false", "no", "off"}
-    max_seconds = _positive_int_env(
-        "CRAYOTTER_VIDEO_ANALYSIS_PROXY_MAX_SECONDS",
-        45,
-    )
-    meta = _get_video_meta(str(video_path))
-    source_duration = float(meta.get("duration_seconds", 0.0) or 0.0)
-    use_proxy = proxy_enabled and source_duration > max_seconds
-    suffix = "analysis_proxy" if use_proxy else "analysis_ts"
-    stamped_path = WORKSPACE / f"{video_path.stem}_{suffix}.mp4"
-    try:
-        if stamped_path.exists() and stamped_path.stat().st_mtime >= video_path.stat().st_mtime:
-            return stamped_path
-    except Exception:
-        pass
 
-    speed_factor = max(1.0, source_duration / max_seconds) if use_proxy else 1.0
+def _analysis_video_filters(speed_factor: float, use_proxy: bool) -> list[str]:
     timestamp_expr = f"t*{speed_factor:.8f}" if use_proxy else "t"
     drawtext_filter = (
         "drawtext="
@@ -1202,10 +1240,7 @@ def _prepare_timestamped_video_for_analysis(video_path: Path) -> Path | None:
         "boxcolor=black@0.65:"
         "boxborderw=10"
     )
-    video_filters = [
-        "scale='min(960,iw)':-2",
-        drawtext_filter,
-    ]
+    video_filters = ["scale='min(960,iw)':-2"]
     if use_proxy:
         video_filters.extend(
             [
@@ -1213,6 +1248,31 @@ def _prepare_timestamped_video_for_analysis(video_path: Path) -> Path | None:
                 "fps=6",
             ]
         )
+    video_filters.append(drawtext_filter)
+    return video_filters
+
+
+def _prepare_timestamped_video_for_analysis(video_path: Path) -> Path | None:
+    proxy_enabled = str(
+        os.environ.get("CRAYOTTER_SHORT_FORM_OPTIMIZATIONS", "true")
+    ).strip().lower() not in {"0", "false", "no", "off"}
+    max_seconds = _positive_int_env(
+        "CRAYOTTER_VIDEO_ANALYSIS_PROXY_MAX_SECONDS",
+        45,
+    )
+    meta = _get_video_meta(str(video_path))
+    source_duration = float(meta.get("duration_seconds", 0.0) or 0.0)
+    use_proxy = proxy_enabled and source_duration > max_seconds
+    suffix = "analysis_proxy_v2" if use_proxy else "analysis_ts"
+    stamped_path = WORKSPACE / f"{video_path.stem}_{suffix}.mp4"
+    try:
+        if stamped_path.exists() and stamped_path.stat().st_mtime >= video_path.stat().st_mtime:
+            return stamped_path
+    except Exception:
+        pass
+
+    speed_factor = max(1.0, source_duration / max_seconds) if use_proxy else 1.0
+    video_filters = _analysis_video_filters(speed_factor, use_proxy)
 
     cmd = [
         "ffmpeg",
@@ -1288,63 +1348,93 @@ def _prepare_timestamped_video_for_analysis(video_path: Path) -> Path | None:
     return None
 
 def _tts_generate(text: str, voice: str, out_path: Path) -> str | None:
-    """调用 DashScope TTS 生成音频并保存到 out_path。成功返回 None，失败返回错误信息。"""
+    """调用 DashScope TTS 生成音频并保存到 out_path。成功返回 None，失败返回错误信息。
+
+    对 429 限流错误做指数退避重试，降低因瞬时 QPS 超限导致整个旁白链路失败的概率。
+    """
     supported_voices = {"Cherry", "Serena", "Ethan", "Chelsie", "Dylan", "Jada", "Sunny"}
     if voice not in supported_voices:
         logger.warning("TTS 音色 %s 不受当前模型支持，自动使用 Ethan", voice)
         voice = "Ethan"
+
+    max_attempts = 3
+    base_delay = 1.0
     started_at = time.perf_counter()
-    try:
-        ensure_model_calls_allowed()
-        emit_benchmark_event(
-            "model_call_started",
-            {"stage": "tts", "model": TTS_MODEL_NAME, "voice": voice},
-        )
-        dashscope.api_key = TTS_API_KEY
-        response = dashscope.MultiModalConversation.call(
-            model=TTS_MODEL_NAME,
-            text=text,
-            voice=voice,
-        )
-        if response.status_code == 200:
-            audio_url = response.output.audio.url
-            import urllib.request
-            urllib.request.urlretrieve(audio_url, str(out_path))
-            logger.info("TTS 生成成功: %s (%.0f chars) -> %s", text[:30], len(text), out_path.name)
+
+    def _try_once() -> tuple[bool, str | None]:
+        """返回 (是否成功, 错误信息)。"""
+        try:
+            ensure_model_calls_allowed()
             emit_benchmark_event(
-                "model_call_completed",
-                {
-                    "stage": "tts",
-                    "model": TTS_MODEL_NAME,
-                    "voice": voice,
-                    "duration_seconds": round(time.perf_counter() - started_at, 3),
-                },
+                "model_call_started",
+                {"stage": "tts", "model": TTS_MODEL_NAME, "voice": voice},
             )
-            return None
-        else:
+            dashscope.api_key = TTS_API_KEY
+            response = dashscope.MultiModalConversation.call(
+                model=TTS_MODEL_NAME,
+                text=text,
+                voice=voice,
+            )
+            if response.status_code == 200:
+                audio_url = response.output.audio.url
+                import urllib.request
+                urllib.request.urlretrieve(audio_url, str(out_path))
+                logger.info("TTS 生成成功: %s (%.0f chars) -> %s", text[:30], len(text), out_path.name)
+                emit_benchmark_event(
+                    "model_call_completed",
+                    {
+                        "stage": "tts",
+                        "model": TTS_MODEL_NAME,
+                        "voice": voice,
+                        "duration_seconds": round(time.perf_counter() - started_at, 3),
+                    },
+                )
+                return True, None
+            else:
+                status_code = getattr(response, "status_code", None)
+                message = getattr(response, "message", "TTS returned non-success status.")
+                if fail_fast_model_errors():
+                    raise_model_failure(
+                        stage="tts",
+                        model=TTS_MODEL_NAME,
+                        message=message,
+                        status_code=status_code,
+                        request_id=str(getattr(response, "request_id", "") or ""),
+                        duration_seconds=time.perf_counter() - started_at,
+                    )
+                return False, f"TTS 失败 (status={status_code}): {message}"
+        except ModelCallError:
+            raise
+        except Exception as e:
             if fail_fast_model_errors():
+                response = getattr(e, "response", None)
                 raise_model_failure(
                     stage="tts",
                     model=TTS_MODEL_NAME,
-                    message=getattr(response, "message", "TTS returned non-success status."),
+                    message=e,
                     status_code=getattr(response, "status_code", None),
-                    request_id=str(getattr(response, "request_id", "") or ""),
                     duration_seconds=time.perf_counter() - started_at,
                 )
-            return f"TTS 失败 (status={response.status_code}): {response.message}"
-    except ModelCallError:
-        raise
-    except Exception as e:
-        if fail_fast_model_errors():
-            response = getattr(e, "response", None)
-            raise_model_failure(
-                stage="tts",
-                model=TTS_MODEL_NAME,
-                message=e,
-                status_code=getattr(response, "status_code", None),
-                duration_seconds=time.perf_counter() - started_at,
+            return False, f"TTS 异常: {e}"
+
+    last_error: str | None = None
+    for attempt in range(max_attempts):
+        if attempt > 0:
+            delay = base_delay * (2 ** (attempt - 1))
+            logger.warning(
+                "TTS 遇到限流/错误，第 %d 次重试，等待 %.1fs: %s",
+                attempt,
+                delay,
+                last_error,
             )
-        return f"TTS 异常: {e}"
+            time.sleep(delay)
+        success, last_error = _try_once()
+        if success:
+            return None
+        if last_error and "429" not in last_error and "rate limit" not in last_error.lower():
+            break
+
+    return last_error or "TTS 失败：已达到最大重试次数"
 
 
 __all__ = [

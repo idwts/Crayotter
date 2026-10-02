@@ -3,6 +3,45 @@ from __future__ import annotations
 from ._shared import *
 
 
+def _select_temporally_diverse(
+    candidates: list[dict[str, Any]],
+    limit: int,
+) -> list[dict[str, Any]]:
+    remaining = sorted(candidates, key=lambda item: item["score"], reverse=True)
+    selected: list[dict[str, Any]] = []
+    while remaining and len(selected) < limit:
+        best_index = 0
+        best_rank: tuple[float, float] | None = None
+        for index, item in enumerate(remaining):
+            same_source = [
+                chosen
+                for chosen in selected
+                if chosen["source_video"] == item["source_video"]
+            ]
+            if not selected or not same_source:
+                distance = 1.0 if selected else 0.0
+            else:
+                duration = max(
+                    1.0,
+                    float(item.get("_source_duration", 0.0) or 0.0),
+                )
+                midpoint = float(item["start"] + item["end"]) / 2
+                distance = min(
+                    1.0,
+                    min(
+                        abs(midpoint - float(chosen["start"] + chosen["end"]) / 2)
+                        / duration
+                        for chosen in same_source
+                    ),
+                )
+            rank = (float(item["score"]) + 0.02 * distance, float(item["score"]))
+            if best_rank is None or rank > best_rank:
+                best_rank = rank
+                best_index = index
+        selected.append(remaining.pop(best_index))
+    return selected
+
+
 @tool
 def recall_semantic_segments(
     query: str,
@@ -46,12 +85,22 @@ def recall_semantic_segments(
             source_name = Path(source_video).name.lower()
             if filters and not any(f in source_name for f in filters):
                 continue
+            try:
+                source_duration = float(data.get("source_duration_seconds", 0.0) or 0.0)
+            except (TypeError, ValueError):
+                source_duration = 0.0
 
             semantic_segments = data.get("semantic_segments", [])
             if not isinstance(semantic_segments, list) or not semantic_segments:
                 semantic_segments = _extract_semantic_segments_from_analysis(str(data.get("analysis_text", "")))
 
             semantic_segments, _ = _ensure_analysis_semantic_index(fp, data)
+            if source_duration <= 0 and semantic_segments:
+                source_duration = max(
+                    float(segment.get("end", 0.0) or 0.0)
+                    for segment in semantic_segments
+                    if isinstance(segment, dict)
+                )
 
             if not semantic_segments:
                 for seg in data.get("segments", []) if isinstance(data.get("segments", []), list) else []:
@@ -97,6 +146,7 @@ def recall_semantic_segments(
                     "end": round(end, 2),
                     "duration": duration,
                     "semantic_text": semantic_text,
+                    "_source_duration": source_duration,
                 })
 
         if not candidates:
@@ -107,12 +157,12 @@ def recall_semantic_segments(
                 "results": [],
             }, ensure_ascii=False)
 
-        candidates.sort(key=lambda x: x["score"], reverse=True)
         k = max(1, int(top_k))
-        selected = candidates[:k]
+        selected = _select_temporally_diverse(candidates, k)
 
         results: list[dict[str, Any]] = []
         for i, item in enumerate(selected, start=1):
+            item = {key: value for key, value in item.items() if not key.startswith("_")}
             results.append({
                 "rank": i,
                 **item,

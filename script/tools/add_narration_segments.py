@@ -13,6 +13,7 @@ from ._shared import (
     logger,
     tool,
 )
+from .subtitle_layout import create_subtitle_clip
 
 def _resolve_subtitle_font_path(custom_font: str | None = None) -> str | None:
     """解析可用字幕字体路径，优先使用用户传入字体。"""
@@ -49,45 +50,6 @@ def _resolve_subtitle_font_path(custom_font: str | None = None) -> str | None:
         except Exception:
             continue
     return None
-
-
-def _wrap_subtitle_text_by_pixels(
-    text: str,
-    font_path: str,
-    font_size: int,
-    max_width_px: int,
-) -> str:
-    """按像素宽度换行，避免固定字符数换行导致的越界与截断。"""
-    try:
-        from PIL import ImageFont
-
-        font = ImageFont.truetype(font_path, size=max(1, int(font_size)))
-        lines: list[str] = []
-        current = ""
-
-        for ch in text:
-            if ch == "\n":
-                if current.strip():
-                    lines.append(current.strip())
-                current = ""
-                continue
-
-            candidate = current + ch
-            bbox = font.getbbox(candidate)
-            width = max(0, bbox[2] - bbox[0])
-            if current and width > max_width_px:
-                lines.append(current.strip())
-                current = ch
-            else:
-                current = candidate
-
-        if current.strip():
-            lines.append(current.strip())
-
-        return "\n".join(lines) if lines else text
-    except Exception:
-        # Pillow 度量失败时回退到原文，避免中断主流程。
-        return text
 
 
 def _normalize_rewritten_text(raw: str) -> str:
@@ -228,7 +190,6 @@ def add_narration_segments(
         from moviepy.audio.io.AudioFileClip import AudioFileClip
         from moviepy.video.io.VideoFileClip import VideoFileClip
         from moviepy.video.compositing.CompositeVideoClip import CompositeVideoClip
-        from moviepy.video.VideoClip import TextClip
 
         resolved_video = _resolve_workspace_input_path(video_path, must_exist=True)
         if resolved_video is None:
@@ -349,67 +310,18 @@ def add_narration_segments(
             if add_subtitle and resolved_font:
                 try:
                     sub_duration = min(seg_audio.duration, max_duration)
-
-                    subtitle_box_w = max(320, int(video.size[0] - 120))
-                    max_subtitle_h = max(120, int(video.size[1] * 0.35))
-                    bottom_safe_margin = max(40, int(video.size[1] * 0.06))
-                    # 某些字体在 TextClip 渲染时会出现基线裁切，额外留出底部安全垫。
-                    baseline_safe_lift = max(8, int(video.size[1] * 0.01))
-
-                    text_clip_obj = None
-                    # 字号自适应: 优先大字号，放不下时逐步减小，保证不出画。
-                    for fs in (44, 42, 40, 38, 36, 34, 32, 30, 28):
-                        display_text = _wrap_subtitle_text_by_pixels(
+                    text_clip_obj, y_pos, fs, bottom_safe_margin, baseline_safe_lift = (
+                        create_subtitle_clip(
                             text=final_text,
                             font_path=resolved_font,
-                            font_size=fs,
-                            max_width_px=subtitle_box_w,
-                        )
-                        # 追加一行轻量留白，避免下沿字形被裁切。
-                        render_text = f"{display_text}\n "
-
-                        candidate = TextClip(
-                            text=render_text,
-                            font_size=fs,
-                            color="white",
-                            stroke_color="black",
-                            stroke_width=2,
-                            font=resolved_font,
-                            text_align="center",
-                            size=(subtitle_box_w, None),
+                            video_size=video.size,
                             duration=sub_duration,
                         )
-
-                        if candidate.h <= max_subtitle_h:
-                            text_clip_obj = candidate
-                            break
-                        candidate.close()
-
-                    if text_clip_obj is None:
-                        display_text = _wrap_subtitle_text_by_pixels(
-                            text=final_text,
-                            font_path=resolved_font,
-                            font_size=28,
-                            max_width_px=subtitle_box_w,
-                        )
-                        render_text = f"{display_text}\n "
-                        text_clip_obj = TextClip(
-                            text=render_text,
-                            font_size=28,
-                            color="white",
-                            stroke_color="black",
-                            stroke_width=2,
-                            font=resolved_font,
-                            text_align="center",
-                            size=(subtitle_box_w, max_subtitle_h),
-                            duration=sub_duration,
-                        )
-
-                    y_pos = max(20, int(video.size[1] - bottom_safe_margin - text_clip_obj.h - baseline_safe_lift))
+                    )
                     logger.info(
                         "字幕布局: 段=%d, font=%s, clip_h=%d, y=%d, video_h=%d, safe_margin=%d, baseline_lift=%d",
                         idx + 1,
-                        Path(resolved_font).name,
+                        f"{Path(resolved_font).name}@{fs}",
                         int(text_clip_obj.h),
                         int(y_pos),
                         int(video.size[1]),

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 from pathlib import Path
 import threading
 from typing import Any, Callable
@@ -242,7 +243,8 @@ _ANALYSIS_PROMPT_OMNI = (
     "{goal_line}"
     "注意：视频左上角有时间戳（格式 t=XXs），请严格基于该时间戳描述内容。\n"
     "要求你必须覆盖整段视频，不允许只挑选个别片段。\n"
-    "请按时间线连续输出'全片分段分析'，从开头到结尾无断档，建议每段 5~15 秒或按自然镜头边界分段。\n"
+    "请按时间线连续输出'全片分段分析'，从开头到结尾无断档。\n"
+    "{segment_guidance}"
     "每个时间段都要给出：\n"
     "- 时间范围（如 t=xxs-t=xxs）\n"
     "- 画面发生了什么（人物/动作/场景变化）\n"
@@ -261,7 +263,8 @@ _ANALYSIS_PROMPT_VISION = (
     "{goal_line}"
     "注意：视频左上角有时间戳（格式 t=XXs），请严格基于该时间戳描述内容。\n"
     "要求你必须覆盖整段视频，不允许只挑选个别片段。\n"
-    "请按时间线连续输出'全片分段分析'，从开头到结尾无断档，建议每段 5~15 秒或按自然镜头边界分段。\n"
+    "请按时间线连续输出'全片分段分析'，从开头到结尾无断档。\n"
+    "{segment_guidance}"
     "每个时间段都要给出：\n"
     "- 时间范围（如 t=xxs-t=xxs）\n"
     "- 画面发生了什么（人物/动作/场景变化）\n"
@@ -275,6 +278,18 @@ _ANALYSIS_PROMPT_VISION = (
     "3) 解说词写作建议（按段落对应时间范围）\n"
     "如果无法识别某部分信息，请明确标注'无法识别'并说明原因。"
 )
+
+
+def _analysis_segment_guidance(source_duration: float) -> str:
+    if source_duration <= 180:
+        return "建议每段 5~15 秒或按自然镜头边界分段。\n"
+    segment_seconds = max(10, int(math.ceil(source_duration / 36 / 5) * 5))
+    return (
+        "这是长视频：请将全片均匀划分为 24~36 个时间段，"
+        f"建议每段约 {segment_seconds} 秒或按自然章节边界分段；"
+        "第一段必须从开头附近开始，最后一段必须覆盖视频结尾附近，"
+        "中间各时间区域都必须出现，不能把输出额度集中在开头。\n"
+    )
 
 
 @tool
@@ -337,11 +352,25 @@ def analyze_video(
         # 仅 Omni 模型才提取音频
         audio_path = _extract_audio_for_analysis(resolved_video) if is_omni else None
 
-        goal_line = f"分析目标: {analysis_goal}\n"
+        source_duration = _shared._get_source_duration_seconds(resolved_video)
+        duration_constraint = (
+            f"源视频经本地探测的真实时长为 {source_duration:.3f} 秒；"
+            f"所有时间范围必须位于 0 到 {source_duration:.3f} 秒内，严禁描述 EOF 之后的内容。\n"
+            if source_duration > 0
+            else ""
+        )
+        goal_line = f"分析目标: {analysis_goal}\n{duration_constraint}"
+        segment_guidance = _analysis_segment_guidance(source_duration)
         if is_omni:
-            analysis_prompt = _ANALYSIS_PROMPT_OMNI.format(goal_line=goal_line)
+            analysis_prompt = _ANALYSIS_PROMPT_OMNI.format(
+                goal_line=goal_line,
+                segment_guidance=segment_guidance,
+            )
         else:
-            analysis_prompt = _ANALYSIS_PROMPT_VISION.format(goal_line=goal_line)
+            analysis_prompt = _ANALYSIS_PROMPT_VISION.format(
+                goal_line=goal_line,
+                segment_guidance=segment_guidance,
+            )
 
         # 使用通过 configure() 注入的 video client（避免 import 时值拷贝问题）
         use_local_media_url = _is_local_base_url(_shared.VIDEO_BASE_URL)

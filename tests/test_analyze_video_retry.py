@@ -13,6 +13,25 @@ analyze_video_module = importlib.import_module("tools.analyze_video")
 
 
 class DashScopeVideoAnalysisRetryTests(unittest.TestCase):
+    def test_long_video_prompt_requests_bounded_full_timeline(self) -> None:
+        guidance = analyze_video_module._analysis_segment_guidance(604.0)
+
+        self.assertIn("24~36", guidance)
+        self.assertIn("20 秒", guidance)
+        self.assertIn("视频结尾", guidance)
+        self.assertIn("5~15", analyze_video_module._analysis_segment_guidance(120.0))
+
+    def test_proxy_timestamp_is_drawn_after_timeline_speedup(self) -> None:
+        filters = analyze_video_module._shared._analysis_video_filters(13.4, True)
+
+        setpts_index = next(
+            index for index, value in enumerate(filters) if value.startswith("setpts=")
+        )
+        drawtext_index = next(
+            index for index, value in enumerate(filters) if value.startswith("drawtext=")
+        )
+        self.assertLess(setpts_index, drawtext_index)
+
     def test_expected_network_error_types_are_retryable(self) -> None:
         retryable_errors = [
             type("SSLError", (Exception,), {})("ssl failure"),

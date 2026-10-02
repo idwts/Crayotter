@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 import json
+import tempfile
 import unittest
+from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
 
 import script.graph as graph
@@ -77,6 +80,50 @@ class Phase3ExecutionGuardTests(unittest.TestCase):
                 "{}",
                 run_id="merge-over-limit",
             )
+
+    def test_controlled_clip_bounds_clamp_partial_eof_overlap(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            source = Path(tmp) / "source.mp4"
+            source.write_bytes(b"video")
+            plan = graph.ControlledEditPlan(
+                clips=[
+                    graph.ControlledClip(
+                        source_path=str(source),
+                        start=6.0,
+                        end=9.0,
+                    )
+                ]
+            )
+            with patch.object(
+                graph,
+                "probe_media",
+                return_value=SimpleNamespace(duration_seconds=7.45),
+            ), patch.object(graph, "_emit_orchestration_event"):
+                total = graph._normalize_controlled_clip_bounds(plan, [str(source)])
+
+            self.assertAlmostEqual(total, 1.45)
+            self.assertEqual(plan.clips[0].end, 7.45)
+
+    def test_controlled_clip_bounds_reject_start_past_eof(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            source = Path(tmp) / "source.mp4"
+            source.write_bytes(b"video")
+            plan = graph.ControlledEditPlan(
+                clips=[
+                    graph.ControlledClip(
+                        source_path=str(source),
+                        start=9.0,
+                        end=11.0,
+                    )
+                ]
+            )
+            with patch.object(
+                graph,
+                "probe_media",
+                return_value=SimpleNamespace(duration_seconds=7.45),
+            ):
+                with self.assertRaisesRegex(RuntimeError, "越过源视频 EOF"):
+                    graph._normalize_controlled_clip_bounds(plan, [str(source)])
 
 
 if __name__ == "__main__":
