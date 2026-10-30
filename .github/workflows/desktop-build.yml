@@ -2,8 +2,13 @@ name: Build desktop packages
 
 on:
   workflow_dispatch:
+    inputs:
+      publish:
+        description: Publish the version in packaging/VERSION after validation
+        type: boolean
+        default: false
   push:
-    branches: ['desktop-build-validation-*']
+    branches: ['main', 'desktop-build-validation-*']
   pull_request:
     paths:
       - '.github/workflows/desktop-build.yml'
@@ -82,6 +87,14 @@ jobs:
         if: runner.os == 'macOS'
         shell: bash
         run: CRAYOTTER_BUILD_PYTHON="$(command -v python)" packaging/build_macos.sh --skip-install
+      - name: Ensure native Windows web engine
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          # Official Evergreen bootstrapper; runner-only prerequisite for the native GUI test.
+          Invoke-WebRequest 'https://go.microsoft.com/fwlink/p/?LinkId=2124703' -OutFile "$env:RUNNER_TEMP/WebView2Setup.exe"
+          $installer = Start-Process "$env:RUNNER_TEMP/WebView2Setup.exe" -ArgumentList '/silent /install' -Wait -PassThru
+          if ($installer.ExitCode -ne 0) { throw "WebView2 setup failed: $($installer.ExitCode)" }
       - name: Verify extracted package
         run: python packaging/verify_desktop_package.py --archive "${{ matrix.archive }}" --report package-smoke.json
       - name: Upload verified package
@@ -92,6 +105,7 @@ jobs:
           if-no-files-found: error
           compression-level: 0
           retention-days: 7
+
       - name: Upload validation report
         if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
@@ -100,3 +114,43 @@ jobs:
           path: package-smoke.json
           if-no-files-found: ignore
           retention-days: 7
+
+  release:
+    name: Publish desktop release
+    needs: build
+    if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          fetch-depth: 2
+      - name: Check release version
+        id: version
+        env:
+          REQUESTED: ${{ inputs.publish || false }}
+        run: |
+          version=$(cat packaging/VERSION)
+          [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]
+          echo "value=$version" >> "$GITHUB_OUTPUT"
+          if [ "$REQUESTED" = true ] || ! git diff --quiet HEAD^ HEAD -- packaging/VERSION; then
+            echo 'publish=true' >> "$GITHUB_OUTPUT"
+          fi
+      - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
+        if: steps.version.outputs.publish == 'true'
+        with:
+          pattern: Crayotter-*
+          path: release-assets
+          merge-multiple: true
+      - name: Publish versioned packages
+        if: steps.version.outputs.publish == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ steps.version.outputs.value }}
+        run: |
+          cd release-assets
+          test -s Crayotter-Windows-x64.zip
+          test -s Crayotter-macOS-arm64.zip
+          sha256sum Crayotter-Windows-x64.zip Crayotter-macOS-arm64.zip > SHA256SUMS.txt
+          gh release create "v$VERSION" Crayotter-Windows-x64.zip Crayotter-macOS-arm64.zip SHA256SUMS.txt --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" --title "Crayotter $VERSION" --notes-file "../packaging/release_notes_$VERSION.md" --latest

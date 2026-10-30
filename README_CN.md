@@ -73,6 +73,7 @@ Crayotter 是一个多模态、Agent 驱动的视频自动编辑系统，可以�
 
 ## 近期动态
 
+- **2026.10.30** — [Crayotter 1.1.0](https://github.com/idwts/Crayotter/releases/tag/v1.1.0) 发布，支持 Windows 与 Apple Silicon Mac 桌面使用。
 - **2026.9.16** — 我们的[论文](https://arxiv.org/abs/2606.07636)已被 AACL-IJCNLP 2026 Demo Track 接收！
 - **2026.8.5** — 全新工作已公开！迈向长时序视频编辑智能体：[Crayotter: Learning Long-Horizon Video Editing Agents via Group-Relative Preference Backpropagation](https://arxiv.org/abs/2608.02694)。
 - **2026.6.27** — Crayotter 1.0.0 新增多素材源导入、统一下载清洗，并更新 Windows 发布包。
@@ -168,9 +169,9 @@ editing_research -> react_editor -> END
 | 平台 | 获取方式 | 打开方式 |
 | --- | --- | --- |
 | Windows 10/11 x64 | [Releases](https://github.com/idwts/Crayotter/releases) 中的 `Crayotter-Windows-x64.zip` | 完整解压后运行 `Crayotter.exe` |
-| macOS Apple Silicon | 云端测试构建见 [Actions](https://github.com/idwts/Crayotter/actions/workflows/desktop-build.yml)；正式包以 Releases 为准 | 解压后双击 `Crayotter.app`，也可移到“应用程序” |
+| macOS Apple Silicon | [Releases](https://github.com/idwts/Crayotter/releases/tag/v1.1.0) 中的 `Crayotter-macOS-arm64.zip` | 解压后双击 `Crayotter.app`，也可移到“应用程序” |
 
-桌面包自带 Python、FFmpeg 和下载器，无需安装 Conda。Windows 独立窗口需要 Edge WebView2，缺少时会尝试浏览器模式。当前 Mac 包声明最低 macOS 15.0，仅支持已验证的 arm64 构建；测试包尚未做 Apple 公证。
+桌面包自带 Python、FFmpeg 和下载器，无需安装 Conda。Windows 独立窗口需要 Edge WebView2，缺少时会尝试浏览器模式。当前 Mac 包声明最低 macOS 15.0，仅支持已验证的 arm64 构建；发布包尚未做 Apple 公证。
 
 ### 第一次使用
 

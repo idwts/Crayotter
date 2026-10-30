@@ -13,6 +13,20 @@ from tools.subtitle_layout import render_subtitle_image, wrap_subtitle_text
 
 
 class SubtitleLayoutTests(unittest.TestCase):
+    def test_portrait_multiline_subtitles_keep_all_pixels_inside_safe_area(self):
+        font = BUNDLE_DIR / "AlibabaPuHuiTi-3-55-Regular/AlibabaPuHuiTi-3-55-Regular.ttf"
+        image, y, _, margin, _ = render_subtitle_image(
+            text="沿着湖岸慢慢走，看看远处的山与近处的水。" * 4,
+            font_path=str(font), video_size=(720, 1280),
+        )
+        try:
+            self.assertGreater(image.getbbox()[3], 0)
+            self.assertLessEqual(image.width, 720)
+            self.assertGreaterEqual(y, 0)
+            self.assertLessEqual(y + image.height, 1280 - margin)
+        finally:
+            image.close()
+
     def test_multiline_subtitle_stays_inside_bottom_safe_area(self) -> None:
         font_path = (
             BUNDLE_DIR

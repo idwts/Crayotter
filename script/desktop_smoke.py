@@ -7,6 +7,26 @@ from pathlib import Path
 import subprocess
 import sys
 import tempfile
+import time
+
+
+def verify_gui(window, report: Path) -> None:
+    """Check the actual native web engine, then close the diagnostic window."""
+    result = {"passed": False}
+    try:
+        for _ in range(100):
+            data = window.evaluate_js("({title:document.title,body:document.body.innerText,buttons:document.querySelectorAll('button').length})")
+            if data and len(data.get("body", "")) > 100 and data.get("buttons", 0) > 0:
+                result = {"passed": True, "title": data["title"], "body_characters": len(data["body"]), "buttons": data["buttons"]}
+                break
+            time.sleep(0.2)
+        if not result["passed"]:
+            result["error"] = "The native window did not render the workbench"
+    except Exception as exc:
+        result["error"] = str(exc)
+    finally:
+        report.write_text(json.dumps(result, ensure_ascii=False, indent=2), encoding="utf-8")
+        window.destroy()
 
 
 def main() -> int:

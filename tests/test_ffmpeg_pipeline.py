@@ -123,6 +123,17 @@ class FfmpegPipelineTests(unittest.TestCase):
                 native.cut_video_native(self.silent, target, start_time=start, end_time=end)
         self.assertEqual(target.read_bytes(), b"keep me")
 
+    def test_cut_preserves_requested_tail_content(self):
+        import numpy as np
+        source, tail = self.root / "head_tail.mp4", self.root / "tail.mp4"
+        self.run_ffmpeg("-f", "lavfi", "-i", "color=c=red:s=160x90:r=10:d=2", "-f", "lavfi", "-i", "color=c=blue:s=160x90:r=10:d=2", "-filter_complex", "[0:v][1:v]concat=n=2:v=1:a=0", "-c:v", "libx264", str(source))
+        native.cut_video_native(source, tail, start_time=2.5, end_time=3.5)
+        frame = self.run_ffmpeg("-i", str(tail), "-frames:v", "1", "-f", "rawvideo", "-pix_fmt", "rgb24", "-")
+        rgb = np.frombuffer(frame, dtype=np.uint8).reshape(-1, 3).mean(axis=0)
+        self.assertGreater(rgb[2], 200)
+        self.assertLess(rgb[0], 30)
+        self.assertAlmostEqual(native.probe_video(tail).duration, 1.0, delta=0.12)
+
     def test_registered_narration_tools_use_native_rendering(self):
         from tools import TOOL_REGISTRY, _shared
         from tools.narration_pipeline import compose_prepared_narration

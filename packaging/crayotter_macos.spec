@@ -9,7 +9,7 @@ ARCH = {"aarch64": "arm64", "amd64": "x86_64"}.get(platform.machine().lower(), p
 TOOLS = f"script/dep/macos/{ARCH}"
 datas = [
     (str(ROOT / "app/frontend"), "app/frontend"),
-    (str(ROOT / "memory_experience/latest_skills.md"), "memory_experience"),
+    (str(ROOT / "packaging/runtime_defaults/memory_experience/latest_skills.md"), "memory_experience"),
     (str(ROOT / "AlibabaPuHuiTi-3-55-Regular/AlibabaPuHuiTi-3-55-Regular.ttf"), "AlibabaPuHuiTi-3-55-Regular"),
     *collect_data_files("webview", excludes=["lib/**"]),
 ]
@@ -42,7 +42,7 @@ exe = EXE(
 coll = COLLECT(exe, a.binaries, a.datas, strip=False, upx=False, name="Crayotter")
 app = BUNDLE(
     coll, name="Crayotter.app", icon=str(ROOT / "packaging/generated/Crayotter.icns"),
-    bundle_identifier="com.crayotter.desktop", version="1.0.0",
+    bundle_identifier="com.crayotter.desktop", version=(ROOT / "packaging/VERSION").read_text().strip(),
     codesign_identity=os.environ.get("CRAYOTTER_MACOS_SIGN_IDENTITY") or None,
     info_plist={
         "LSMinimumSystemVersion": "15.0",

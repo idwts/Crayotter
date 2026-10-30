@@ -4,6 +4,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import plistlib
 from pathlib import Path
 import re
 import shutil
@@ -31,6 +32,25 @@ def main() -> None:
         else:
             shutil.unpack_archive(str(args.archive.resolve()), str(root))
             executable = root / "Crayotter/Crayotter.exe"
+        expected_version = (Path(__file__).parent / "VERSION").read_text().strip()
+        if sys.platform == "darwin":
+            with (root / "Crayotter.app/Contents/Info.plist").open("rb") as stream:
+                version = plistlib.load(stream)["CFBundleShortVersionString"]
+        else:
+            import ctypes
+            version_api = ctypes.windll.version
+            size = version_api.GetFileVersionInfoSizeW(str(executable), None)
+            data = ctypes.create_string_buffer(size)
+            assert version_api.GetFileVersionInfoW(str(executable), 0, size, data)
+            pointer, length = ctypes.c_void_p(), ctypes.c_uint()
+            assert version_api.VerQueryValueW(data, "\\", ctypes.byref(pointer), ctypes.byref(length))
+            fields = ctypes.cast(pointer, ctypes.POINTER(ctypes.c_uint32))
+            version = f"{fields[4] >> 16}.{fields[4] & 65535}.{fields[5] >> 16}"
+        assert version == expected_version, (version, expected_version)
+        checks["version"] = version
+        seeds = list(root.rglob("memory_experience/latest_skills.md"))
+        assert len(seeds) == 1 and "No task experience has been saved" in seeds[0].read_text()
+        checks["clean_experience"] = True
         runtime = root / "runtime"
         env = {k: v for k, v in os.environ.items() if not k.startswith(("CRAYOTTER_", "CONDA", "PYTHON")) and "API_KEY" not in k and k not in ("FFMPEG_BIN", "FFPROBE_BIN", "DYLD_LIBRARY_PATH")}
         env["CRAYOTTER_RUNTIME_ROOT"] = str(runtime)
@@ -45,6 +65,14 @@ def main() -> None:
         worker = subprocess.run([str(executable), "--crayotter-worker", "--help"], cwd=root, env=env, capture_output=True, text=True, timeout=30)
         assert worker.returncode == 0 and "--task-file" in worker.stdout, worker.stderr
         checks["worker_entry"] = True
+        gui_report = root / "native-window.json"
+        with socket.socket() as sock:
+            sock.bind(("127.0.0.1", 0))
+            gui_port = sock.getsockname()[1]
+        gui = subprocess.run([str(executable), "--gui-test-report", str(gui_report), "--port", str(gui_port)], cwd=root, env=env, capture_output=True, text=True, timeout=120)
+        assert gui.returncode == 0 and gui_report.is_file(), f"Native window failed: {gui.stdout}\n{gui.stderr}"
+        checks["native_window"] = json.loads(gui_report.read_text(encoding="utf-8"))
+        assert checks["native_window"]["passed"], checks["native_window"]
         with socket.socket() as sock:
             sock.bind(("127.0.0.1", 0))
             port = sock.getsockname()[1]

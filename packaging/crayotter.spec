@@ -11,7 +11,7 @@ bilibili_datas, bilibili_binaries, bilibili_hiddenimports = collect_all("bilibil
 
 datas = [
     (str(ROOT / "app" / "frontend"), "app/frontend"),
-    (str(ROOT / "memory_experience/latest_skills.md"), "memory_experience"),
+    (str(ROOT / "packaging/runtime_defaults/memory_experience/latest_skills.md"), "memory_experience"),
     (
         str(ROOT / "AlibabaPuHuiTi-3-55-Regular" / "AlibabaPuHuiTi-3-55-Regular.ttf"),
         "AlibabaPuHuiTi-3-55-Regular",

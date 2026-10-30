@@ -72,7 +72,7 @@ def _run_browser_fallback(url: str, reason: str = "") -> None:
         pass
 
 
-def _run_desktop(host: str, port: int, *, headless: bool = False) -> int:
+def _run_desktop(host: str, port: int, *, headless: bool = False, gui_test_report: Path | None = None) -> int:
     port = _find_open_port(host=host, preferred=port)
     httpd = build_http_server(host=host, port=port)
     server_thread = threading.Thread(
@@ -92,20 +92,30 @@ def _run_desktop(host: str, port: int, *, headless: bool = False) -> int:
         try:
             import webview
 
-            webview.create_window(
+            window = webview.create_window(
                 "Crayotter 创作助手",
                 url,
                 width=1440,
                 height=920,
                 min_size=(1120, 760),
-                confirm_close=True,
+                confirm_close=gui_test_report is None,
             )
+            start_options = {}
+            if gui_test_report is not None:
+                from script.desktop_smoke import verify_gui
+                start_options = {"func": verify_gui, "args": (window, gui_test_report)}
             webview.start(
                 gui="cocoa" if sys.platform == "darwin" else "edgechromium" if os.name == "nt" else None,
                 debug=not is_frozen(),
                 http_server=False,
+                **start_options,
             )
+            if gui_test_report is not None:
+                import json
+                return 0 if json.loads(gui_test_report.read_text())["passed"] else 1
         except Exception as exc:
+            if gui_test_report is not None:
+                raise
             _run_browser_fallback(url, reason=str(exc))
         return 0
     finally:
@@ -125,11 +135,14 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=8765)
     parser.add_argument("--headless", action="store_true", help="Serve the workbench without opening a desktop window.")
+    parser.add_argument("--gui-test-report", type=Path, help=argparse.SUPPRESS)
     args = parser.parse_args(raw_args)
 
     runtime_root = get_runtime_root()
     print(f"Crayotter runtime root: {runtime_root}")
-    return _run_desktop(host=args.host, port=args.port, headless=args.headless)
+    if args.headless and args.gui_test_report is not None:
+        parser.error("GUI validation cannot run in headless mode")
+    return _run_desktop(host=args.host, port=args.port, headless=args.headless, gui_test_report=args.gui_test_report)
 
 
 if __name__ == "__main__":

@@ -10,6 +10,7 @@ temp/
 user_temp/
 runtime_logs/
 /logs/
+/memory_experience/
 /output/
 /benchmark_runtime/
 /cache/
