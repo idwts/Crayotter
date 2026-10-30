@@ -3,7 +3,7 @@ name: Build desktop packages
 on:
   workflow_dispatch:
   push:
-    branches: ['codex/desktop-build-validation-*']
+    branches: ['desktop-build-validation-*']
   pull_request:
     paths:
       - '.github/workflows/desktop-build.yml'
