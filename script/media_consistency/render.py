@@ -8,6 +8,8 @@ from typing import Callable
 from .probe import MediaProbe, probe_media
 from .profile import MediaProfile
 
+# AAC reconstruction can exceed the PCM true peak; reserve encoding headroom.
+AAC_PEAK_HEADROOM_DB = 0.5
 
 @dataclass(frozen=True)
 class CanonicalRenderRequest:
@@ -105,10 +107,13 @@ def build_canonical_render_command(
         else request.profile.clip_loudness_lufs
     )
     audio_input = "0:a:0" if request.probe.has_audio else "1:a:0"
+    peak_target = request.profile.true_peak_dbfs - (
+        AAC_PEAK_HEADROOM_DB if request.final_mix and request.profile.audio_codec == "aac" else 0.0
+    )
     audio_filter = (
         f"[{audio_input}]aresample={request.profile.audio_sample_rate},"
         "aformat=sample_fmts=fltp:channel_layouts=stereo,"
-        f"loudnorm=I={loudness:.1f}:TP={request.profile.true_peak_dbfs:.1f}:"
+        f"loudnorm=I={loudness:.1f}:TP={peak_target:.1f}:"
         f"LRA={request.profile.loudness_range:.1f}[aout]"
     )
     filters = _video_filter(request.profile, hdr=request.probe.is_hdr) + ";" + audio_filter

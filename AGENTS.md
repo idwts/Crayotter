@@ -110,7 +110,8 @@ Runtime paths are centralized in `app/runtime_paths.py`.
 - Source/bundle root is usually the repository root.
 - Runtime root is selected by:
   - `CRAYOTTER_RUNTIME_ROOT`, if set
-  - otherwise writable executable/source directory
+  - frozen macOS builds: `~/Library/Application Support/Crayotter` (never write into the signed `.app`)
+- otherwise writable executable/source directory
   - otherwise `%LOCALAPPDATA%\Crayotter` / `%APPDATA%\Crayotter`
   - otherwise `~/.crayotter`
 
@@ -155,6 +156,10 @@ Important env vars:
 - `CRAYOTTER_TTS_POOL_SIZE` (default `2`)
 - `CRAYOTTER_EXPORT_POOL_SIZE` (default `1`)
 
+Model defaults and per-call output ceilings are centralized in `app/model_defaults.py`.
+The tested defaults are `qwen3.8-flash` (text), `qwen3.8-omni-flash` (audio/video), and `qwen3-tts-flash` (TTS). Set the video model to `qwen3.8-flash` for visual-only analysis. Explicit configured models are preserved.
+Output limits include reasoning tokens: Phase 1/3 and video analysis default to 32768, Phase 2 to 65536, and auxiliary calls to 8192. Override with `CRAYOTTER_{PHASE1,PHASE2,PHASE3,VIDEO_ANALYSIS,AUXILIARY}_MAX_OUTPUT_TOKENS`; these are output limits, not context-window sizes. The default stall timeout is 1200 seconds to allow longer reasoning calls.
+
 The resource-pool settings are a deliberate breaking configuration change. Do not read or reintroduce:
 
 - `CRAYOTTER_PREP_MAX_CONCURRENCY`
@@ -167,6 +172,8 @@ Bundled/located binaries:
 
 - `app/runtime_paths.py` prepends candidate binary directories to `PATH`.
 - Windows bundled binaries live under `script/dep/windows`, including `ffmpeg.exe`, `ffprobe.cmd`, and `yt-dlp.exe`.
+- macOS FFmpeg/FFprobe bundles live under `script/dep/macos/arm64` and `script/dep/macos/x86_64`; runtime paths select only matching OS/CPU directories. Restore downloads with `python script/setup_ffmpeg.py` (or `--arch all`). SHA256 manifests record the pinned upstream builds.
+- `FFMPEG_BIN` and `FFPROBE_BIN` overrides take precedence; automatic resolution falls back to PATH when no matching bundle exists.
 
 ## Tool System
 
@@ -174,6 +181,11 @@ Tools live under `script/tools/`.
 
 The main tool registry is `script/tools/__init__.py`:
 
+- `TOOL_REGISTRY` is the shared registry for typed descriptions, JSON Schemas, and normalized `ToolResult` calls. New internal callers use `TOOL_REGISTRY.call(name, arguments)`.
+- `ALL_TOOLS` is its LangChain compatibility view, preserving original tool objects and legacy outputs for the existing graph and RL callers.
+- `script/run_mcp.py` exposes the same registry over standard MCP stdio. Install optional dependencies from `requirements-mcp.txt`; keep protocol stdout free of logs.
+- Video rendering uses native FFmpeg, with helpers in `script/tools/_native_ffmpeg.py`. Do not reintroduce MoviePy. Pillow may render static subtitle images; FFmpeg performs video compositing.
+- See `docs/tool_protocol_and_ffmpeg.md` for compatibility, workspace isolation, and verification details.
 - `ALL_TOOLS` is the authoritative list exposed to the main graph.
 - `PREP_TOOLS` and `EDITING_TOOLS` are selected in `script/graph.py`.
 - Some files under `script/tools/` define tools that are not currently in `ALL_TOOLS`; do not assume every `@tool` is reachable by the agent.
@@ -319,3 +331,12 @@ This is not the main app runtime. The README in `phase3_rl/README_CN.md` documen
 - Avoid committing generated videos, logs, runtime job state, or real `.env`.
 - If changing frontend behavior, verify both `app/frontend` workbench and backend API expectations.
 - If changing runtime paths, consider frozen/desktop mode and `CRAYOTTER_RUNTIME_ROOT`.
+
+## macOS Packaging
+
+- `packaging/build_macos.sh` builds a native app and ZIP using `packaging/crayotter_macos.spec`.
+- Use `CRAYOTTER_BUILD_PYTHON` to choose Python; `--skip-install` reuses installed dependencies.
+- The macOS UI uses Cocoa. Ship only the current CPU architecture's FFmpeg/FFprobe and the checksum-pinned standalone macOS yt-dlp.
+- Do not bundle `.env`, uploads, task state or test outputs. Keep the existing Windows spec and build script separate.
+- `Crayotter.app/Contents/MacOS/Crayotter --crayotter-self-test` validates graph/tool imports and the offline media chain; use an isolated `CRAYOTTER_RUNTIME_ROOT` for validation.
+- The current dependency build requires macOS 15.0. The tested output is arm64, locally ad-hoc signed, and not notarized.

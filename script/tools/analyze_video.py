@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from app.model_defaults import output_tokens
+
 import math
 from pathlib import Path
 import threading
@@ -444,6 +446,7 @@ def analyze_video(
                         response = _call_dashscope_with_retry(
                             lambda: dashscope.MultiModalConversation.call(
                                 model=model_name,
+                                max_tokens=output_tokens("video_analysis"),
                                 messages=[
                                     {
                                         "role": "user",
@@ -616,7 +619,7 @@ def analyze_video(
                     response = client.chat.completions.create(
                         model=_shared.VIDEO_MODEL_NAME,
                         messages=[{"role": "user", "content": content}],
-                        max_tokens=40960,
+                        max_completion_tokens=output_tokens("video_analysis"),
                         temperature=0.2,
                     )
                     analysis = _extract_chat_content(response)

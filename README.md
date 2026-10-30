@@ -33,344 +33,71 @@
   If Crayotter helps your research or demos, please consider giving the repo a Star on GitHub.
 </p>
 
-Crayotter is a multimodal, agent-driven video editing system that turns a single text request into a complete edited video. It combines **planning**, **deep editing research**, and **tool-based execution** into a three-phase workflow, with full logs and visual trace analysis for debugging and iteration.
+Crayotter turns a plain-language editing request into a video. Upload your footage or ask it to find material online, then let it select shots, edit, add narration and subtitles, and export.
 
----
+> “Make a 30-second travel video from my uploads: landscape, calm style, with Chinese narration and subtitles.”
 
-## 📽️ Demo
+[Watch the demo](https://idwts.github.io/Crayotter/#demo) · [Download](https://github.com/idwts/Crayotter/releases) · [Report an issue](https://github.com/idwts/Crayotter/issues)
 
-<p align="center">
-  <a href="https://idwts.github.io/Crayotter/#demo">
-    <img src="./demo/showcase-poster.jpg" alt="Crayotter demo video preview" width="100%" />
-  </a>
-</p>
+## What you can make
 
-<p align="center">
-  <a href="https://idwts.github.io/Crayotter/#demo">Watch the operation demo online</a>
-</p>
+- Travel, campus, and event videos using local uploads or online material.
+- Edits with your chosen duration, orientation, and style, including transitions, narration, and Chinese subtitles.
+- Review progress, preview exports, revisit task history, and resume interrupted work from valid checkpoints.
 
-A full end-to-end run: from a one-line text request, Crayotter prepares materials, researches an editing blueprint, and produces the final edited video. The online player also includes three finished case videos.
+Crayotter is intended for creators who review the result before publishing. Online sourcing depends on platform access; some platforms require browser sign-in. Models can misread footage, so check the narration and shots.
 
----
+## Install and open
 
-## Table of Contents
+| Platform | Where to get it | How to open |
+| --- | --- | --- |
+| Windows 10/11 x64 | `Crayotter-Windows-x64.zip` in [Releases](https://github.com/idwts/Crayotter/releases) | Extract the complete archive and run `Crayotter.exe` |
+| macOS Apple Silicon | Test builds in [Actions](https://github.com/idwts/Crayotter/actions/workflows/desktop-build.yml); check Releases for published packages | Unzip and open `Crayotter.app`, or move it to Applications |
 
-- [News](#news)
-- [Highlights](#highlights)
-- [Overview](#overview)
-- [Workflow](#workflow)
-- [Quick Start](#quick-start)
-  - [Windows Standalone Release](#windows-standalone-release)
-  - [Prerequisites](#prerequisites)
-  - [1) Environment](#1-environment)
-  - [2) Install Dependencies](#2-install-dependencies)
-  - [3) Configure API Endpoints and Runtime Options](#3-configure-api-endpoints-and-runtime-options)
-  - [4) Run the Agent](#4-run-the-agent)
-  - [5) Run the Workbench GUI](#5-run-the-workbench-gui)
-- [Log Trace Visualization](#log-trace-visualization)
-- [Citation](#citation)
-- [Repository Layout](#repository-layout)
+Desktop packages include Python, FFmpeg, and the downloader. Conda is not required. The Windows native window uses Edge WebView2; browser mode is attempted if unavailable. The current Mac package declares macOS 15.0 or newer and targets arm64; test packages are not Apple-notarized.
 
----
+## Your first video
 
-## News
+1. **Set up models:** open Settings and enter your API key, endpoint, and models. Provider charges apply; Crayotter does not include API credit.
+2. **Choose material:** upload local videos, describe a subject for online sourcing, or provide video links.
+3. **Describe the edit:** include duration, style, orientation, narration, and subtitle preferences, then start the task.
+4. **Review the result:** preview and save the final video from the task details, checking the narration, subtitles, and footage.
 
-- **2026.8.5** — Our new work is now available! Towards long-horizon video editing agents: [Crayotter: Learning Long-Horizon Video Editing Agents via Group-Relative Preference Backpropagation](https://arxiv.org/abs/2608.02694)。
-- **2026.6.27** — Crayotter 1.0.0 adds multi-source material import, unified download cleanup, and refreshed Windows release packaging.
-- **2026.6.15** — Asynchronous scheduling upgrade accelerated the overall video generation workflow by ~1.6×.
-- **2026.5.31** — Our paper is now available: [Crayotter: Traceable Multi-Agent Workflows for Long-Form Video Editing](https://arxiv.org/abs/2606.07636).
-- **2026.5.23** — 100 Stars achieved!
-- **2026.5.11** — The paper page is now live at [Crayotter Paper Page](https://idwts.github.io/Crayotter/paper/).
-- **2026.4.10** — The release has been updated.
-- **2026.3.30** — First release version available. See [v0.1.0-demo](https://github.com/idwts/Crayotter/releases/tag/v0.1.0-demo).
+Defaults are `qwen3.8-flash` for planning/editing, `qwen3.8-omni-flash` for audio/video analysis, and `qwen3-tts-flash` for speech. For visual-only analysis, set the video model to `qwen3.8-flash`. Explicit model settings are preserved.
 
----
+Sourcing, video analysis, and model reasoning take time. Runtime depends on footage length and provider response. A 30-second task is a useful first run.
 
-## Highlights
+## Common questions
 
-- **One request to one video** — A single natural-language prompt drives the whole pipeline from sourcing to export.
-- **Three-phase, traceable workflow** — Explicit planning, pure-reasoning editing research, and controlled tool execution, all logged for replay.
-- **Multimodal material understanding** — Each source video is analyzed by a multimodal model to inform narrative and pacing.
-- **Resource-aware DAG scheduling** — Bounded concurrency for search, download, analysis, LLM, FFmpeg, TTS, and export, with retries, conflict keys, and checkpoint/resume.
-- **Multi-source material import** — Bilibili, Douyin, Xiaohongshu/Rednote, Kuaishou, YouTube, or generic URLs (via `yt-dlp`).
-- **Built-in narration, subtitles, and audio mixing** — Segmented TTS, loudness normalization, background-ducking, and subtitle burn-in.
-- **Local workbench + desktop mode** — Web UI for task management, `.env`-synced config, structured logs, artifact preview, and interrupted-job resume.
-- **Visual trace analysis** — Local server + static HTML export for inspecting phase progress and tool-call trajectories.
+**Where is the result?**
+Open the task details in the workbench. Mac runtime data defaults to `~/Library/Application Support/Crayotter`; Windows uses the writable program directory or the user application-data directory.
 
----
+**Why did sourcing fail?**
+Check platform access. For platforms requiring login, authorize through your local browser and retry, or upload your own footage.
 
-## Overview
+**Why did the model or narration fail?**
+Check the API key, endpoint, model availability, and account balance. Text, video, and speech providers can be configured separately.
 
-<p align="center">
-  <img src="./crayottor_framework.jpg" alt="Crayotter framework overview">
-</p>
+**Can I resume?**
+The workbench can resume jobs marked interrupted. A failed job is different and is not guaranteed to resume in place.
 
-This repository centers around four core components:
+## Run from source
 
-- **`script/agent.py`** — Main entrypoint. Initializes runtime, runs tasks (interactive or single request), performs workspace cleanup, and writes logs/experience memory.
-- **`script/graph.py`** — Orchestration layer (LangGraph `StateGraph`). Defines the three-phase workflow and routing.
-- **`script/tools/`** — Modular toolset for search, download, analysis, cutting, transitions, narration, subtitles, and export.
-- **`script/visualize.py`** — Log parser + local trace server for inspecting phase progress and tool calls.
-
-Supporting folders:
-
-- **`temp/`** — Intermediate and output artifacts during execution.
-- **`user_temp/`** — User-provided local source assets.
-- **`logs/`** — Runtime logs (`video_agent_*.log`).
-- **`memory_experience/`** — Concise historical-case notes kept for reference only; they must not override the current task goal.
-- **`website/`** — Static launch site and GitHub Pages assets.
-
----
-
-## Workflow
-
-Crayotter uses a three-phase architecture:
-
-```text
-START -> planner -> phase1_scheduler -> material_gap_evaluator
-material_gap_evaluator -> planner (supplement) | editing_research | react_editor
-editing_research -> react_editor -> END
-```
-
-1. **Phase 1 — Material Preparation (Planner + Executor)**
-   - Planner emits an explicit dependency DAG.
-   - A deterministic scheduler validates dependencies, resource pools, retries, and write conflicts.
-   - Search, per-video download, and per-video analysis tasks execute concurrently when resources are available.
-   - A Material Gap Evaluator decides whether to proceed or run an incremental sourcing round (at most two supplement rounds, reusing already-successful tasks).
-   - Search candidate videos through the platform-agnostic material-source layer.
-   - Import user-provided URLs from Bilibili, Douyin, Xiaohongshu/Rednote, Kuaishou, YouTube, or generic URLs when supported by `yt-dlp`.
-   - Rank/select high-quality candidates (target orientation is a scoring factor: landscape by default, portrait when requested).
-   - Download selected videos and standardize them into editing-compatible MP4/H.264/AAC assets.
-   - Analyze each source video multimodally.
-
-2. **Phase 2 — Editing Research**
-   - Research source analyses concurrently.
-   - Build narrative, visual, pacing, and narration strategies concurrently.
-   - Integrate them into one structured editing blueprint (JSON + compatibility Markdown).
-   - No editing tools are called in this phase — it is pure reasoning.
-
-   This phase can be disabled with `CRAYOTTER_ENABLE_PHASE2_RESEARCH=false` in the runtime `.env` to save tokens. When disabled, the workflow becomes: Phase 1 → Phase 3.
-
-3. **Phase 3 — ReAct Editing Execution**
-   - Prefer a controlled editing DAG with parallel clip cutting and segmented TTS.
-   - Keep timeline merge, mixing, subtitles, quality evaluation, and export serial.
-   - Fall back to the existing ReAct editor when structured planning or validation fails.
-   - Log full tool-call trajectory for later trace visualization.
-
----
-
-## Quick Start
-
-### Windows Standalone Release
-
-Windows 10/11 x64 users can download `Crayotter-Windows-x64.zip` from the release page:
-
-1. Extract the complete archive.
-2. Double-click `Crayotter.exe`.
-3. Enter the API key and model settings in the workbench.
-
-The release includes Python, FFmpeg, and yt-dlp, so users do not need to install Python. It opens in a native desktop window when Microsoft Edge WebView2 is available and falls back to the default browser otherwise.
-
-Runtime data is stored next to the executable when that directory is writable, or under `%LOCALAPPDATA%\Crayotter` otherwise. The release never includes `.env`, API keys, uploaded media, logs, or generated videos.
-
-To build the Windows x64 release with Python 3.12:
-
-```powershell
-powershell -ExecutionPolicy Bypass -File packaging\build_windows.ps1
-```
-
-The build produces:
-
-- `dist/Crayotter/`
-- `Crayotter-Windows-x64.zip`
-
-### Prerequisites
-
-Ensure `ffmpeg` is reachable from your `PATH` so it can be called directly in a terminal. Download it from <https://ffmpeg.org/download.html> and verify with `ffmpeg -version`. On Windows, the bundled binaries under `script/dep/windows` (`ffmpeg.exe`, `ffprobe.cmd`, `yt-dlp.exe`) are also prepended to `PATH` automatically.
-
-### 1) Environment
-
-Use Python 3.10+.
+Use Python 3.10+ and FFmpeg/FFprobe. Runtime paths select matching bundled tools when available; on Mac, `python script/setup_ffmpeg.py` can fetch missing binaries.
 
 ```bash
-python -m venv .venv
-.venv\Scripts\activate
+python -m pip install -r requirements.txt
+python script/run_backend.py --host 127.0.0.1 --port 8765
 ```
 
-### 2) Install Dependencies
+Open `http://127.0.0.1:8765/ui/` and configure your API in Settings. For a native window, also install `requirements-desktop.txt` and run `python script/run_desktop.py`.
 
-```bash
-pip install -r requirements.txt
-```
+## Development and research
 
-To enable browser-rendered Douyin/Xiaohongshu extraction and user-authorized
-retry, install the optional browser dependencies instead:
+- [Source setup, configuration, and traces](docs/development.md)
+- [Architecture](docs/architecture_cn.md)
+- [Tool protocol, MCP, and FFmpeg](docs/tool_protocol_and_ffmpeg.md)
+- [Windows build](packaging/build_windows.ps1) / [macOS build and signing](packaging/README_MACOS_CN.md)
+- [Papers and citation](docs/citation.md); [experimental RL training](phase3_rl/README.md) is separate from everyday editing.
 
-```bash
-pip install -r requirements-browser.txt
-```
-
-This mode reuses a local Chrome/Edge installation and does not automate or
-bypass CAPTCHAs. Authorization state is temporary and job-scoped.
-
-### 3) Configure API Endpoints and Runtime Options
-
-Copy `.env.example` to `.env`, then edit the values there:
-
-```bash
-copy .env.example .env
-```
-
-Common options:
-
-```env
-CRAYOTTER_API_KEY=your-key
-CRAYOTTER_BASE_URL=https://dashscope.aliyuncs.com/compatible-mode/v1
-CRAYOTTER_MODEL_NAME=qwen-plus
-CRAYOTTER_VIDEO_MODEL_NAME=qwen-vl-max-latest
-CRAYOTTER_TTS_MODEL_NAME=qwen-tts-latest
-
-CRAYOTTER_ENABLE_PHASE2_RESEARCH=true
-CRAYOTTER_ENABLE_PLAN_REVIEW=true
-CRAYOTTER_DIRECT_PHASE3_EXECUTION=false
-CRAYOTTER_PREFER_LOCAL_MATERIALS=false
-CRAYOTTER_SEARCH_POOL_SIZE=4
-CRAYOTTER_DOWNLOAD_POOL_SIZE=2
-CRAYOTTER_VIDEO_ANALYSIS_POOL_SIZE=2
-CRAYOTTER_LLM_POOL_SIZE=2
-CRAYOTTER_FFMPEG_POOL_SIZE=2
-CRAYOTTER_TTS_POOL_SIZE=2
-CRAYOTTER_EXPORT_POOL_SIZE=1
-CRAYOTTER_STANDARDIZE_TARGET_FPS=30
-CRAYOTTER_AUDIO_LOUDNORM_TARGET=0
-CRAYOTTER_AGENT_STALL_TIMEOUT_SECONDS=150
-```
-
-Notes:
-
-- `CRAYOTTER_DIRECT_PHASE3_EXECUTION=true` skips material search/download and goes straight into the existing-material analysis + Phase 3 execution path.
-- `CRAYOTTER_ENABLE_PLAN_REVIEW=true` generates a visual EditingPlan before editing and waits for user approval or natural-language revisions before Phase 3.
-- `CRAYOTTER_PREFER_LOCAL_MATERIALS=true` analyzes local materials first and only searches online when the current materials are not enough.
-- Resource-pool variables bound search, download, video analysis, LLM, FFmpeg, TTS, and final export work.
-- Material downloads are routed through `download_material_video`; Bilibili remains the default keyword-search source, while supported third-party URLs can be imported and cleaned through the same pipeline.
-- `CRAYOTTER_STANDARDIZE_TARGET_FPS` controls download cleanup frame rate. `CRAYOTTER_AUDIO_LOUDNORM_TARGET=0` disables loudness normalization; set a negative LUFS value such as `-16` to enable two-pass EBU R128 loudnorm.
-- `CRAYOTTER_AGENT_STALL_TIMEOUT_SECONDS` controls the “no new progress” watchdog threshold for running jobs.
-- The workbench UI writes API settings, Phase 2, direct Phase 3, local-first mode, and timeout changes back to the same `.env`.
-- Candidate ranking treats target orientation as a scoring factor: landscape by default, portrait when the user explicitly asks for it. Merge/export use scale-to-cover plus centered crop instead of direct stretching.
-- For videos under `user_temp`, Crayotter writes the matching `*_analysis.json` back into `user_temp`, reuses it on later runs, and removes the paired JSON when that upload is deleted from the workbench.
-- `memory_experience/latest_skills.md` is automatically compacted into bounded, reference-only case notes so it does not grow indefinitely or redefine future task goals.
-
-> Security note: never commit real API keys to version control.
-
-### 4) Run the Agent
-
-Interactive mode:
-
-```bash
-python script\agent.py
-```
-
-Single task mode:
-
-```bash
-python script\agent.py "Create a 1-minute campus-themed promo video"
-```
-
-### 5) Run the Workbench GUI
-
-Desktop mode starts the backend and opens the standalone window:
-
-```bash
-python script\run_desktop.py
-```
-
-Alternatively, start only the local backend service:
-
-```bash
-python script\run_backend.py --host 127.0.0.1 --port 8765
-```
-
-Then open the local workbench in your browser:
-
-```text
-http://127.0.0.1:8765/ui/
-```
-
-> The GUI uses the runtime-root `.env` as the only configuration source of truth. Do not commit real `.env` values.
-
----
-
-## Log Trace Visualization
-
-Launch trace UI using the latest log:
-
-```bash
-python script\visualize.py
-```
-
-Use a specific log:
-
-```bash
-python script\visualize.py logs\video_agent_20260321_045836.log
-```
-
-Custom port:
-
-```bash
-python script\visualize.py --port 8080
-```
-
-`script\visualize.py` also exports a static trace HTML file next to the input log (e.g., `*_trace.html`).
-
----
-
-## Citation
-
-If you find Crayotter useful for your research or work, please cite:
-
-```bibtex
-@misc{yan2026crayottertraceablemultiagentworkflows,
-      title={Crayotter: Traceable Multi-Agent Workflows for Long-Form Video Editing}, 
-      author={Lecheng Yan and Yichong Zhang and Xiantao Xu and Jianze Lin and Ben Pan and Xiaoyu Zheng and Jiawei Qian and Anqi Wu and Jiahui Geng and Ruizhe Li and Fengyu Cai and Jingcheng Niu and Raymond Li and Wenxi Li and Chenyang Lyu},
-      year={2026},
-      eprint={2606.07636},
-      archivePrefix={arXiv},
-      primaryClass={cs.CV},
-      url={https://arxiv.org/abs/2606.07636}, 
-}
-
-@misc{yan2026crayotterlearninglonghorizonvideo,
-      title={Crayotter: Learning Long-Horizon Video Editing Agents via Group-Relative Preference Backpropagation}, 
-      author={Lecheng Yan and Jianze Lin and Yichong Zhang and Ben Pan and Wenxi Li and Chenyang Lyu and Liting Zhou and Cathal Gurrin},
-      year={2026},
-      eprint={2608.02694},
-      archivePrefix={arXiv},
-      primaryClass={cs.CL},
-      url={https://arxiv.org/abs/2608.02694}, 
-}
-```
-
----
-
-## Repository Layout
-
-```text
-Crayotter/
-├─ script/
-│  ├─ agent.py
-│  ├─ graph.py
-│  ├─ visualize.py
-│  └─ tools/
-├─ app/                # backend server, frontend, runtime paths
-├─ packaging/          # Windows release build scripts
-├─ phase3_rl/          # experimental RL smoke pipeline (not the main runtime)
-├─ demo/               # showcase media
-├─ logs/
-├─ temp/
-├─ user_temp/
-├─ memory_experience/
-├─ website/            # static site + GitHub Pages assets
-├─ logo.png
-├─ crayottor_framework.jpg
-└─ requirements.txt
-```
+Licensed under [PolyForm Noncommercial 1.0.0](LICENSE). Check the terms before commercial use.

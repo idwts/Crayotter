@@ -37,7 +37,7 @@ export function getComposerMode(selectedJob) {
 }
 
 export function buildConfigPayload(configForm) {
-  const stallTimeout = Math.max(10, Number(configForm?.stallTimeout || 150));
+  const stallTimeout = Math.max(10, Number(configForm?.stallTimeout || 1200));
   return {
     active_profile: "default",
     profiles: {

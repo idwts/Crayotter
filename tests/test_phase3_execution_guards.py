@@ -5,7 +5,7 @@ import tempfile
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import script.graph as graph
 
@@ -21,6 +21,24 @@ class FakeTool:
 
 
 class Phase3ExecutionGuardTests(unittest.TestCase):
+    def test_planner_rejects_duration_lost_to_transition_overlap(self) -> None:
+        # Regression: ten 3s cuts become 27.3s after nine 0.3s overlaps.
+        response = SimpleNamespace(content=json.dumps({
+            "clips": [{"source_path": "/source.mp4", "start": 0, "end": 3} for _ in range(10)]
+        }))
+        scheduler = SimpleNamespace(run=lambda plan, execute, **kwargs: execute(plan.tasks[0], {}))
+        with (
+            patch.object(graph, "_artifact_registry"),
+            patch.object(graph, "_resource_scheduler", return_value=scheduler),
+            patch.object(graph, "_iter_source_videos", return_value=[Path("/source.mp4")]),
+            patch.object(graph, "_build_full_analysis_context", return_value=""),
+            patch.object(graph, "_get_llm", return_value=MagicMock()),
+            patch.object(graph, "_invoke_llm", return_value=response),
+            patch.object(graph, "_normalize_controlled_clip_bounds", return_value=30.0),
+        ):
+            with self.assertRaisesRegex(RuntimeError, "计划预计成片时长偏差过大"):
+                graph._build_controlled_edit_plan(graph.AgentState(user_request="30秒测试", target_duration_seconds=30))
+
     def test_transition_failure_falls_back_to_plain_merge(self) -> None:
         transition_planner = FakeTool(
             json.dumps(

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from app.model_defaults import DEFAULT_AGENT_STALL_TIMEOUT_SECONDS, DEFAULT_MODEL_NAME, DEFAULT_VIDEO_MODEL_NAME, DEFAULT_TTS_MODEL_NAME
+
 from datetime import datetime, timezone
 from typing import Any, Literal
 
@@ -17,13 +19,13 @@ class ServiceProfile(BaseModel):
     name: str = "default"
     api_key: str = ""
     base_url: str = "https://dashscope.aliyuncs.com/compatible-mode/v1"
-    model_name: str = "qwen-plus"
+    model_name: str = DEFAULT_MODEL_NAME
     video_api_key: str = ""
     video_base_url: str = ""
-    video_model_name: str = "qwen-vl-max-latest"
+    video_model_name: str = DEFAULT_VIDEO_MODEL_NAME
     tts_api_key: str = ""
     tts_base_url: str = ""
-    tts_model_name: str = "qwen-tts-latest"
+    tts_model_name: str = DEFAULT_TTS_MODEL_NAME
 
     def to_runtime_config(self) -> dict[str, str]:
         return {
@@ -64,7 +66,7 @@ class AppConfig(BaseModel):
     standardize_target_fps: int = Field(default=30, ge=1, le=120)
     audio_loudnorm_target: float = Field(default=0.0, ge=-70.0, le=0.0)
     post_task_review_mode: Literal["async", "sync", "off"] = "async"
-    agent_stall_timeout_seconds: int = Field(default=150, ge=10)
+    agent_stall_timeout_seconds: int = Field(default=DEFAULT_AGENT_STALL_TIMEOUT_SECONDS, ge=10)
     youtube_mode: Literal["auto", "on", "off"] = "auto"
     default_deadline_seconds: int = Field(default=600, ge=60, le=7200)
     processing_mode: Literal["auto", "speed", "quality"] = "auto"

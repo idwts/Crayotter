@@ -1,4 +1,6 @@
 from __future__ import annotations
+
+from app.model_defaults import output_tokens
 from . import _shared
 from ._shared import *
 from ._shared import (
@@ -13,43 +15,10 @@ from ._shared import (
     logger,
     tool,
 )
-from .subtitle_layout import create_subtitle_clip
+from .subtitle_layout import burn_subtitles, resolve_subtitle_font
 
-def _resolve_subtitle_font_path(custom_font: str | None = None) -> str | None:
-    """解析可用字幕字体路径，优先使用用户传入字体。"""
-    candidates: list[Path] = []
-
-    if custom_font:
-        cf = Path(custom_font)
-        if cf.is_absolute():
-            candidates.append(cf)
-        else:
-            candidates.append(BUNDLE_DIR / cf)
-            candidates.append(WORKSPACE / cf)
-
-    candidates.extend(
-        [
-            BUNDLE_DIR / "AlibabaPuHuiTi-3-55-Regular" / "AlibabaPuHuiTi-3-55-Regular.ttf",
-            Path("/usr/share/fonts/truetype/wqy/wqy-zenhei.ttc"),
-            Path("/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc"),
-            Path("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"),
-            Path("C:/Windows/Fonts/msyh.ttc"),
-            Path("C:/Windows/Fonts/simhei.ttf"),
-        ]
-    )
-
-    seen: set[str] = set()
-    for p in candidates:
-        key = str(p)
-        if key in seen:
-            continue
-        seen.add(key)
-        try:
-            if p.exists() and p.is_file():
-                return str(p)
-        except Exception:
-            continue
-    return None
+# Kept as an import alias for callers of the original helper.
+_resolve_subtitle_font_path = resolve_subtitle_font
 
 
 def _normalize_rewritten_text(raw: str) -> str:
@@ -108,7 +77,7 @@ def _rewrite_text_to_fit_duration(
                 {"role": "user", "content": text},
             ],
             temperature=0.2,
-            max_tokens=220,
+            max_completion_tokens=output_tokens("auxiliary"),
         )
         rewritten = _normalize_rewritten_text(_extract_chat_content(resp))
         if rewritten:
@@ -186,10 +155,7 @@ def add_narration_segments(
         output_name: 输出文件名（不含扩展名），默认 "narrated_segmented"。
     """
     try:
-        from moviepy.audio.AudioClip import CompositeAudioClip
-        from moviepy.audio.io.AudioFileClip import AudioFileClip
-        from moviepy.video.io.VideoFileClip import VideoFileClip
-        from moviepy.video.compositing.CompositeVideoClip import CompositeVideoClip
+        from ._native_ffmpeg import mix_narration_native, probe_video, probe_audio_duration
 
         resolved_video = _resolve_workspace_input_path(video_path, must_exist=True)
         if resolved_video is None:
@@ -199,15 +165,14 @@ def add_narration_segments(
             return "分段配音出错: segments 参数必须是非空列表"
 
         # ── 1. 加载视频 ──
-        video = VideoFileClip(str(resolved_video))
-        video_dur = video.duration
+        video_dur = probe_video(resolved_video).duration
         resolved_font = _resolve_subtitle_font_path(subtitle_font)
         if add_subtitle and not resolved_font:
             logger.warning("字幕字体未找到，将跳过字幕渲染: %s", subtitle_font)
 
         # ── 2. 逐段生成 TTS 音频 ──
-        audio_clips: list[Any] = []
-        subtitle_clips: list[Any] = []
+        audio_clips: list[tuple[Path, float, float]] = []
+        subtitle_clips: list[dict] = []
         success_count = 0
         fail_messages: list[str] = []
         target_coverage = 0.0
@@ -221,7 +186,7 @@ def add_narration_segments(
             if not text:
                 fail_messages.append(f"段 {idx+1}: text 为空，已跳过")
                 continue
-            if end <= start:
+            if start < 0 or end <= start:
                 fail_messages.append(f"段 {idx+1}: end({end}) <= start({start})，已跳过")
                 continue
             if start >= video_dur:
@@ -235,7 +200,7 @@ def add_narration_segments(
             safe_stem = _safe_output_video_path(output_name, default_stem="narrated_segmented").stem
             audio_path = WORKSPACE / f"{safe_stem}_seg{idx+1}.mp3"
             final_text = text
-            seg_audio = None
+            generated = False
             measured_dur = 0.0
 
             try:
@@ -243,15 +208,11 @@ def add_narration_segments(
                     err = _tts_generate(final_text, voice, audio_path)
                     if err:
                         fail_messages.append(f"段 {idx+1}: {err}")
+                        generated = False
                         break
 
-                    if seg_audio is not None:
-                        try:
-                            seg_audio.close()
-                        except Exception:
-                            pass
-                    seg_audio = AudioFileClip(str(audio_path))
-                    measured_dur = float(seg_audio.duration)
+                    measured_dur = probe_audio_duration(audio_path)
+                    generated = True
 
                     if measured_dur <= max_duration:
                         break
@@ -277,15 +238,14 @@ def add_narration_segments(
                             continue
                     break
 
-                if seg_audio is None:
+                if not generated:
                     continue
 
                 if measured_dur > max_duration:
                     fail_messages.append(
                         f"段 {idx+1}: 文案压缩后仍超时({measured_dur:.2f}s/{max_duration:.2f}s)，已做末尾截断。"
                     )
-                    seg_audio = seg_audio.subclipped(0, max_duration)
-                    measured_dur = float(seg_audio.duration)
+                    measured_dur = max_duration
 
                 actual_coverage += min(measured_dur, max_duration)
                 if measured_dur < max_duration * 0.75:
@@ -293,81 +253,24 @@ def add_narration_segments(
                         f"段 {idx+1}: 旁白明显短于分配时段({measured_dur:.2f}s/{max_duration:.2f}s)，建议增加文案字数或缩短该段 end。"
                     )
 
-                seg_audio = seg_audio.with_start(start)
-                audio_clips.append(seg_audio)
+                audio_clips.append((audio_path, start, end))
                 success_count += 1
             except ModelCallError:
                 raise
             except Exception as ae:
-                if seg_audio is not None:
-                    try:
-                        seg_audio.close()
-                    except Exception:
-                        pass
                 fail_messages.append(f"段 {idx+1}: 音频加载失败: {ae}")
                 continue
 
             if add_subtitle and resolved_font:
-                try:
-                    sub_duration = min(seg_audio.duration, max_duration)
-                    text_clip_obj, y_pos, fs, bottom_safe_margin, baseline_safe_lift = (
-                        create_subtitle_clip(
-                            text=final_text,
-                            font_path=resolved_font,
-                            video_size=video.size,
-                            duration=sub_duration,
-                        )
-                    )
-                    logger.info(
-                        "字幕布局: 段=%d, font=%s, clip_h=%d, y=%d, video_h=%d, safe_margin=%d, baseline_lift=%d",
-                        idx + 1,
-                        f"{Path(resolved_font).name}@{fs}",
-                        int(text_clip_obj.h),
-                        int(y_pos),
-                        int(video.size[1]),
-                        int(bottom_safe_margin),
-                        int(baseline_safe_lift),
-                    )
-                    txt_clip = text_clip_obj.with_position(("center", y_pos))
-                    txt_clip = txt_clip.with_start(start)
-                    subtitle_clips.append(txt_clip)
-                except Exception as se:
-                    logger.warning("段 %d 字幕创建失败: %s", idx+1, se)
+                subtitle_clips.append({"text": final_text, "start": start, "end": start + min(measured_dur, max_duration)})
 
         if success_count == 0:
-            video.close()
             return f"分段配音出错: 所有 {len(segments)} 段均失败。详情: {'; '.join(fail_messages)}"
 
-        # ── 3. 混合音频 ──
-        all_audio_parts: list[Any] = []
-        if video.audio is not None:
-            all_audio_parts.append(video.audio.with_volume_scaled(0.2))
-        all_audio_parts.extend(audio_clips)
-        mixed_audio = CompositeAudioClip(all_audio_parts)
-
-        # ── 4. 叠加字幕 ──
-        if subtitle_clips:
-            final_video = CompositeVideoClip([video] + subtitle_clips)
-        else:
-            final_video = video
-
-        final_video = final_video.with_audio(mixed_audio)
-
-        # ── 5. 输出 ──
         output_path = _safe_output_video_path(output_name, default_stem="narrated_segmented")
-        final_video.write_videofile(
-            str(output_path), codec="libx264", audio_codec="aac", logger=None
-        )
-
-        for ac in audio_clips:
-            ac.close()
-        for sc in subtitle_clips:
-            try:
-                sc.close()
-            except Exception:
-                pass
-        video.close()
-        final_video.close()
+        mix_narration_native(resolved_video, output_path, audio_clips)
+        if subtitle_clips:
+            burn_subtitles(output_path, output_path, subtitle_clips, resolved_font)
 
         result = {
             "status": "success",

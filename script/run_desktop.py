@@ -72,7 +72,7 @@ def _run_browser_fallback(url: str, reason: str = "") -> None:
         pass
 
 
-def _run_desktop(host: str, port: int) -> int:
+def _run_desktop(host: str, port: int, *, headless: bool = False) -> int:
     port = _find_open_port(host=host, preferred=port)
     httpd = build_http_server(host=host, port=port)
     server_thread = threading.Thread(
@@ -86,6 +86,9 @@ def _run_desktop(host: str, port: int) -> int:
     url = f"http://{host}:{port}/ui/"
 
     try:
+        if headless:
+            server_thread.join()
+            return 0
         try:
             import webview
 
@@ -98,7 +101,7 @@ def _run_desktop(host: str, port: int) -> int:
                 confirm_close=True,
             )
             webview.start(
-                gui="edgechromium",
+                gui="cocoa" if sys.platform == "darwin" else "edgechromium" if os.name == "nt" else None,
                 debug=not is_frozen(),
                 http_server=False,
             )
@@ -114,15 +117,19 @@ def main(argv: list[str] | None = None) -> int:
     raw_args = list(argv or sys.argv[1:])
     if raw_args and raw_args[0] == "--crayotter-worker":
         return worker_main(raw_args[1:])
+    if raw_args == ["--crayotter-self-test"]:
+        from script.desktop_smoke import main as smoke_main
+        return smoke_main()
 
     parser = argparse.ArgumentParser(description="Run the Crayotter desktop workbench.")
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=8765)
+    parser.add_argument("--headless", action="store_true", help="Serve the workbench without opening a desktop window.")
     args = parser.parse_args(raw_args)
 
     runtime_root = get_runtime_root()
     print(f"Crayotter runtime root: {runtime_root}")
-    return _run_desktop(host=args.host, port=args.port)
+    return _run_desktop(host=args.host, port=args.port, headless=args.headless)
 
 
 if __name__ == "__main__":

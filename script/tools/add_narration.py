@@ -28,49 +28,22 @@ def add_narration(
             输出文件将保存为 /workspace/{output_name}.mp4。
     """
     try:
-        from moviepy.audio.AudioClip import CompositeAudioClip
-        from moviepy.audio.io.AudioFileClip import AudioFileClip
-        from moviepy.video.io.VideoFileClip import VideoFileClip
+        from ._native_ffmpeg import mix_narration_native, probe_video
 
         resolved_video = _resolve_workspace_input_path(video_path, must_exist=True)
         if resolved_video is None:
             return f"旁白添加出错: 输入视频不存在或不在WORKSPACE: {video_path}"
-        
-        client = OpenAI(base_url=TTS_BASE_URL, api_key=TTS_API_KEY)
 
-        # client = _get_openai_client()
         safe_stem = _safe_output_video_path(output_name, default_stem="narrated").stem
         audio_path = WORKSPACE / f"{safe_stem}_narration.mp3"
-        # response = client.audio.speech.create(
-        #     model="qwen3-tts-instruct-flash", voice=voice, input=narration_text
-        # )
-        # response.stream_to_file(str(audio_path))
 
         tts_error = _tts_generate(narration_text, voice, audio_path)
         if tts_error:
             return f"旁白添加出错: {tts_error}"
 
         output_path = _safe_output_video_path(output_name, default_stem="narrated")
-        video = VideoFileClip(str(resolved_video))
-        narration_audio = AudioFileClip(str(audio_path))
-
-        if narration_audio.duration > video.duration:
-            narration_audio = narration_audio.subclipped(0, video.duration)
-
-        if video.audio is not None:
-            mixed = CompositeAudioClip(
-                [video.audio.with_volume_scaled(0.2), narration_audio]
-            )
-        else:
-            mixed = narration_audio
-
-        final = video.with_audio(mixed)
-        final.write_videofile(
-            str(output_path), codec="libx264", audio_codec="aac", logger=None
-        )
-        video.close()
-        narration_audio.close()
-        final.close()
+        duration = probe_video(resolved_video).duration
+        mix_narration_native(resolved_video, output_path, [(audio_path, 0.0, duration)])
 
         return json.dumps({
             "status": "success",

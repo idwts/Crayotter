@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from script.media_consistency.render import AAC_PEAK_HEADROOM_DB
 from ._shared import Path, json, tool, run_subprocess, _resolve_workspace_input_path, _safe_output_video_path
 
 
@@ -121,7 +122,7 @@ def normalize_loudness(
         output_path = _safe_output_video_path(output_name, default_stem="loudnorm")
         af = (
             f"loudnorm=I={float(target_lufs):.1f}:"
-            f"TP={float(true_peak):.1f}:LRA={float(lra):.1f}"
+            f"TP={float(true_peak) - AAC_PEAK_HEADROOM_DB:.1f}:LRA={float(lra):.1f}"
         )
 
         cmd = [

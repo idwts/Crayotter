@@ -22,7 +22,7 @@ def cut_video(
             例如 "intro_highlight"
     """
     try:
-        from moviepy.video.io.VideoFileClip import VideoFileClip
+        from ._native_ffmpeg import cut_video_native
 
         resolved_input = _resolve_workspace_input_path(input_path, must_exist=True)
         if resolved_input is None:
@@ -32,11 +32,7 @@ def cut_video(
             output_name = f"clip_{start_time:.0f}_{end_time:.0f}"
         output_path = _safe_output_video_path(output_name, default_stem="clip")
 
-        with VideoFileClip(str(resolved_input)) as clip:
-            sub_clip = clip.subclipped(start_time, end_time)
-            sub_clip.write_videofile(
-                str(output_path), codec="libx264", audio_codec="aac", logger=None
-            )
+        cut_video_native(resolved_input, output_path, start_time=start_time, end_time=end_time)
         return json.dumps({
             "status": "success",
             "path": str(output_path),

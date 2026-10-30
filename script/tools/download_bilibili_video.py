@@ -74,7 +74,7 @@ def download_bilibili_video(
             文件将保存为 /workspace/{filename}.mp4，同时生成 /workspace/{BV号}.mp4 别名。
         prefer_h264: 是否优先下载 H.264 编码格式，默认 True（推荐保持默认）。
             True：优先选择 H.264/AVC 编码，兼容性最好；
-            False：选择效果最佳（可能是 H.265/HEVC）但可能与 moviepy 不兼容。
+            False：选择效果最佳（可能是 H.265/HEVC）剪辑时需要重新编码。
     """
     output_path = _safe_output_video_path(filename, default_stem="bilibili_video")
     

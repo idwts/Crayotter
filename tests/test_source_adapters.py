@@ -5,6 +5,7 @@ import sys
 import tempfile
 import types
 import unittest
+from unittest.mock import patch
 import urllib.error
 from pathlib import Path
 from typing import Any
@@ -247,7 +248,8 @@ class SourceAdapterTests(unittest.TestCase):
             minimum_interval_seconds=0,
         )
 
-        result = adapter.search(SearchRequest(query="校园", platform="xiaohongshu"))
+        with patch.dict("sys.modules", {"playwright.sync_api": None}):
+            result = adapter.search(SearchRequest(query="校园", platform="xiaohongshu"))
 
         self.assertEqual(result.status, AdapterStatus.ERROR)
         codes = {error.code.value for error in result.errors}

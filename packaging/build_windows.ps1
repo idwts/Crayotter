@@ -22,10 +22,13 @@ try {
 
     if (-not $SkipInstall) {
         python -m pip install -r requirements.txt -r requirements-desktop.txt
+        if ($LASTEXITCODE -ne 0) { throw "Dependency installation failed." }
     }
 
     python packaging\prepare_windows_assets.py
+    if ($LASTEXITCODE -ne 0) { throw "Asset preparation failed." }
     python -m PyInstaller --noconfirm --clean packaging\crayotter.spec
+    if ($LASTEXITCODE -ne 0) { throw "PyInstaller build failed." }
 
     if (-not (Test-Path -LiteralPath $ExePath)) {
         throw "Build completed without producing dist\Crayotter\Crayotter.exe."

@@ -46,6 +46,7 @@ SCRIPT_DIR = Path(__file__).resolve().parent
 if str(SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPT_DIR))
 
+from app.model_defaults import output_tokens
 from app.media_index import build_analysis_index, iter_analysis_files, iter_video_files, match_analysis_files
 from app.steering import SteeringCoordinator, classify_guidance
 from analysis_timeline import (
@@ -588,7 +589,7 @@ def _classify_guidance_with_llm(content: str) -> dict[str, Any]:
         "旁白、字幕和局部剪辑归 phase3。"
     )
     try:
-        response = _get_llm(temperature=0.0).bind(max_tokens=300).invoke(
+        response = _get_llm(temperature=0.0).bind(max_tokens=output_tokens("auxiliary")).invoke(
             [
                 SystemMessage(content=prompt),
                 HumanMessage(content=content),
@@ -905,7 +906,7 @@ def generate_editing_plan_node(state: AgentState) -> dict[str, Any]:
             payload["previous_error"] = last_error
         try:
             response = _invoke_llm(
-                _get_llm(temperature=0.15).bind(max_tokens=5000),
+                _get_llm(temperature=0.15).bind(max_tokens=output_tokens("phase3")),
                 [
                     SystemMessage(content=prompt),
                     HumanMessage(content=json.dumps(payload, ensure_ascii=False)),
@@ -1194,15 +1195,20 @@ def _get_llm(temperature: float = 0.2) -> ChatOpenAI:
         api_key=API_KEY,
         base_url=BASE_URL,
         max_retries=0 if fail_fast_model_errors() else 2,
+        max_tokens=output_tokens("auxiliary"),
     )
 
 
 def _invoke_llm(llm: Any, messages: list[Any], stage: str) -> Any:
     ensure_model_calls_allowed()
     started = time.perf_counter()
-    emit_benchmark_event("model_call_started", {"stage": stage, "model": MODEL_NAME})
+    token_limit = (getattr(llm, "kwargs", {}) or {}).get("max_tokens", getattr(llm, "max_tokens", None))
+    emit_benchmark_event("model_call_started", {"stage": stage, "model": MODEL_NAME, "max_output_tokens": token_limit})
     try:
         response = llm.invoke(messages)
+        metadata = getattr(response, "response_metadata", {}) or {}
+        if metadata.get("finish_reason") == "length":
+            raise RuntimeError(f"Model output reached its token limit ({token_limit}); refusing truncated output.")
         content = str(getattr(response, "content", "") or "").strip()
         duration = time.perf_counter() - started
         if not content:
@@ -1210,7 +1216,7 @@ def _invoke_llm(llm: Any, messages: list[Any], stage: str) -> Any:
                 raise_model_failure(
                     stage=stage,
                     model=MODEL_NAME,
-                    message="Model returned empty content.",
+                    message=f"Model returned empty content (finish_reason={metadata.get('finish_reason')}, output_limit={token_limit}).",
                     duration_seconds=duration,
                 )
             raise RuntimeError("Model returned empty content.")
@@ -1220,6 +1226,8 @@ def _invoke_llm(llm: Any, messages: list[Any], stage: str) -> Any:
                 "stage": stage,
                 "model": MODEL_NAME,
                 "duration_seconds": round(duration, 3),
+                "finish_reason": metadata.get("finish_reason"),
+                "usage": getattr(response, "usage_metadata", None),
             },
         )
         return response
@@ -1299,7 +1307,7 @@ def _extract_target_duration_seconds(user_request: str) -> float:
     if explicit is not None:
         return explicit
 
-    llm = _get_llm(temperature=0.0).bind(max_tokens=160)
+    llm = _get_llm(temperature=0.0).bind(max_tokens=output_tokens("auxiliary"))
     prompt = (
         "请根据用户需求推断成片目标时长（单位秒）。\n"
         "- 若用户明确提到时长，返回对应秒数\n"
@@ -1658,7 +1666,7 @@ def _assess_local_material_sufficiency(state: AgentState) -> tuple[bool, str]:
     )
 
     try:
-        llm = _get_llm(temperature=0.0).bind(max_tokens=320)
+        llm = _get_llm(temperature=0.0).bind(max_tokens=output_tokens("auxiliary"))
         response = _invoke_llm(
             llm,
             [
@@ -2153,7 +2161,7 @@ def planner_node(state: AgentState) -> dict[str, Any]:
         plan = _build_local_first_plan(state.user_request)
         graph_logger.info("🏠 本地素材优先已启用，先复用现有素材再决定是否联网补充")
     else:
-        llm = _get_llm().bind(max_tokens=4096)
+        llm = _get_llm().bind(max_tokens=output_tokens("phase1"))
         sizing_hint = (
             f"- 每平台搜索数量 max_results: {counts['search_per_source']}\n"
             f"- 分页 pages: {counts['search_pages']}\n"
@@ -3362,7 +3370,7 @@ def material_gap_evaluator_node(state: AgentState) -> dict[str, Any]:
             "只有完全没有可用分析素材时才返回 fail；其余不足返回 supplement。"
         )
         response = _invoke_llm(
-            _get_llm(temperature=0.0).bind(max_tokens=800),
+            _get_llm(temperature=0.0).bind(max_tokens=output_tokens("phase1")),
             [
                 SystemMessage(content=prompt),
                 HumanMessage(
@@ -3867,7 +3875,7 @@ def _legacy_editing_research_node(state: AgentState) -> dict[str, Any]:
     user_message = "\n".join(user_parts)
 
     # ── 调用 LLM (纯推理，无工具) ──
-    llm = _get_llm(temperature=0.4)  # 稍高温度鼓励创造性思考
+    llm = _get_llm(temperature=0.4).bind(max_tokens=output_tokens("phase2"))  # 稍高温度鼓励创造性思考
 
     graph_logger.info("📝 分析上下文长度: %d 字", len(analysis_context))
     graph_logger.info("📝 总提示长度: %d 字", len(user_message) + len(EDITING_RESEARCH_PROMPT))
@@ -3951,7 +3959,7 @@ def _compact_editing_research_node(state: AgentState) -> dict[str, Any]:
             "输出分辨率建议和总时长校验。不得调用工具，不得编造不存在的时间段。"
         )
         response = _invoke_llm(
-            _get_llm(temperature=0.2).bind(max_tokens=3600),
+            _get_llm(temperature=0.2).bind(max_tokens=output_tokens("phase2")),
             [
                 SystemMessage(content=prompt),
                 HumanMessage(
@@ -4101,7 +4109,7 @@ def editing_research_node(state: AgentState) -> dict[str, Any]:
                 "严禁编造不存在的时间段。"
             )
             response = _invoke_llm(
-                _get_llm(temperature=0.2).bind(max_tokens=2200),
+                _get_llm(temperature=0.2).bind(max_tokens=output_tokens("phase2")),
                 [
                     SystemMessage(content=prompt),
                     HumanMessage(
@@ -4142,7 +4150,7 @@ def editing_research_node(state: AgentState) -> dict[str, Any]:
                 "所有片段时间必须来自素材卡片，不得调用工具，不得编造事实。"
             )
             response = _invoke_llm(
-                _get_llm(temperature=0.3).bind(max_tokens=2400),
+                _get_llm(temperature=0.3).bind(max_tokens=output_tokens("phase2")),
                 [
                     SystemMessage(content=prompt),
                     HumanMessage(
@@ -4179,7 +4187,7 @@ def editing_research_node(state: AgentState) -> dict[str, Any]:
             "转场、总时长分配和分段旁白时间线。"
         )
         response = _invoke_llm(
-            _get_llm(temperature=0.25).bind(max_tokens=6000),
+            _get_llm(temperature=0.25).bind(max_tokens=output_tokens("phase2")),
             [
                 SystemMessage(content=prompt),
                 HumanMessage(
@@ -4578,6 +4586,8 @@ def _build_controlled_edit_plan(state: AgentState) -> ControlledEditPlan:
             "片段按播放顺序输出。相邻片段会使用转场重叠：目标不超过30秒时每个切点约重叠0.3秒，"
             "更长视频每个切点约重叠0.6秒；扣除这些重叠后的预计成片时长应接近 "
             "target_duration_seconds。"
+            "必须满足 sum(end-start) = target_duration_seconds + 重叠秒数×(片段数-1)。"
+            "例如30秒成片若选择10个片段，原片段总长应为32.7秒，不能只选30秒再扣转场。"
             "旁白时间使用合并后时间轴，必须位于成片范围内且不重叠。"
             "只返回 JSON，结构为："
             '{"clips":[{"source_path":"","start":0,"end":5,"label":""}],'
@@ -4585,7 +4595,7 @@ def _build_controlled_edit_plan(state: AgentState) -> ControlledEditPlan:
             '"voice":"Ethan","output_name":"output_final","resolution":"720p"}。'
         )
         response = _invoke_llm(
-            _get_llm(temperature=0.1).bind(max_tokens=5000),
+            _get_llm(temperature=0.1).bind(max_tokens=output_tokens("phase3")),
             [
                 SystemMessage(content=prompt),
                 HumanMessage(
@@ -4613,7 +4623,7 @@ def _build_controlled_edit_plan(state: AgentState) -> ControlledEditPlan:
             (0.3 if target <= 30 else 0.6) * max(0, len(plan.clips) - 1)
         )
         effective_total = max(0.0, total - transition_overlap)
-        tolerance = max(2.0, target * 0.2)
+        tolerance = max(1.0, target * 0.08)
         if target > 0 and abs(effective_total - target) > tolerance:
             raise RuntimeError(
                 "Phase 3 计划预计成片时长偏差过大: "
@@ -4734,7 +4744,7 @@ def _build_controlled_narration_plan(
             '{"narration":[{"text":"","start":0,"end":5}],"voice":"Ethan"}。'
         )
         response = _invoke_llm(
-            _get_llm(temperature=0.1).bind(max_tokens=3000),
+            _get_llm(temperature=0.1).bind(max_tokens=output_tokens("phase3")),
             [
                 SystemMessage(content=prompt),
                 HumanMessage(
@@ -5908,7 +5918,7 @@ def _run_controlled_editor(state: AgentState) -> str:
 
 
 def _build_short_form_edit_plan(state: AgentState, analysis_context: str) -> ShortFormEditPlan:
-    llm = _get_llm(temperature=0.1).bind(max_tokens=2400)
+    llm = _get_llm(temperature=0.1).bind(max_tokens=output_tokens("phase3"))
     target_duration = _short_form_target_duration(state)
     response = _invoke_llm(
         llm,
@@ -6402,7 +6412,7 @@ def react_editor_node(state: AgentState) -> dict[str, Any]:
     llm = _get_llm(temperature=0.3).bind_tools(
         EDITING_TOOLS,
         parallel_tool_calls=False,
-    )
+    ).bind(max_tokens=output_tokens("phase3"))
     react_agent = create_react_agent(
         model=llm,
         tools=EDITING_TOOLS,

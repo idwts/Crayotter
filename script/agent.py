@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from app.model_defaults import DEFAULT_AGENT_STALL_TIMEOUT_SECONDS, DEFAULT_MODEL_NAME, DEFAULT_VIDEO_MODEL_NAME, DEFAULT_TTS_MODEL_NAME, output_tokens
+
 import json
 import logging
 import os
@@ -30,7 +32,7 @@ configure_runtime_environment()
 
 API_KEY = os.environ.get("CRAYOTTER_API_KEY") or os.environ.get("DASHSCOPE_API_KEY") or "EMPTY"
 BASE_URL = os.environ.get("CRAYOTTER_BASE_URL", "https://dashscope.aliyuncs.com/compatible-mode/v1")
-MODEL_NAME = os.environ.get("CRAYOTTER_MODEL_NAME", "qwen-plus")
+MODEL_NAME = os.environ.get("CRAYOTTER_MODEL_NAME", DEFAULT_MODEL_NAME)
 ENABLE_PHASE2_RESEARCH = str(
     os.environ.get("CRAYOTTER_ENABLE_PHASE2_RESEARCH", "true")
 ).strip().lower() not in {"0", "false", "no", "off"}
@@ -96,19 +98,19 @@ except (TypeError, ValueError):
 
 VIDEO_API_KEY = os.environ.get("CRAYOTTER_VIDEO_API_KEY") or API_KEY
 VIDEO_BASE_URL = os.environ.get("CRAYOTTER_VIDEO_BASE_URL", BASE_URL)
-VIDEO_MODEL_NAME = os.environ.get("CRAYOTTER_VIDEO_MODEL_NAME", "qwen-vl-max-latest")
+VIDEO_MODEL_NAME = os.environ.get("CRAYOTTER_VIDEO_MODEL_NAME", DEFAULT_VIDEO_MODEL_NAME)
 
 # TTS API configuration (DashScope TTS)
 TTS_API_KEY = os.environ.get("CRAYOTTER_TTS_API_KEY") or API_KEY
 TTS_BASE_URL = os.environ.get("CRAYOTTER_TTS_BASE_URL", "https://dashscope.aliyuncs.com/compatible-mode/v1")
-TTS_MODEL_NAME = os.environ.get("CRAYOTTER_TTS_MODEL_NAME", "qwen-tts-latest")
+TTS_MODEL_NAME = os.environ.get("CRAYOTTER_TTS_MODEL_NAME", DEFAULT_TTS_MODEL_NAME)
 try:
     AGENT_STALL_TIMEOUT_SECONDS = max(
         10,
-        int(os.environ.get("CRAYOTTER_AGENT_STALL_TIMEOUT_SECONDS", "150") or 150),
+        int(os.environ.get("CRAYOTTER_AGENT_STALL_TIMEOUT_SECONDS", str(DEFAULT_AGENT_STALL_TIMEOUT_SECONDS)) or DEFAULT_AGENT_STALL_TIMEOUT_SECONDS),
     )
 except (TypeError, ValueError):
-    AGENT_STALL_TIMEOUT_SECONDS = 150
+    AGENT_STALL_TIMEOUT_SECONDS = DEFAULT_AGENT_STALL_TIMEOUT_SECONDS
 RESUME_EXECUTION = False
 DEFAULT_DEADLINE_SECONDS = max(
     60, int(os.environ.get("CRAYOTTER_DEFAULT_DEADLINE_SECONDS", "600") or 600)
@@ -1035,7 +1037,7 @@ def _synthesize_experience(
                 {"role": "user", "content": prompt},
             ],
             temperature=0.2,
-            max_tokens=4096,
+            max_completion_tokens=output_tokens("phase2"),
         )
         text = _extract_chat_content(resp)
         normalized = sanitize_memory_reference(text, max_chars=STORAGE_MEMORY_CHAR_LIMIT)
@@ -1393,14 +1395,14 @@ if __name__ == "__main__":
 
     # 依赖检查
     missing = []
-    for pkg in ["cv2", "moviepy", "langchain_openai", "langgraph"]:
+    for pkg in ["cv2", "langchain_openai", "langgraph"]:
         try:
             __import__(pkg)
         except ImportError:
             missing.append(pkg)
     if missing:
         print(f"⚠️  缺少依赖: {missing}")
-        print("   pip install langchain-core langchain-openai langgraph opencv-python moviepy openai yt-dlp")
+        print("   pip install langchain-core langchain-openai langgraph opencv-python openai yt-dlp")
 
     if len(sys.argv) > 1:
         run_task(" ".join(sys.argv[1:]))

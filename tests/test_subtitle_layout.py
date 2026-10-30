@@ -9,7 +9,7 @@ if str(SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPT_DIR))
 
 from tools._shared import BUNDLE_DIR
-from tools.subtitle_layout import create_subtitle_clip, wrap_subtitle_text
+from tools.subtitle_layout import render_subtitle_image, wrap_subtitle_text
 
 
 class SubtitleLayoutTests(unittest.TestCase):
@@ -20,16 +20,15 @@ class SubtitleLayoutTests(unittest.TestCase):
             / "AlibabaPuHuiTi-3-55-Regular.ttf"
         )
         self.assertTrue(font_path.is_file())
-        clip, y_position, _, bottom_margin, _ = create_subtitle_clip(
+        clip, y_position, _, bottom_margin, _ = render_subtitle_image(
             text="这是一段用于验证多行字幕不会越过视频画布底边的较长字幕内容" * 3,
             font_path=str(font_path),
             video_size=(1280, 720),
-            duration=1.0,
         )
         try:
-            self.assertGreaterEqual(clip.h, 1)
+            self.assertGreaterEqual(clip.height, 1)
             self.assertGreaterEqual(y_position, 0)
-            self.assertLessEqual(y_position + clip.h, 720 - bottom_margin)
+            self.assertLessEqual(y_position + clip.height, 720 - bottom_margin)
         finally:
             clip.close()
 

@@ -14,7 +14,6 @@ charset-normalizer==3.4.5
 colorama==0.4.6
 cryptography==46.0.5
 dashscope==1.25.12
-decorator==5.2.1
 distro==1.9.0
 frozenlist==1.8.0
 h11==0.16.0
@@ -22,8 +21,6 @@ httpcore==1.0.9
 httpx==0.28.1
 socksio==1.0.0
 idna==3.11
-ImageIO==2.37.3
-imageio-ffmpeg==0.6.0
 jiter==0.13.0
 jsonpatch==1.33
 jsonpointer==3.0.0
@@ -35,7 +32,6 @@ langgraph-prebuilt==1.0.8
 langgraph-sdk==0.3.11
 langsmith==0.7.17
 lxml==6.0.2
-moviepy==2.2.1
 multidict==6.7.1
 numpy==2.2.6
 openai==2.26.0
@@ -45,7 +41,6 @@ orjson==3.11.7
 ormsgpack==1.12.2
 packaging==26.0
 pillow==11.3.0
-proglog==0.1.12
 propcache==0.4.1
 pycparser==3.0
 pycryptodomex==3.23.0

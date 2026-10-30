@@ -131,6 +131,7 @@ class CanonicalRenderCommandTests(unittest.TestCase):
         self.assertIn("force_original_aspect_ratio=increase", filters)
         self.assertNotIn("gblur", filters)
         self.assertIn("loudnorm=I=-16.0", filters)
+        self.assertIn("TP=-2.0", filters)
 
     def test_hdr_requires_explicit_tone_map_capability(self) -> None:
         profile = resolve_media_profile(30)

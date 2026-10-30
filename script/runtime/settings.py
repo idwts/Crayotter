@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from app.model_defaults import DEFAULT_AGENT_STALL_TIMEOUT_SECONDS, DEFAULT_MODEL_NAME, DEFAULT_VIDEO_MODEL_NAME, DEFAULT_TTS_MODEL_NAME
+
 from typing import Any, Literal, Mapping
 
 from pydantic import BaseModel, Field, field_validator
@@ -10,13 +12,13 @@ from pydantic import BaseModel, Field, field_validator
 class RuntimeSettings(BaseModel):
     api_key: str = ""
     base_url: str = "https://dashscope.aliyuncs.com/compatible-mode/v1"
-    model_name: str = "qwen-plus"
+    model_name: str = DEFAULT_MODEL_NAME
     video_api_key: str = ""
     video_base_url: str = ""
-    video_model_name: str = "qwen-vl-max-latest"
+    video_model_name: str = DEFAULT_VIDEO_MODEL_NAME
     tts_api_key: str = ""
     tts_base_url: str = ""
-    tts_model_name: str = "qwen-tts-latest"
+    tts_model_name: str = DEFAULT_TTS_MODEL_NAME
 
     enable_phase2_research: bool = True
     enable_plan_review: bool = True
@@ -40,7 +42,7 @@ class RuntimeSettings(BaseModel):
     standardize_target_fps: int = Field(default=30, ge=1)
     audio_loudnorm_target: float = 0.0
     post_task_review_mode: Literal["async", "sync", "off"] = "async"
-    agent_stall_timeout_seconds: int = Field(default=150, ge=10)
+    agent_stall_timeout_seconds: int = Field(default=DEFAULT_AGENT_STALL_TIMEOUT_SECONDS, ge=10)
     youtube_mode: Literal["auto", "on", "off"] = "auto"
     default_deadline_seconds: int = Field(default=600, ge=60)
     phase1_max_seconds: int = Field(default=180, ge=30)
