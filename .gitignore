@@ -23,6 +23,7 @@ dist/
 build/
 app/bin/
 packaging/generated/
+script/dep/macos/*/
 Crayotter-Windows-x64.zip
 
 phase3_rl/generated/

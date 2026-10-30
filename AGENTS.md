@@ -277,6 +277,7 @@ Static website/demo assets are separate under `website/` and should not be confu
 
 - `memory_experience/latest_skills.md` is historical case memory.
 - Memory is reference-only. It must not override the current user's topic, style,素材 choice, target duration, or business goal.
+- Runtime experience is ignored by Git. Desktop packages seed only the neutral template in `packaging/runtime_defaults/`, never the developer's task history.
 - `script/agent.py` updates memory after a completed task by re-analyzing the final video and summarizing reusable patterns.
 - Logs are used both for debugging and visualization. Keep log messages clear if changing graph/tool execution.
 
@@ -296,6 +297,8 @@ It includes:
 This is not the main app runtime. The README in `phase3_rl/README_CN.md` documents environment-specific assumptions such as vendored `verl`, `sglang`, and AutoDL paths.
 
 ## Development Notes
+
+- Desktop release version is recorded in `packaging/VERSION`; keep the Windows version resource consistent. The desktop GitHub workflow builds and verifies both platforms. A version change merged into `main` publishes both verified ZIPs with `packaging/release_notes_<version>.md`; test branches never publish Releases.
 
 - Python target is 3.10+.
 - Dependencies are in `requirements.txt`.
