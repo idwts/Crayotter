@@ -92,7 +92,7 @@ class RuntimeBinaryTests(unittest.TestCase):
     def test_linux_uses_path_when_no_matching_bundle_exists(self):
         self.platform("Linux", "aarch64")
         with patch.object(runtime_paths.shutil, "which", return_value="/usr/bin/ffmpeg"):
-            self.assertEqual(runtime_paths.resolve_binary("ffmpeg"), Path("/usr/bin/ffmpeg"))
+            self.assertEqual(runtime_paths.resolve_binary("ffmpeg"), Path("/usr/bin/ffmpeg").resolve())
         self.assertEqual(runtime_paths.binary_platform(), ("linux", "arm64"))
 
     def test_custom_overrides_take_precedence_for_variables_and_path(self):
