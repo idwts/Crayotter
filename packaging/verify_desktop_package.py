@@ -48,7 +48,7 @@ def main() -> None:
             version = f"{fields[4] >> 16}.{fields[4] & 65535}.{fields[5] >> 16}"
         assert version == expected_version, (version, expected_version)
         checks["version"] = version
-        seeds = list(root.rglob("memory_experience/latest_skills.md"))
+        seeds = sorted({path.resolve() for path in root.rglob("memory_experience/latest_skills.md")})
         assert len(seeds) == 1 and "No task experience has been saved" in seeds[0].read_text()
         checks["clean_experience"] = True
         runtime = root / "runtime"
