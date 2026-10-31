@@ -19,6 +19,12 @@ OUTPUT_TOKEN_DEFAULTS = {
 }
 
 
+def model_request_timeout() -> int:
+    """Keep video requests within the configured agent waiting window."""
+    raw = os.environ.get("CRAYOTTER_AGENT_STALL_TIMEOUT_SECONDS", "").strip()
+    return max(10, int(raw) if raw else DEFAULT_AGENT_STALL_TIMEOUT_SECONDS)
+
+
 def output_tokens(stage: str) -> int:
     default = OUTPUT_TOKEN_DEFAULTS[stage]
     name = f"CRAYOTTER_{stage.upper()}_MAX_OUTPUT_TOKENS"

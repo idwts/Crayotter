@@ -480,6 +480,7 @@ def apply_runtime_config(config: Mapping[str, Any] | None = None) -> dict[str, A
         config.get("agent_stall_timeout_seconds"),
         AGENT_STALL_TIMEOUT_SECONDS,
     )
+    os.environ["CRAYOTTER_AGENT_STALL_TIMEOUT_SECONDS"] = str(AGENT_STALL_TIMEOUT_SECONDS)
 
     VIDEO_API_KEY = _coerce_runtime_text(config.get("video_api_key"), API_KEY)
     VIDEO_BASE_URL = _coerce_runtime_text(config.get("video_base_url"), BASE_URL)

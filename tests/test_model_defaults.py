@@ -8,12 +8,18 @@ from types import SimpleNamespace
 from app.backend.models import AppConfig, ServiceProfile
 from app.model_defaults import (
     DEFAULT_MODEL_NAME, DEFAULT_TTS_MODEL_NAME, DEFAULT_VIDEO_MODEL_NAME,
-    OUTPUT_TOKEN_DEFAULTS, output_tokens,
+    OUTPUT_TOKEN_DEFAULTS, model_request_timeout, output_tokens,
 )
 from script.runtime.settings import RuntimeSettings
 
 
 class ModelDefaultTests(unittest.TestCase):
+    def test_video_request_timeout_follows_agent_waiting_setting(self):
+        with patch.dict(os.environ, {}, clear=True):
+            self.assertEqual(model_request_timeout(), 1200)
+        with patch.dict(os.environ, {"CRAYOTTER_AGENT_STALL_TIMEOUT_SECONDS": "1800"}):
+            self.assertEqual(model_request_timeout(), 1800)
+
     def test_runtime_and_backend_use_the_tested_flash_models(self):
         for config in [RuntimeSettings(), ServiceProfile()]:
             self.assertEqual(config.model_name, "qwen3.8-flash")

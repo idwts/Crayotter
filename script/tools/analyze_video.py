@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from app.model_defaults import output_tokens
+from app.model_defaults import model_request_timeout, output_tokens
 
 import math
 from pathlib import Path
@@ -447,6 +447,7 @@ def analyze_video(
                             lambda: dashscope.MultiModalConversation.call(
                                 model=model_name,
                                 max_tokens=output_tokens("video_analysis"),
+                                request_timeout=model_request_timeout(),
                                 messages=[
                                     {
                                         "role": "user",
@@ -620,6 +621,7 @@ def analyze_video(
                         model=_shared.VIDEO_MODEL_NAME,
                         messages=[{"role": "user", "content": content}],
                         max_completion_tokens=output_tokens("video_analysis"),
+                        timeout=model_request_timeout(),
                         temperature=0.2,
                     )
                     analysis = _extract_chat_content(response)
