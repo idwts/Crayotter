@@ -316,7 +316,7 @@ flowchart TB
 |---|---|---|
 | 媒体处理 | FFmpeg / FFprobe | 裁剪、编码、转场、混音、字幕、探测、导出 |
 | 下载 | yt-dlp、Bilibili API | 多平台素材下载 |
-| 视频处理库 | MoviePy、OpenCV、ImageIO、NumPy | 辅助媒体处理与分析 |
+| 媒体处理 | FFmpeg/FFprobe、OpenCV、Pillow、NumPy | FFmpeg 负责剪辑与合成，其余库辅助抽帧分析和静态字幕排版 |
 | 网页解析 | Requests、BeautifulSoup、lxml | 素材检索与平台适配 |
 | 浏览器能力（可选） | Playwright | 需要浏览器渲染或用户授权的素材平台 |
 

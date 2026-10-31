@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from ._shared import *
-from .subtitle_layout import create_subtitle_clip
+from .subtitle_layout import burn_subtitles, resolve_subtitle_font
 
 
 @tool
@@ -28,9 +28,6 @@ def add_subtitles(
         output_name: 输出文件名（不含扩展名），默认 "subtitled"。
     """
     try:
-        from moviepy.video.io.VideoFileClip import VideoFileClip
-        from moviepy.video.compositing.CompositeVideoClip import CompositeVideoClip
-
         resolved_video = _resolve_workspace_input_path(video_path, must_exist=True)
         if resolved_video is None:
             return f"字幕添加出错: 输入视频不存在或不在WORKSPACE: {video_path}"
@@ -38,77 +35,16 @@ def add_subtitles(
         if not subtitles or not isinstance(subtitles, list):
             return "字幕添加出错: subtitles 参数必须是非空列表"
 
-        video = VideoFileClip(str(resolved_video))
-        video_dur = video.duration
-        sub_clips: list[Any] = []
-        font_path = str(
-            BUNDLE_DIR
-            / "AlibabaPuHuiTi-3-55-Regular"
-            / "AlibabaPuHuiTi-3-55-Regular.ttf"
-        )
-        if not Path(font_path).is_file():
-            video.close()
+        font_path = resolve_subtitle_font()
+        if not font_path:
             return "字幕添加出错: 未找到可用字幕字体"
-
-        for idx, sub in enumerate(subtitles):
-            text = sub.get("text", "").strip()
-            start = float(sub.get("start", 0))
-            end = float(sub.get("end", 0))
-
-            if not text or end <= start or start >= video_dur:
-                continue
-            end = min(end, video_dur)
-
-            try:
-                txt_clip, y_pos, font_size, bottom_margin, baseline_lift = (
-                    create_subtitle_clip(
-                        text=text,
-                        font_path=font_path,
-                        video_size=video.size,
-                        duration=end - start,
-                    )
-                )
-                logger.info(
-                    "字幕布局: 段=%d, font=%s@%d, clip_h=%d, y=%d, video_h=%d, safe_margin=%d, baseline_lift=%d",
-                    idx + 1,
-                    Path(font_path).name,
-                    font_size,
-                    int(txt_clip.h),
-                    y_pos,
-                    int(video.size[1]),
-                    bottom_margin,
-                    baseline_lift,
-                )
-                txt_clip = txt_clip.with_position(("center", y_pos)).with_start(start)
-                sub_clips.append(txt_clip)
-            except Exception as se:
-                logger.warning("字幕 %d 创建失败: %s", idx+1, se)
-
-        if not sub_clips:
-            video.close()
-            return "字幕添加出错: 无有效字幕段"
-
-        final = CompositeVideoClip([video] + sub_clips)
-        if video.audio is not None:
-            final = final.with_audio(video.audio)
-
         output_path = _safe_output_video_path(output_name, default_stem="subtitled")
-        final.write_videofile(
-            str(output_path), codec="libx264", audio_codec="aac", logger=None
-        )
-
-        for sc in sub_clips:
-            try:
-                sc.close()
-            except Exception:
-                pass
-        video.close()
-        final.close()
+        count = burn_subtitles(resolved_video, output_path, subtitles, font_path)
 
         return json.dumps({
             "status": "success",
             "path": str(output_path),
-            "subtitle_count": len(sub_clips),
+            "subtitle_count": count,
         }, ensure_ascii=False)
     except Exception as e:
         return f"字幕添加出错: {e}"

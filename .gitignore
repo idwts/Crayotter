@@ -10,6 +10,7 @@ temp/
 user_temp/
 runtime_logs/
 /logs/
+/memory_experience/
 /output/
 /benchmark_runtime/
 /cache/
@@ -22,6 +23,7 @@ dist/
 build/
 app/bin/
 packaging/generated/
+script/dep/macos/*/
 Crayotter-Windows-x64.zip
 
 phase3_rl/generated/

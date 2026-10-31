@@ -56,7 +56,7 @@ def __getattr__(name: str):
     raise AttributeError(f"module 'tools' has no attribute {name!r}")
 
 
-ALL_TOOLS = [
+_REGISTERED_TOOLS = [
     search_material_sources,
     import_material_urls,
     download_material_video,
@@ -86,6 +86,17 @@ ALL_TOOLS = [
     export_video,
 ]
 
+# Schemas and public exposure are shared by all protocol adapters.
+from script.tool_protocol import ToolRegistry
+from script.workflow.tool_catalog import PREP_TOOL_NAMES, EDITING_TOOL_NAMES
+
+TOOL_REGISTRY = ToolRegistry(
+    _REGISTERED_TOOLS,
+    phase_names={"phase1": PREP_TOOL_NAMES, "phase3": EDITING_TOOL_NAMES},
+)
+ALL_TOOLS = TOOL_REGISTRY.langchain_tools()
+
+
 __all__ = [
     'WORKSPACE',
     'USER_WORKSPACE',
@@ -94,6 +105,7 @@ __all__ = [
     'logger',
     'configure',
     'ALL_TOOLS',
+    'TOOL_REGISTRY',
     'search_youtobe_video',
     'download_youtobe_video',
     'analyze_video',

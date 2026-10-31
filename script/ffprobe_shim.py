@@ -1,56 +1,89 @@
+"""Compatibility probe for Windows bundles that only contain ffmpeg.exe.
+
+Prefer a real ffprobe binary. This fallback reads FFmpeg's input stream headers
+without decoding frames, and supports the queries used by Crayotter.
+"""
 from __future__ import annotations
 
-import sys
+import json
+import os
 from pathlib import Path
+import re
+import subprocess
+import sys
 
 
-def _print_duration(video_path: Path) -> int:
-    import cv2
-
-    cap = cv2.VideoCapture(str(video_path))
-    try:
-        fps = float(cap.get(cv2.CAP_PROP_FPS) or 0.0)
-        frame_count = float(cap.get(cv2.CAP_PROP_FRAME_COUNT) or 0.0)
-        duration = frame_count / fps if fps > 0 else 0.0
-    finally:
-        cap.release()
-
-    if duration <= 0:
-        return 1
-    print(f"{duration:.6f}")
-    return 0
-
-
-def _print_audio_presence(video_path: Path) -> int:
-    from moviepy.video.io.VideoFileClip import VideoFileClip
-
-    clip = VideoFileClip(str(video_path))
-    try:
-        if clip.audio is not None:
-            print("0")
-    finally:
-        clip.close()
-    return 0
+def probe_with_ffmpeg(video_path: Path) -> dict:
+    bundled = Path(__file__).parent / "dep/windows/ffmpeg.exe"
+    executable = os.environ.get("FFMPEG_BIN") or (str(bundled) if os.name == "nt" and bundled.is_file() else "ffmpeg")
+    completed = subprocess.run(
+        [executable, "-hide_banner", "-i", str(video_path)], capture_output=True,
+        text=True, encoding="utf-8", errors="replace", timeout=60,
+    )
+    text = completed.stderr
+    match = re.search(r"Duration:\s*(\d+):(\d+):(\d+(?:\.\d+)?)", text)
+    duration = sum(float(value) * scale for value, scale in zip(match.groups(), (3600, 60, 1))) if match else 0.0
+    streams = []
+    for line in text.splitlines():
+        stream = re.search(r"Stream #\d+:(\d+).*?: (Video|Audio): (\w+)", line)
+        if not stream:
+            continue
+        index, kind, codec = stream.groups()
+        item = {"index": int(index), "codec_type": kind.lower(), "codec_name": codec, "duration": str(duration)}
+        if kind == "Video":
+            size = re.search(r"(?:,\s*)(\d{2,6})x(\d{2,6})(?:\s|,|\[)", line)
+            fps = re.search(r"([\d.]+) fps", line)
+            pixel = re.search(r"Video:.*?,\s*(\w+)", line)
+            if size:
+                item.update(width=int(size[1]), height=int(size[2]))
+            rate = f"{round(float(fps[1]) * 1000)}/1000" if fps else "0/1"
+            item.update(avg_frame_rate=rate, r_frame_rate=rate, pix_fmt=pixel[1] if pixel else "unknown", sample_aspect_ratio="1:1")
+            color = re.search(r"\b(bt709|bt2020)\b", line)
+            if color:
+                item.update(color_primaries=color[1], color_transfer=color[1], color_space=color[1])
+        else:
+            sample = re.search(r"(\d+) Hz", line)
+            item.update(sample_rate=sample[1] if sample else "48000", channels=1 if "mono" in line else 2,
+                        channel_layout="mono" if "mono" in line else "stereo")
+        streams.append(item)
+    if not streams:
+        raise RuntimeError(text[-1200:] or "FFmpeg could not read media streams")
+    return {"format": {"duration": str(duration), "size": str(video_path.stat().st_size)}, "streams": streams}
 
 
 def main(argv: list[str]) -> int:
-    if not argv:
-        print("ffprobe shim: missing arguments", file=sys.stderr)
+    if not argv or not Path(argv[-1]).is_file():
+        print("ffprobe shim: missing or invalid input file", file=sys.stderr)
         return 1
-
-    video_path = Path(argv[-1])
-    if not video_path.exists():
-        print(f"ffprobe shim: file not found: {video_path}", file=sys.stderr)
+    try:
+        payload = probe_with_ffmpeg(Path(argv[-1]))
+        if "-select_streams" in argv:
+            selector = argv[argv.index("-select_streams") + 1]
+            kind = {"a": "audio", "v": "video"}.get(selector.split(":")[0])
+            payload["streams"] = [s for s in payload["streams"] if s["codec_type"] == kind]
+            if ":" in selector:
+                index = int(selector.split(":")[1])
+                payload["streams"] = payload["streams"][index:index + 1]
+        if "json" in argv:
+            print(json.dumps(payload))
+        elif any("stream=index" in arg for arg in argv):
+            for stream in payload["streams"]:
+                print(stream["index"])
+        elif any("format=duration" in arg for arg in argv):
+            print(payload["format"]["duration"])
+        elif any("stream=" in arg for arg in argv):
+            entries = argv[argv.index("-show_entries") + 1]
+            fields = entries.partition("stream=")[2].split(":")[0].split(",")
+            for stream in payload["streams"]:
+                for field in fields:
+                    if field in stream:
+                        print(stream[field])
+        else:
+            raise ValueError("unsupported probe query; install a real ffprobe binary")
+        return 0
+    except Exception as exc:
+        print(f"ffprobe shim: {exc}", file=sys.stderr)
         return 1
-
-    if "-select_streams" in argv and "a" in argv and "stream=index" in " ".join(argv):
-        return _print_audio_presence(video_path)
-
-    if "format=duration" in " ".join(argv):
-        return _print_duration(video_path)
-
-    print("ffprobe shim: unsupported arguments", file=sys.stderr)
-    return 1
 
 
 if __name__ == "__main__":

@@ -55,19 +55,17 @@ Crayotter 是一个多模态、Agent 驱动的视频自动编辑系统，可以�
 
 ## 目录
 
+- [演示视频](#️-演示视频)
 - [近期动态](#近期动态)
 - [核心特性](#核心特性)
 - [项目概览](#项目概览)
 - [工作流](#工作流)
 - [快速开始](#快速开始)
-  - [Windows 免安装版本](#windows-免安装版本)
-  - [前置准备](#前置准备)
-  - [1) 环境准备](#1-环境准备)
-  - [2) 安装依赖](#2-安装依赖)
-  - [3) API 配置与运行参数设置](#3-api-配置与运行参数设置)
-  - [4) 运行 Agent](#4-运行-agent)
-  - [5) 运行图形化工作台](#5-运行图形化工作台)
-- [日志轨迹可视化](#日志轨迹可视化)
+  - [安装与打开](#安装与打开)
+  - [第一次使用](#第一次使用)
+- [常见问题](#常见问题)
+- [从源码运行](#从源码运行)
+- [开发与研究](#开发与研究)
 - [引用](#引用)
 - [仓库结构](#仓库结构)
 
@@ -75,6 +73,8 @@ Crayotter 是一个多模态、Agent 驱动的视频自动编辑系统，可以�
 
 ## 近期动态
 
+- **2026.10.31** — [Crayotter 1.1.0](https://github.com/idwts/Crayotter/releases/tag/v1.1.0) 发布，支持 Windows 与 Apple Silicon Mac 桌面使用。
+- **2026.9.16** — 我们的[论文](https://arxiv.org/abs/2606.07636)已被 AACL-IJCNLP 2026 Demo Track 接收！
 - **2026.8.5** — 全新工作已公开！迈向长时序视频编辑智能体：[Crayotter: Learning Long-Horizon Video Editing Agents via Group-Relative Preference Backpropagation](https://arxiv.org/abs/2608.02694)。
 - **2026.6.27** — Crayotter 1.0.0 新增多素材源导入、统一下载清洗，并更新 Windows 发布包。
 - **2026.6.15** — 异步调度升级后，视频生成整体流程提速约 1.6 倍。
@@ -164,191 +164,58 @@ editing_research -> react_editor -> END
 
 ## 快速开始
 
-### Windows 免安装版本
+### 安装与打开
 
-Windows 10/11 x64 用户可以使用发布页中的 `Crayotter-Windows-x64.zip`：
+| 平台 | 获取方式 | 打开方式 |
+| --- | --- | --- |
+| Windows 10/11 x64 | [Releases](https://github.com/idwts/Crayotter/releases) 中的 `Crayotter-Windows-x64.zip` | 完整解压后运行 `Crayotter.exe` |
+| macOS Apple Silicon | [Releases](https://github.com/idwts/Crayotter/releases/tag/v1.1.0) 中的 `Crayotter-macOS-arm64.zip` | 解压后双击 `Crayotter.app`，也可移到“应用程序” |
 
-1. 完整解压压缩包。
-2. 双击 `Crayotter.exe`。
-3. 在工作台“设置”中填写 API Key 和模型配置。
+桌面包自带 Python、FFmpeg 和下载器，无需安装 Conda。Windows 独立窗口需要 Edge WebView2，缺少时会尝试浏览器模式。当前 Mac 包声明最低 macOS 15.0，仅支持已验证的 arm64 构建；发布包尚未做 Apple 公证。
 
-发布包自带 Python 运行环境、FFmpeg 和 yt-dlp，不需要用户安装 Python。工作台默认使用独立桌面窗口；如果系统缺少 Microsoft Edge WebView2，则会自动在默认浏览器中打开。
+### 第一次使用
 
-运行数据默认写入解压目录；如果目录不可写，则写入 `%LOCALAPPDATA%\Crayotter`。发布包不包含 `.env`、API Key、用户素材、日志或生成视频。
+1. **配置模型**：打开“设置”，填写自己的 API Key、服务地址和模型。模型调用会产生对应服务商的费用，项目不提供内置额度。
+2. **选择素材**：上传本地视频，或在需求中写清题材，让它在线搜集；也可以提供视频链接。
+3. **写清需求**：说明目标时长、风格、横竖屏，以及是否需要旁白和字幕，然后启动任务。
+4. **查看结果**：在任务详情中预览、保存最终视频，并核对旁白、字幕和素材内容。
 
-开发者可以在 Windows x64、Python 3.12 环境中执行以下命令生成发行目录和 ZIP：
+当前默认模型为 `qwen3.8-flash`（规划与剪辑）、`qwen3.8-omni-flash`（音视频分析）、`qwen3-tts-flash`（配音）。只需要视觉分析时，可将视频模型设为 `qwen3.8-flash`。已有自定义模型配置会保留。
 
-```powershell
-powershell -ExecutionPolicy Bypass -File packaging\build_windows.ps1
-```
+网络素材、视频分析和模型思考都需要时间，实际处理时长取决于素材数量、长度和服务响应。可以先用约30秒的任务试跑。
 
-构建结果：
+## 常见问题
 
-- `dist\Crayotter\`
-- `Crayotter-Windows-x64.zip`
+**成片保存在哪里？**
+在工作台任务详情中查看最终产物。Mac 默认运行目录是 `~/Library/Application Support/Crayotter`；Windows 优先使用程序所在的可写目录，否则使用用户应用数据目录。
 
-### 前置准备
+**为什么搜索或下载失败？**
+先检查平台能否正常访问。需要登录的平台，在本机浏览器完成授权后重试；也可以上传自己的素材继续剪辑。
 
-确保系统的 `PATH` 环境变量中已包含 `ffmpeg` 二进制可执行文件，使其能够在终端中被直接调用。可前往 <https://ffmpeg.org/download.html> 下载对应平台的安装包。安装完成后，可在终端执行 `ffmpeg -version`，若能正常输出版本信息，则说明配置成功。Windows 下 `script/dep/windows` 中的打包二进制（`ffmpeg.exe`、`ffprobe.cmd`、`yt-dlp.exe`）也会被自动加入 `PATH`。
+**模型报错或配音失败怎么办？**
+检查密钥、服务地址、模型可用性和余额。文本、视频、配音可以在设置中分别配置。
 
-### 1) 环境准备
+**中断后还能继续吗？**
+工作台支持恢复被标记为“已中断”的任务。已失败任务与已中断任务不同，不能保证原地恢复。
 
-建议 Python 3.10+。
+## 从源码运行
 
-```bash
-python -m venv .venv
-.venv\Scripts\activate
-```
-
-### 2) 安装依赖
-
-```bash
-pip install -r requirements.txt
-```
-
-如需启用抖音/小红书的浏览器渲染与用户授权重试，请改用：
+需要 Python 3.10+，并安装 FFmpeg/FFprobe。项目会按平台选择已配备的二进制；Mac 缺少工具时可运行 `python script/setup_ffmpeg.py`。
 
 ```bash
-pip install -r requirements-browser.txt
+python -m pip install -r requirements.txt
+python script/run_backend.py --host 127.0.0.1 --port 8765
 ```
 
-该功能复用本机 Chrome/Edge，不处理或绕过验证码；浏览器登录态只在当前任务的私有工作目录中临时使用。
+打开 `http://127.0.0.1:8765/ui/` 后在设置中填写 API 配置。需要独立窗口时，另装 `requirements-desktop.txt` 并运行 `python script/run_desktop.py`。
 
-### 3) API 配置与运行参数设置
+## 开发与研究
 
-首先把模板配置文件复制一份，生成专属的自定义配置文件 `.env`，直接在终端执行这条命令即可：
-
-```bash
-copy .env.example .env
-```
-
-打开刚生成的 `.env` 文件，填写/修改以下常用配置，每一项都标注了用途，新手直接按说明填就行：
-
-```env
-# 【必填】你的阿里云通义千问API密钥
-CRAYOTTER_API_KEY=your-key
-
-# API接口地址（默认已配置好，无需修改）
-CRAYOTTER_BASE_URL=https://dashscope.aliyuncs.com/compatible-mode/v1
-
-# 文本对话模型（默认qwen-plus，可按需更换）
-CRAYOTTER_MODEL_NAME=qwen-plus
-
-# 视频/多模态理解模型（默认qwen-vl-max-latest）
-CRAYOTTER_VIDEO_MODEL_NAME=qwen-vl-max-latest
-
-# 语音合成模型（默认qwen-tts-latest）
-CRAYOTTER_TTS_MODEL_NAME=qwen-tts-latest
-
-# 是否开启第二阶段调研（true=开启，false=关闭）
-CRAYOTTER_ENABLE_PHASE2_RESEARCH=true
-
-# 是否开启剪辑计划审阅（true=剪辑前等待确认，false=自动执行）
-CRAYOTTER_ENABLE_PLAN_REVIEW=true
-
-# 是否直接执行第三阶段（true=直接跳过前序步骤，false=按正常流程执行）
-CRAYOTTER_DIRECT_PHASE3_EXECUTION=false
-
-# 是否优先使用本地素材（true=优先本地，false=优先在线获取）
-CRAYOTTER_PREFER_LOCAL_MATERIALS=false
-
-# 资源池并发上限
-CRAYOTTER_SEARCH_POOL_SIZE=4
-CRAYOTTER_DOWNLOAD_POOL_SIZE=2
-CRAYOTTER_VIDEO_ANALYSIS_POOL_SIZE=2
-CRAYOTTER_LLM_POOL_SIZE=2
-CRAYOTTER_FFMPEG_POOL_SIZE=2
-CRAYOTTER_TTS_POOL_SIZE=2
-CRAYOTTER_EXPORT_POOL_SIZE=1
-CRAYOTTER_STANDARDIZE_TARGET_FPS=30
-CRAYOTTER_AUDIO_LOUDNORM_TARGET=0
-
-# 智能代理超时等待时间（单位：秒，默认150秒，超时会自动结束当前任务）
-CRAYOTTER_AGENT_STALL_TIMEOUT_SECONDS=150
-```
-
-说明：
-
-- `CRAYOTTER_DIRECT_PHASE3_EXECUTION=true`：跳过 Phase 2 素材搜索/下载，直接走“现有素材分析 + Phase 3 执行”链路。
-- `CRAYOTTER_ENABLE_PLAN_REVIEW=true`：剪辑前生成可视化 EditingPlan，等待用户确认或自然语言修改后再执行。
-- `CRAYOTTER_PREFER_LOCAL_MATERIALS=true`：先分析本地素材，若当前素材已足够则直接进入后续剪辑，不足时才联网补充。
-- 资源池参数分别控制搜索、下载、视频分析、LLM、FFmpeg、TTS 和最终导出的并发上限。
-- 素材下载统一走 `download_material_video`；B 站仍是默认关键词搜索源，用户提供的第三方平台 URL 会进入同一下载与清洗管线。
-- `CRAYOTTER_STANDARDIZE_TARGET_FPS` 控制下载素材清洗后的目标帧率。`CRAYOTTER_AUDIO_LOUDNORM_TARGET=0` 表示关闭响度归一化；设置为 `-16` 等负 LUFS 值时启用两遍 EBU R128 loudnorm。
-- `CRAYOTTER_AGENT_STALL_TIMEOUT_SECONDS`：控制任务“长时间无新进展”判定阈值。
-- 环境隐式逻辑：图形化工作台中的 API 设置、Phase 2、直达 Phase 3、本地素材优先和超时设置，都会同步写回同一份 `.env`。
-- 成品画幅控制：候选素材排序现在会把目标横竖屏当成评分因子：默认优先横屏；如果用户明确要求竖屏，则优先竖屏。Phase 3 合并/导出也改成“放缩后居中裁切”，不再简单拉伸。
-- 隐式删除逻辑：对于 `user_temp` 里的用户视频，Crayotter 现在会把对应的 `*_analysis.json` 直接写回 `user_temp`，后续运行自动复用；如果你在 Web 工作台删除这个上传视频，也会一起删除同名分析文件。
-- 历史经验压缩：`memory_experience\latest_skills.md` 会被自动压缩成“历史案例参考”，长度受控，*不会随着任务累积而无限变长*，也不会重新定义后续任务目标。
-
-> 安全提醒：不要把真实 API Key 提交到版本控制。
-
-### 4) 运行 Agent
-
-交互模式：
-
-```bash
-python script\agent.py
-```
-
-或单任务模式：
-
-```bash
-# 在此处填入你需要制作的成品需求，此处为示例
-python script\agent.py "制作一个1分钟校园主题宣传片"
-```
-
-### 5) 运行图形化工作台
-
-图形化工作台提供了一个直观的 Web 界面，用于管理任务、配置环境以及监控 Agent 的实时状态。
-
-桌面模式会自动启动后端并打开独立窗口：
-
-```bash
-python script\run_desktop.py
-```
-
-也可以只启动本地后端服务：
-
-```bash
-# 在本地8765端口打开WEB工作台
-python script\run_backend.py --host 127.0.0.1 --port 8765
-```
-
-然后在浏览器打开：
-
-```text
-http://127.0.0.1:8765/ui/
-```
-
-> 图形化工作台以运行根目录 `.env` 作为唯一配置真源。不要提交真实 `.env`。
-
----
-
-## 日志轨迹可视化
-
-1. 直接使用最新日志启动可视化：
-
-```bash
-python script\visualize.py
-```
-
-2. 或对指定日志文件启动可视化：
-
-```bash
-python script\visualize.py logs\<video_agent_YYYYMMDD_HHMMSS>.log
-```
-
-请将 `<video_agent_YYYYMMDD_HHMMSS>.log` 文件名替换为您在 `logs` 目录下实际生成的日志名称。
-
-3. 网络配置：可视化界面默认运行在 8080 端口。如果该端口被占用或有特定需求，可使用 `--port` 参数自定义：
-
-```bash
-# 将 Web 端口设置为 9000
-python script/visualize.py --port 9000
-```
-
-4. 隐式导出静态 HTML：`script\visualize.py` 还会在日志同目录导出静态 HTML 轨迹文件（例如 `*_trace.html`）。
+- [源码安装、环境变量与日志](docs/development_cn.md)
+- [三阶段架构](docs/architecture_cn.md)
+- [统一工具接口、MCP 与 FFmpeg](docs/tool_protocol_and_ffmpeg.md)
+- [Windows 构建](packaging/build_windows.ps1) / [macOS 构建与签名说明](packaging/README_MACOS_CN.md)
+- [论文与引用](docs/citation.md)；[实验性 RL 训练](phase3_rl/README_CN.md)与日常剪辑运行分开。
 
 ---
 
@@ -390,7 +257,7 @@ Crayotter/
 │  ├─ visualize.py
 │  └─ tools/
 ├─ app/                # 后端服务、前端、运行时路径
-├─ packaging/          # Windows 发布构建脚本
+├─ packaging/          # Windows / macOS 发布构建脚本
 ├─ phase3_rl/          # 实验性 RL 冒烟流水线（非主运行时）
 ├─ demo/               # 演示素材
 ├─ logs/
@@ -402,3 +269,5 @@ Crayotter/
 ├─ crayottor_framework.jpg
 └─ requirements.txt
 ```
+
+项目采用 [PolyForm Noncommercial 1.0.0](LICENSE)，商业使用请先核对许可条款。

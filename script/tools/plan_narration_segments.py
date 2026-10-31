@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from app.model_defaults import output_tokens
+
 from . import _shared
 from ._shared import *
 
@@ -210,7 +212,7 @@ def plan_narration_segments(
                 {"role": "user", "content": json.dumps(user_payload, ensure_ascii=False)},
             ],
             temperature=0.25,
-            max_tokens=2200,
+            max_completion_tokens=output_tokens("phase3"),
         )
         content = _extract_chat_content(response)
         raw_segments = _extract_json_array(content)

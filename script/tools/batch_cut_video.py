@@ -25,7 +25,7 @@ def batch_cut_video(
             仅当自动查找失败时才需要手动指定，例如 "/workspace/scut_intro_video_analysis.json"。
     """
     try:
-        from moviepy.video.io.VideoFileClip import VideoFileClip
+        from ._native_ffmpeg import cut_video_native
 
         resolved_input = _resolve_workspace_input_path(video_path, must_exist=True)
         if resolved_input is None:
@@ -141,9 +141,9 @@ def batch_cut_video(
             out_name = f"{resolved_input.stem}_clip_{i}"
             out_path = _safe_output_video_path(out_name, default_stem=f"clip_{i}")
             try:
-                with VideoFileClip(str(resolved_input)) as clip:
-                    sub = clip.subclipped(seg["start"], seg["end"])
-                    sub.write_videofile(str(out_path), codec="libx264", audio_codec="aac", logger=None)
+                cut_video_native(
+                    resolved_input, out_path, start_time=seg["start"], end_time=seg["end"],
+                )
                 clip_results.append({
                     "index": i,
                     "path": str(out_path),

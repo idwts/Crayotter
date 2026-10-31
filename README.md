@@ -55,19 +55,17 @@ A full end-to-end run: from a one-line text request, Crayotter prepares material
 
 ## Table of Contents
 
+- [Demo](#️-demo)
 - [News](#news)
 - [Highlights](#highlights)
 - [Overview](#overview)
 - [Workflow](#workflow)
 - [Quick Start](#quick-start)
-  - [Windows Standalone Release](#windows-standalone-release)
-  - [Prerequisites](#prerequisites)
-  - [1) Environment](#1-environment)
-  - [2) Install Dependencies](#2-install-dependencies)
-  - [3) Configure API Endpoints and Runtime Options](#3-configure-api-endpoints-and-runtime-options)
-  - [4) Run the Agent](#4-run-the-agent)
-  - [5) Run the Workbench GUI](#5-run-the-workbench-gui)
-- [Log Trace Visualization](#log-trace-visualization)
+  - [Install and open](#install-and-open)
+  - [Your first video](#your-first-video)
+- [Common questions](#common-questions)
+- [Run from source](#run-from-source)
+- [Development and research](#development-and-research)
 - [Citation](#citation)
 - [Repository Layout](#repository-layout)
 
@@ -75,6 +73,8 @@ A full end-to-end run: from a one-line text request, Crayotter prepares material
 
 ## News
 
+- **2026.10.31** — [Crayotter 1.1.0](https://github.com/idwts/Crayotter/releases/tag/v1.1.0) is available for Windows and Apple Silicon Mac.
+- **2026.9.16** — Our [paper](https://arxiv.org/abs/2606.07636) is accepted by AACL-IJCNLP 2026 Demo Track!
 - **2026.8.5** — Our new work is now available! Towards long-horizon video editing agents: [Crayotter: Learning Long-Horizon Video Editing Agents via Group-Relative Preference Backpropagation](https://arxiv.org/abs/2608.02694)。
 - **2026.6.27** — Crayotter 1.0.0 adds multi-source material import, unified download cleanup, and refreshed Windows release packaging.
 - **2026.6.15** — Asynchronous scheduling upgrade accelerated the overall video generation workflow by ~1.6×.
@@ -161,166 +161,58 @@ editing_research -> react_editor -> END
 
 ## Quick Start
 
-### Windows Standalone Release
+### Install and open
 
-Windows 10/11 x64 users can download `Crayotter-Windows-x64.zip` from the release page:
+| Platform | Where to get it | How to open |
+| --- | --- | --- |
+| Windows 10/11 x64 | `Crayotter-Windows-x64.zip` in [Releases](https://github.com/idwts/Crayotter/releases) | Extract the complete archive and run `Crayotter.exe` |
+| macOS Apple Silicon | `Crayotter-macOS-arm64.zip` in [Releases](https://github.com/idwts/Crayotter/releases/tag/v1.1.0) | Unzip and open `Crayotter.app`, or move it to Applications |
 
-1. Extract the complete archive.
-2. Double-click `Crayotter.exe`.
-3. Enter the API key and model settings in the workbench.
+Desktop packages include Python, FFmpeg, and the downloader. Conda is not required. The Windows native window uses Edge WebView2; browser mode is attempted if unavailable. The current Mac package declares macOS 15.0 or newer and targets arm64; packages are not Apple-notarized.
 
-The release includes Python, FFmpeg, and yt-dlp, so users do not need to install Python. It opens in a native desktop window when Microsoft Edge WebView2 is available and falls back to the default browser otherwise.
+### Your first video
 
-Runtime data is stored next to the executable when that directory is writable, or under `%LOCALAPPDATA%\Crayotter` otherwise. The release never includes `.env`, API keys, uploaded media, logs, or generated videos.
+1. **Set up models:** open Settings and enter your API key, endpoint, and models. Provider charges apply; Crayotter does not include API credit.
+2. **Choose material:** upload local videos, describe a subject for online sourcing, or provide video links.
+3. **Describe the edit:** include duration, style, orientation, narration, and subtitle preferences, then start the task.
+4. **Review the result:** preview and save the final video from the task details, checking the narration, subtitles, and footage.
 
-To build the Windows x64 release with Python 3.12:
+Defaults are `qwen3.8-flash` for planning/editing, `qwen3.8-omni-flash` for audio/video analysis, and `qwen3-tts-flash` for speech. For visual-only analysis, set the video model to `qwen3.8-flash`. Explicit model settings are preserved.
 
-```powershell
-powershell -ExecutionPolicy Bypass -File packaging\build_windows.ps1
-```
+Sourcing, video analysis, and model reasoning take time. Runtime depends on footage length and provider response. A 30-second task is a useful first run.
 
-The build produces:
+## Common questions
 
-- `dist/Crayotter/`
-- `Crayotter-Windows-x64.zip`
+**Where is the result?**
+Open the task details in the workbench. Mac runtime data defaults to `~/Library/Application Support/Crayotter`; Windows uses the writable program directory or the user application-data directory.
 
-### Prerequisites
+**Why did sourcing fail?**
+Check platform access. For platforms requiring login, authorize through your local browser and retry, or upload your own footage.
 
-Ensure `ffmpeg` is reachable from your `PATH` so it can be called directly in a terminal. Download it from <https://ffmpeg.org/download.html> and verify with `ffmpeg -version`. On Windows, the bundled binaries under `script/dep/windows` (`ffmpeg.exe`, `ffprobe.cmd`, `yt-dlp.exe`) are also prepended to `PATH` automatically.
+**Why did the model or narration fail?**
+Check the API key, endpoint, model availability, and account balance. Text, video, and speech providers can be configured separately.
 
-### 1) Environment
+**Can I resume?**
+The workbench can resume jobs marked interrupted. A failed job is different and is not guaranteed to resume in place.
 
-Use Python 3.10+.
+## Run from source
 
-```bash
-python -m venv .venv
-.venv\Scripts\activate
-```
-
-### 2) Install Dependencies
-
-```bash
-pip install -r requirements.txt
-```
-
-To enable browser-rendered Douyin/Xiaohongshu extraction and user-authorized
-retry, install the optional browser dependencies instead:
+Use Python 3.10+ and FFmpeg/FFprobe. Runtime paths select matching bundled tools when available; on Mac, `python script/setup_ffmpeg.py` can fetch missing binaries.
 
 ```bash
-pip install -r requirements-browser.txt
+python -m pip install -r requirements.txt
+python script/run_backend.py --host 127.0.0.1 --port 8765
 ```
 
-This mode reuses a local Chrome/Edge installation and does not automate or
-bypass CAPTCHAs. Authorization state is temporary and job-scoped.
+Open `http://127.0.0.1:8765/ui/` and configure your API in Settings. For a native window, also install `requirements-desktop.txt` and run `python script/run_desktop.py`.
 
-### 3) Configure API Endpoints and Runtime Options
+## Development and research
 
-Copy `.env.example` to `.env`, then edit the values there:
-
-```bash
-copy .env.example .env
-```
-
-Common options:
-
-```env
-CRAYOTTER_API_KEY=your-key
-CRAYOTTER_BASE_URL=https://dashscope.aliyuncs.com/compatible-mode/v1
-CRAYOTTER_MODEL_NAME=qwen-plus
-CRAYOTTER_VIDEO_MODEL_NAME=qwen-vl-max-latest
-CRAYOTTER_TTS_MODEL_NAME=qwen-tts-latest
-
-CRAYOTTER_ENABLE_PHASE2_RESEARCH=true
-CRAYOTTER_ENABLE_PLAN_REVIEW=true
-CRAYOTTER_DIRECT_PHASE3_EXECUTION=false
-CRAYOTTER_PREFER_LOCAL_MATERIALS=false
-CRAYOTTER_SEARCH_POOL_SIZE=4
-CRAYOTTER_DOWNLOAD_POOL_SIZE=2
-CRAYOTTER_VIDEO_ANALYSIS_POOL_SIZE=2
-CRAYOTTER_LLM_POOL_SIZE=2
-CRAYOTTER_FFMPEG_POOL_SIZE=2
-CRAYOTTER_TTS_POOL_SIZE=2
-CRAYOTTER_EXPORT_POOL_SIZE=1
-CRAYOTTER_STANDARDIZE_TARGET_FPS=30
-CRAYOTTER_AUDIO_LOUDNORM_TARGET=0
-CRAYOTTER_AGENT_STALL_TIMEOUT_SECONDS=150
-```
-
-Notes:
-
-- `CRAYOTTER_DIRECT_PHASE3_EXECUTION=true` skips material search/download and goes straight into the existing-material analysis + Phase 3 execution path.
-- `CRAYOTTER_ENABLE_PLAN_REVIEW=true` generates a visual EditingPlan before editing and waits for user approval or natural-language revisions before Phase 3.
-- `CRAYOTTER_PREFER_LOCAL_MATERIALS=true` analyzes local materials first and only searches online when the current materials are not enough.
-- Resource-pool variables bound search, download, video analysis, LLM, FFmpeg, TTS, and final export work.
-- Material downloads are routed through `download_material_video`; Bilibili remains the default keyword-search source, while supported third-party URLs can be imported and cleaned through the same pipeline.
-- `CRAYOTTER_STANDARDIZE_TARGET_FPS` controls download cleanup frame rate. `CRAYOTTER_AUDIO_LOUDNORM_TARGET=0` disables loudness normalization; set a negative LUFS value such as `-16` to enable two-pass EBU R128 loudnorm.
-- `CRAYOTTER_AGENT_STALL_TIMEOUT_SECONDS` controls the “no new progress” watchdog threshold for running jobs.
-- The workbench UI writes API settings, Phase 2, direct Phase 3, local-first mode, and timeout changes back to the same `.env`.
-- Candidate ranking treats target orientation as a scoring factor: landscape by default, portrait when the user explicitly asks for it. Merge/export use scale-to-cover plus centered crop instead of direct stretching.
-- For videos under `user_temp`, Crayotter writes the matching `*_analysis.json` back into `user_temp`, reuses it on later runs, and removes the paired JSON when that upload is deleted from the workbench.
-- `memory_experience/latest_skills.md` is automatically compacted into bounded, reference-only case notes so it does not grow indefinitely or redefine future task goals.
-
-> Security note: never commit real API keys to version control.
-
-### 4) Run the Agent
-
-Interactive mode:
-
-```bash
-python script\agent.py
-```
-
-Single task mode:
-
-```bash
-python script\agent.py "Create a 1-minute campus-themed promo video"
-```
-
-### 5) Run the Workbench GUI
-
-Desktop mode starts the backend and opens the standalone window:
-
-```bash
-python script\run_desktop.py
-```
-
-Alternatively, start only the local backend service:
-
-```bash
-python script\run_backend.py --host 127.0.0.1 --port 8765
-```
-
-Then open the local workbench in your browser:
-
-```text
-http://127.0.0.1:8765/ui/
-```
-
-> The GUI uses the runtime-root `.env` as the only configuration source of truth. Do not commit real `.env` values.
-
----
-
-## Log Trace Visualization
-
-Launch trace UI using the latest log:
-
-```bash
-python script\visualize.py
-```
-
-Use a specific log:
-
-```bash
-python script\visualize.py logs\video_agent_20260321_045836.log
-```
-
-Custom port:
-
-```bash
-python script\visualize.py --port 8080
-```
-
-`script\visualize.py` also exports a static trace HTML file next to the input log (e.g., `*_trace.html`).
+- [Source setup, configuration, and traces](docs/development.md)
+- [Architecture](docs/architecture_cn.md)
+- [Tool protocol, MCP, and FFmpeg](docs/tool_protocol_and_ffmpeg.md)
+- [Windows build](packaging/build_windows.ps1) / [macOS build and signing](packaging/README_MACOS_CN.md)
+- [Papers and citation](docs/citation.md); [experimental RL training](phase3_rl/README.md) is separate from everyday editing.
 
 ---
 
@@ -362,7 +254,7 @@ Crayotter/
 │  ├─ visualize.py
 │  └─ tools/
 ├─ app/                # backend server, frontend, runtime paths
-├─ packaging/          # Windows release build scripts
+├─ packaging/          # Windows / macOS release build scripts
 ├─ phase3_rl/          # experimental RL smoke pipeline (not the main runtime)
 ├─ demo/               # showcase media
 ├─ logs/
@@ -374,3 +266,5 @@ Crayotter/
 ├─ crayottor_framework.jpg
 └─ requirements.txt
 ```
+
+Licensed under [PolyForm Noncommercial 1.0.0](LICENSE). Check the terms before commercial use.

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from app.model_defaults import output_tokens
+
 from . import _shared
 from ._shared import *
 
@@ -154,7 +156,7 @@ def rank_video_candidates(
                         {"role": "user", "content": json.dumps(batch, ensure_ascii=False)},
                     ],
                     temperature=0.1,
-                    max_tokens=1800,
+                    max_completion_tokens=output_tokens("phase1"),
                 )
                 content = _extract_chat_content(response)
                 parsed = json.loads(content)

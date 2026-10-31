@@ -90,7 +90,7 @@ export function SettingsModal({ configForm, setConfigForm, configMessage, setCon
                     <SettingSection icon={SlidersHorizontal} title={t("advanced")}>
                       <div className="grid gap-4 md:grid-cols-2">
                         <Field label={t("baseUrl")} value={configForm.baseUrl} onChange={(value) => update("baseUrl", value)} placeholder="https://.../v1" />
-                        <Field label={t("model")} value={configForm.model} onChange={(value) => update("model", value)} placeholder="qwen-plus" />
+                        <Field label={t("model")} value={configForm.model} onChange={(value) => update("model", value)} placeholder="qwen3.8-flash" />
                         <Field
                           label={t("videoApiKey")}
                           value={configForm.videoApiKey}
@@ -101,7 +101,7 @@ export function SettingsModal({ configForm, setConfigForm, configMessage, setCon
                           hideSecretLabel={t("hideSecret")}
                         />
                         <Field label={t("videoBaseUrl")} value={configForm.videoBaseUrl} onChange={(value) => update("videoBaseUrl", value)} placeholder={t("optionalBaseUrlPlaceholder")} />
-                        <Field label={t("videoModel")} value={configForm.videoModel} onChange={(value) => update("videoModel", value)} placeholder="qwen-vl-max-latest" />
+                        <Field label={t("videoModel")} value={configForm.videoModel} onChange={(value) => update("videoModel", value)} placeholder="qwen3.8-omni-flash" />
                         <Field
                           label={t("ttsApiKey")}
                           value={configForm.ttsApiKey}
@@ -112,8 +112,8 @@ export function SettingsModal({ configForm, setConfigForm, configMessage, setCon
                           hideSecretLabel={t("hideSecret")}
                         />
                         <Field label={t("ttsBaseUrl")} value={configForm.ttsBaseUrl} onChange={(value) => update("ttsBaseUrl", value)} placeholder={t("optionalBaseUrlPlaceholder")} />
-                        <Field label={t("ttsModel")} value={configForm.ttsModel} onChange={(value) => update("ttsModel", value)} placeholder="qwen-tts-latest" />
-                        <Field label={t("stallTimeout")} value={configForm.stallTimeout} onChange={(value) => update("stallTimeout", value)} placeholder="150" type="number" />
+                        <Field label={t("ttsModel")} value={configForm.ttsModel} onChange={(value) => update("ttsModel", value)} placeholder="qwen3-tts-flash" />
+                        <Field label={t("stallTimeout")} value={configForm.stallTimeout} onChange={(value) => update("stallTimeout", value)} placeholder="1200" type="number" />
                         <Field label="YouTube 模式 (auto/on/off)" value={configForm.youtubeMode} onChange={(value) => update("youtubeMode", value)} placeholder="auto" />
                         <Field label="素材平台（逗号分隔）" value={configForm.enabledMaterialPlatforms} onChange={(value) => update("enabledMaterialPlatforms", value)} placeholder="bilibili,douyin,xiaohongshu,youtube" />
                         <Field label="默认处理时限（秒）" value={configForm.defaultDeadlineSeconds} onChange={(value) => update("defaultDeadlineSeconds", value)} placeholder="600" type="number" />

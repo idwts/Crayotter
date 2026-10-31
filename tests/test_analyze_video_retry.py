@@ -1,6 +1,11 @@
 import importlib
+import os
 import sys
+import tempfile
 import unittest
+from contextlib import ExitStack
+from types import SimpleNamespace
+from unittest.mock import MagicMock
 from pathlib import Path
 from unittest.mock import patch
 
@@ -13,6 +18,27 @@ analyze_video_module = importlib.import_module("tools.analyze_video")
 
 
 class DashScopeVideoAnalysisRetryTests(unittest.TestCase):
+    def test_both_video_transports_receive_the_configured_waiting_limit(self):
+        for local in (False, True):
+            with self.subTest(compatible=local), tempfile.TemporaryDirectory() as directory, ExitStack() as stack:
+                source = Path(directory) / "source.mp4"
+                source.touch()
+                stack.enter_context(patch.dict(os.environ, {"CRAYOTTER_AGENT_STALL_TIMEOUT_SECONDS": "1800"}))
+                for name, value in {"_resolve_video_path": source, "_restore_cached_analysis": None, "_prepare_timestamped_video_for_analysis": None, "_is_local_base_url": local, "_get_fatal_analysis_error": "", "fail_fast_model_errors": False}.items():
+                    stack.enter_context(patch.object(analyze_video_module, name, return_value=value))
+                stack.enter_context(patch.object(analyze_video_module._shared, "VIDEO_MODEL_NAME", "qwen3.8-flash"))
+                stack.enter_context(patch.object(analyze_video_module._shared, "_get_source_duration_seconds", return_value=1.0))
+                call = MagicMock(side_effect=ValueError("request captured"))
+                if local:
+                    client = SimpleNamespace(chat=SimpleNamespace(completions=SimpleNamespace(create=call)))
+                    stack.enter_context(patch.object(analyze_video_module, "_get_video_client", return_value=client))
+                else:
+                    stack.enter_context(patch.object(analyze_video_module.dashscope.MultiModalConversation, "call", call))
+                analyze_video_module.analyze_video.invoke({"video_path": str(source)})
+                self.assertEqual(call.call_count, 1)
+                self.assertEqual(call.call_args.kwargs["timeout" if local else "request_timeout"], 1800)
+                self.assertNotIn("enable_thinking", call.call_args.kwargs)
+
     def test_long_video_prompt_requests_bounded_full_timeline(self) -> None:
         guidance = analyze_video_module._analysis_segment_guidance(604.0)
 

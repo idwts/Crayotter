@@ -23,7 +23,7 @@ def export_video(
             - "4k"：3840×2160，超高清（编码耗时较长）
     """
     try:
-        from moviepy.video.io.VideoFileClip import VideoFileClip
+        from ._native_ffmpeg import export_video_native, probe_video
 
         resolved_input = _resolve_workspace_input_path(input_path, must_exist=True)
         if resolved_input is None:
@@ -31,17 +31,9 @@ def export_video(
 
         output_path = _safe_output_video_path(output_name, default_stem="output_final")
 
-        source_clip = VideoFileClip(str(resolved_input))
-        target = _pick_export_target_size(resolution, source_clip.size)
-        clip = source_clip if source_clip.size == target else _fit_clip_to_canvas(source_clip, target)
-        clip.write_videofile(
-            str(output_path), codec="libx264", audio_codec="aac",
-            bitrate="8000k", logger=None
-        )
-        dur = clip.duration
-        clip.close()
-        if clip is not source_clip:
-            source_clip.close()
+        source = probe_video(resolved_input)
+        target = _pick_export_target_size(resolution, (source.width, source.height))
+        dur = export_video_native(resolved_input, output_path, target_size=target)
 
         return json.dumps({
             "status": "success",

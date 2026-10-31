@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import platform
 import shutil
 import sys
 from collections.abc import Mapping
@@ -49,6 +50,12 @@ def get_runtime_root() -> Path:
     env_root = os.environ.get("CRAYOTTER_RUNTIME_ROOT", "").strip()
     if env_root:
         root = Path(env_root).expanduser().resolve()
+        root.mkdir(parents=True, exist_ok=True)
+        return root
+
+    # A signed macOS bundle must remain read-only, even in a writable folder.
+    if is_frozen() and sys.platform == "darwin":
+        root = Path.home() / "Library" / "Application Support" / APP_NAME
         root.mkdir(parents=True, exist_ok=True)
         return root
 
@@ -179,38 +186,56 @@ def _seed_runtime_tree(relative_dir: str) -> None:
 def _prepend_path(entries: list[Path]) -> None:
     current = os.environ.get("PATH", "")
     existing = [item for item in current.split(os.pathsep) if item]
-    normalized_existing = {str(Path(item).resolve()) for item in existing if Path(item).exists()}
 
     ordered: list[str] = []
     for entry in entries:
         if not entry.exists():
             continue
         resolved = str(entry.resolve())
-        if resolved in normalized_existing or resolved in ordered:
+        if resolved in ordered:
             continue
         ordered.append(resolved)
 
     if ordered:
-        os.environ["PATH"] = os.pathsep.join([*ordered, current] if current else ordered)
+        remaining = [item for item in existing if str(Path(item).resolve()) not in ordered]
+        os.environ["PATH"] = os.pathsep.join([*ordered, *remaining])
+
+
+def binary_platform() -> tuple[str, str]:
+    """Return the bundle's OS/CPU directory names without crossing architectures."""
+    system = platform.system().lower()
+    system = {"darwin": "macos", "windows": "windows", "linux": "linux"}.get(system, system)
+    machine = platform.machine().lower()
+    architecture = {
+        "aarch64": "arm64", "arm64": "arm64",
+        "amd64": "x86_64", "x64": "x86_64", "x86_64": "x86_64",
+        "i386": "x86", "i686": "x86", "x86": "x86",
+    }.get(machine, machine)
+    return system, architecture
 
 
 def _binary_search_roots() -> list[Path]:
     runtime_root = get_runtime_root()
     bundle_root = get_bundle_root()
+    system, architecture = binary_platform()
 
     def _script_binary_dirs(root: Path) -> list[Path]:
         return [
-            root / "script" / "dep" / "windows",
-            root / "script" / "lib" / "windows",
-            root / "script" / "dep",
-            root / "script" / "lib",
+            root / "script" / "dep" / system / architecture,
+            root / "script" / "dep" / system,
+            root / "script" / "lib" / system / architecture,
+            root / "script" / "lib" / system,
+            root / "app" / "bin" / system / architecture,
+            root / "app" / "bin" / system,
         ]
 
     candidates = [
         *_script_binary_dirs(runtime_root),
         *_script_binary_dirs(bundle_root),
-        runtime_root / "app" / "bin" / "windows",
-        bundle_root / "app" / "bin" / "windows",
+        runtime_root / "script" / "dep",
+        bundle_root / "script" / "dep",
+        runtime_root / "script" / "lib",
+        bundle_root / "script" / "lib",
         runtime_root / "app" / "bin",
         bundle_root / "app" / "bin",
         runtime_root,
@@ -228,7 +253,7 @@ def resolve_binary(*names: str) -> Path | None:
             candidates.append(root / name)
 
     for candidate in candidates:
-        if candidate.exists():
+        if candidate.is_file() and (binary_platform()[0] == "windows" or os.access(candidate, os.X_OK)):
             return candidate.resolve()
 
     for name in names:
@@ -249,16 +274,25 @@ def configure_runtime_environment() -> None:
     os.environ.setdefault("CRAYOTTER_RUNTIME_ROOT", str(runtime_root))
     load_runtime_env_file(override=False)
 
-    _prepend_path(_binary_search_roots())
+    # Explicit binary overrides also take precedence for legacy subprocess calls
+    # that invoke ffmpeg/ffprobe by name rather than reading the environment.
+    overrides = [Path(value).expanduser().parent for name in ("FFMPEG_BIN", "FFPROBE_BIN")
+                 if (value := os.environ.get(name, "").strip()) and Path(value).expanduser().is_file()]
+    _prepend_path([*overrides, *_binary_search_roots()])
 
-    ffmpeg_names = ("ffmpeg.exe", "ffmpeg") if os.name == "nt" else ("ffmpeg",)
-    yt_dlp_names = ("yt-dlp.exe", "yt-dlp.cmd", "yt-dlp") if os.name == "nt" else ("yt-dlp",)
+    windows = binary_platform()[0] == "windows"
+    ffmpeg_names = ("ffmpeg.exe", "ffmpeg") if windows else ("ffmpeg",)
+    ffprobe_names = ("ffprobe.exe", "ffprobe.cmd", "ffprobe") if windows else ("ffprobe",)
+    yt_dlp_names = ("yt-dlp.exe", "yt-dlp.cmd", "yt-dlp") if windows else ("yt-dlp",)
 
     ffmpeg_path = resolve_binary(*ffmpeg_names)
+    ffprobe_path = resolve_binary(*ffprobe_names)
     yt_dlp_path = resolve_binary(*yt_dlp_names)
 
     if ffmpeg_path is not None:
         os.environ.setdefault("FFMPEG_BIN", str(ffmpeg_path))
+    if ffprobe_path is not None:
+        os.environ.setdefault("FFPROBE_BIN", str(ffprobe_path))
     if yt_dlp_path is not None:
         os.environ.setdefault("CRAYOTTER_YTDLP_BIN", str(yt_dlp_path))
 

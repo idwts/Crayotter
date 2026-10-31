@@ -1,0 +1,2 @@
+# Install after requirements.txt; keep the tested SDK interface stable.
+mcp==1.30.0

@@ -9,10 +9,24 @@ if str(SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPT_DIR))
 
 from tools._shared import BUNDLE_DIR
-from tools.subtitle_layout import create_subtitle_clip, wrap_subtitle_text
+from tools.subtitle_layout import render_subtitle_image, wrap_subtitle_text
 
 
 class SubtitleLayoutTests(unittest.TestCase):
+    def test_portrait_multiline_subtitles_keep_all_pixels_inside_safe_area(self):
+        font = BUNDLE_DIR / "AlibabaPuHuiTi-3-55-Regular/AlibabaPuHuiTi-3-55-Regular.ttf"
+        image, y, _, margin, _ = render_subtitle_image(
+            text="沿着湖岸慢慢走，看看远处的山与近处的水。" * 4,
+            font_path=str(font), video_size=(720, 1280),
+        )
+        try:
+            self.assertGreater(image.getbbox()[3], 0)
+            self.assertLessEqual(image.width, 720)
+            self.assertGreaterEqual(y, 0)
+            self.assertLessEqual(y + image.height, 1280 - margin)
+        finally:
+            image.close()
+
     def test_multiline_subtitle_stays_inside_bottom_safe_area(self) -> None:
         font_path = (
             BUNDLE_DIR
@@ -20,16 +34,15 @@ class SubtitleLayoutTests(unittest.TestCase):
             / "AlibabaPuHuiTi-3-55-Regular.ttf"
         )
         self.assertTrue(font_path.is_file())
-        clip, y_position, _, bottom_margin, _ = create_subtitle_clip(
+        clip, y_position, _, bottom_margin, _ = render_subtitle_image(
             text="这是一段用于验证多行字幕不会越过视频画布底边的较长字幕内容" * 3,
             font_path=str(font_path),
             video_size=(1280, 720),
-            duration=1.0,
         )
         try:
-            self.assertGreaterEqual(clip.h, 1)
+            self.assertGreaterEqual(clip.height, 1)
             self.assertGreaterEqual(y_position, 0)
-            self.assertLessEqual(y_position + clip.h, 720 - bottom_margin)
+            self.assertLessEqual(y_position + clip.height, 720 - bottom_margin)
         finally:
             clip.close()
 

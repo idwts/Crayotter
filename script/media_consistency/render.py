@@ -2,12 +2,16 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
+import math
 import subprocess
 from typing import Callable
 
 from .probe import MediaProbe, probe_media
 from .profile import MediaProfile
+from .quality import _last_loudnorm_json
 
+# AAC reconstruction can exceed the PCM true peak; reserve encoding headroom.
+AAC_PEAK_HEADROOM_DB = 0.5
 
 @dataclass(frozen=True)
 class CanonicalRenderRequest:
@@ -57,6 +61,7 @@ def build_canonical_render_command(
     request: CanonicalRenderRequest,
     *,
     ffmpeg_bin: str = "ffmpeg",
+    loudness_measurements: dict | None = None,
 ) -> list[str]:
     """Build, but do not execute, a canonical FFmpeg render command."""
     if request.probe.is_hdr and not request.allow_hdr_tonemap:
@@ -105,11 +110,31 @@ def build_canonical_render_command(
         else request.profile.clip_loudness_lufs
     )
     audio_input = "0:a:0" if request.probe.has_audio else "1:a:0"
+    peak_target = request.profile.true_peak_dbfs - (
+        AAC_PEAK_HEADROOM_DB if request.final_mix and request.profile.audio_codec == "aac" else 0.0
+    )
+    normalization = ""
+    if request.probe.has_audio:
+        normalization = (
+            f"loudnorm=I={loudness:.1f}:TP={peak_target:.1f}:"
+            f"LRA={request.profile.loudness_range:.1f}"
+        )
+        if loudness_measurements is not None:
+            values = {name: float(loudness_measurements[key]) for name, key in {
+                "measured_I": "input_i", "measured_TP": "input_tp",
+                "measured_LRA": "input_lra", "measured_thresh": "input_thresh",
+                "offset": "target_offset",
+            }.items()}
+            if values["measured_I"] == values["measured_TP"] == -math.inf:
+                normalization = ""  # Silence has no finite loudness to normalize.
+            elif not all(math.isfinite(value) for value in values.values()):
+                raise ValueError("Final audio loudness could not be measured")
+            else:
+                normalization += "".join(f":{name}={value:.6f}" for name, value in values.items()) + ":linear=true"
     audio_filter = (
         f"[{audio_input}]aresample={request.profile.audio_sample_rate},"
-        "aformat=sample_fmts=fltp:channel_layouts=stereo,"
-        f"loudnorm=I={loudness:.1f}:TP={request.profile.true_peak_dbfs:.1f}:"
-        f"LRA={request.profile.loudness_range:.1f}[aout]"
+        "aformat=sample_fmts=fltp:channel_layouts=stereo"
+        + (f",{normalization}" if normalization else "") + "[aout]"
     )
     filters = _video_filter(request.profile, hdr=request.probe.is_hdr) + ";" + audio_filter
     command.extend(
@@ -168,6 +193,18 @@ def render_canonical_media(
     output = Path(request.output_path).resolve(strict=False)
     output.parent.mkdir(parents=True, exist_ok=True)
     command = build_canonical_render_command(request, ffmpeg_bin=ffmpeg_bin)
+    if request.final_mix and request.probe.has_audio:
+        filters = command[command.index("-filter_complex") + 1]
+        loudnorm = filters.split("loudnorm=", 1)[1].split("[aout]", 1)[0]
+        measurement_command = command[:command.index("-filter_complex")] + [
+            "-map", "0:a:0", "-vn", "-af", f"loudnorm={loudnorm}:print_format=json",
+            "-f", "null", "-",
+        ]
+        measured = runner(measurement_command, capture_output=True, text=True, timeout=timeout_seconds, check=False)
+        if measured.returncode != 0:
+            raise RuntimeError(f"Audio loudness measurement failed: {(measured.stderr or '')[-1600:]}")
+        measurements = _last_loudnorm_json((measured.stderr or "") + (measured.stdout or ""))
+        command = build_canonical_render_command(request, ffmpeg_bin=ffmpeg_bin, loudness_measurements=measurements)
     completed = runner(
         command,
         capture_output=True,

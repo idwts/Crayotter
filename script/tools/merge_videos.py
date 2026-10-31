@@ -26,69 +26,27 @@ def merge_videos(
             仅在 target_duration 不为 None 时生效，一般无需修改。
     """
     try:
-        from moviepy import concatenate_videoclips
-        from moviepy.video.io.VideoFileClip import VideoFileClip
+        from ._native_ffmpeg import merge_videos_native
 
         output_path = _safe_output_video_path(output_name, default_stem="merged")
         if not video_paths:
             return "合并出错: 没有可用的视频片段"
 
-        clips: list[Any] = []
-        remaining = target_duration if target_duration and target_duration > 0 else None
-
+        inputs = []
         for raw_path in video_paths:
-            if remaining is not None and remaining <= 0:
-                break
-            resolved_input = _resolve_workspace_input_path(raw_path, must_exist=True)
-            if resolved_input is None:
+            resolved = _resolve_workspace_input_path(raw_path, must_exist=True)
+            if resolved is None:
                 return f"合并出错: 文件不存在或不在WORKSPACE: {raw_path}"
-            p = str(resolved_input)
-            clip = VideoFileClip(p)
-            if remaining is not None and clip.duration > remaining * (1 + tolerance):
-                logger.info(f"⏱️ 合并阶段裁剪片段以满足时长限制: {p}, 原时长={clip.duration:.1f}s, 目标裁剪={remaining:.1f}s")
-                clip = clip.subclipped(0, remaining)
-            clips.append(clip)
-            if remaining is not None:
-                remaining -= clip.duration
-
-        if not clips:
-            return "合并出错: 没有可合并的有效片段"
-
-        landscape_clips = [clip for clip in clips if clip.size[0] >= clip.size[1]]
-        portrait_clips = [clip for clip in clips if clip.size[1] > clip.size[0]]
-        anchor_clip = (
-            portrait_clips[0]
-            if portrait_clips and len(portrait_clips) > len(landscape_clips)
-            else landscape_clips[0]
-            if landscape_clips
-            else clips[0]
+            inputs.append(resolved)
+        total_dur, num_clips, (target_w, target_h) = merge_videos_native(
+            inputs, output_path, target_duration=target_duration, tolerance=tolerance,
         )
-        target_w, target_h = anchor_clip.size
-        fitted_clips: list[Any] = []
-        for c in clips:
-            fitted_clips.append(_fit_clip_to_canvas(c, (target_w, target_h)))
-
-        final = concatenate_videoclips(fitted_clips, method="compose")
-        final.write_videofile(
-            str(output_path), codec="libx264", audio_codec="aac", logger=None
-        )
-        total_dur = sum(c.duration for c in clips)
-        final.close()
-        seen_ids: set[int] = set()
-        for clip_obj in [*fitted_clips, *clips]:
-            if id(clip_obj) in seen_ids:
-                continue
-            seen_ids.add(id(clip_obj))
-            try:
-                clip_obj.close()
-            except Exception:
-                pass
 
         return json.dumps({
             "status": "success",
             "path": str(output_path),
             "total_duration": round(total_dur, 1),
-            "num_clips": len(clips),
+            "num_clips": num_clips,
             "target_duration": target_duration,
             "canvas_size": f"{target_w}x{target_h}",
         }, ensure_ascii=False)

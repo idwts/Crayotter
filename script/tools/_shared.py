@@ -3,16 +3,18 @@
 核心能力:
     - 视频搜索与下载 (yt-dlp, bilibili-api)
     - 多模态视频内容分析 (GPT-4o Vision — 抽帧+理解)
-    - 视频剪辑/合并/转场 (moviepy)
+    - 视频剪辑/合并/转场 (FFmpeg)
     - AI 旁白生成 (OpenAI TTS)
     - AI 视频片段生成 (占位/可接入 Runway 等)
 
 依赖:
-    pip install yt-dlp moviepy opencv-python openai langchain langchain-core langchain_openai
+    pip install yt-dlp opencv-python openai langchain langchain-core langchain_openai
     pip install bilibili-api-python aiohttp
 """
 
 from __future__ import annotations
+
+from app.model_defaults import output_tokens
 
 import base64
 
@@ -395,7 +397,7 @@ def _generate_query_variants(query: str, max_variants: int) -> list[str]:
                 {"role": "user", "content": base},
             ],
             temperature=0.3,
-            max_tokens=400,
+            max_completion_tokens=output_tokens("phase1"),
         )
         content = _extract_chat_content(response)
         if not content and fail_fast_model_errors():
@@ -724,25 +726,6 @@ def _orientation_bonus(target_orientation: str, candidate_orientation: str) -> f
     if target_orientation == "portrait":
         return 1.1 if candidate_orientation == "portrait" else -1.1
     return 0.7 if candidate_orientation == "landscape" else -1.0
-
-def _fit_clip_to_canvas(clip: Any, target_size: tuple[int, int]) -> Any:
-    from moviepy.video.compositing.CompositeVideoClip import CompositeVideoClip
-
-    target_w, target_h = int(target_size[0]), int(target_size[1])
-    src_w, src_h = int(clip.size[0]), int(clip.size[1])
-    if src_w <= 0 or src_h <= 0:
-        return clip
-    if (src_w, src_h) == (target_w, target_h):
-        return clip
-
-    scale = max(target_w / src_w, target_h / src_h)
-    resized_w = max(1, int(round(src_w * scale)))
-    resized_h = max(1, int(round(src_h * scale)))
-    fitted = clip.resized((resized_w, resized_h)).with_position(("center", "center"))
-    composite = CompositeVideoClip([fitted], size=(target_w, target_h))
-    if getattr(clip, "audio", None) is not None:
-        composite = composite.with_audio(clip.audio)
-    return composite
 
 def _pick_export_target_size(resolution: str, source_size: tuple[int, int]) -> tuple[int, int]:
     res_map = {"720p": (1280, 720), "1080p": (1920, 1080), "4k": (3840, 2160)}

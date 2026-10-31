@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from app.model_defaults import DEFAULT_AGENT_STALL_TIMEOUT_SECONDS, DEFAULT_MODEL_NAME, output_tokens
+
 import json
 import shutil
 import subprocess
@@ -47,7 +49,7 @@ def format_events_as_log(events: list[dict[str, Any]]) -> str:
 
 
 class ManagedJob:
-    def __init__(self, record: JobRecord, job_dir: Path, stall_timeout_seconds: int = 150) -> None:
+    def __init__(self, record: JobRecord, job_dir: Path, stall_timeout_seconds: int = DEFAULT_AGENT_STALL_TIMEOUT_SECONDS) -> None:
         self.record = record
         self.job_dir = job_dir
         self.bus = EventBus()
@@ -64,7 +66,7 @@ class ManagedJob:
 
 
 class RuntimeManager:
-    AGENT_STALL_TIMEOUT_SECONDS = 600
+    AGENT_STALL_TIMEOUT_SECONDS = DEFAULT_AGENT_STALL_TIMEOUT_SECONDS
 
     def __init__(self, config_store: ConfigStore) -> None:
         self.config_store = config_store
@@ -972,7 +974,7 @@ class RuntimeManager:
             runtime_config = {}
         api_key = str(runtime_config.get("api_key") or "").strip()
         base_url = str(runtime_config.get("base_url") or "").strip()
-        model_name = str(runtime_config.get("model_name") or "qwen-plus").strip() or "qwen-plus"
+        model_name = str(runtime_config.get("model_name") or DEFAULT_MODEL_NAME).strip() or DEFAULT_MODEL_NAME
         if not api_key:
             current = self._plan_store(job).get_plan(plan_version)
             if current is None:
@@ -998,7 +1000,7 @@ class RuntimeManager:
             response = client.chat.completions.create(
                 model=model_name,
                 temperature=0.1,
-                max_tokens=2200,
+                max_completion_tokens=output_tokens("phase3"),
                 messages=[
                     {"role": "system", "content": prompt},
                     {
