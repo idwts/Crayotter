@@ -115,7 +115,8 @@ class CanonicalRenderCommandTests(unittest.TestCase):
         self.assertIn("anullsrc=r=48000:cl=stereo", joined)
         self.assertIn("gblur=sigma=30", joined)
         self.assertIn("fps=30", joined)
-        self.assertIn("loudnorm=I=-18.0:TP=-1.5:LRA=11.0", joined)
+        self.assertNotIn("loudnorm", joined)
+        self.assertIn("aformat=sample_fmts=fltp:channel_layouts=stereo", joined)
         self.assertIn("-color_primaries bt709", joined)
         self.assertEqual(command[-1], "output.mp4")
 

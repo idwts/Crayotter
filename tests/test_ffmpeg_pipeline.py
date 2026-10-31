@@ -134,6 +134,36 @@ class FfmpegPipelineTests(unittest.TestCase):
         self.assertLess(rgb[0], 30)
         self.assertAlmostEqual(native.probe_video(tail).duration, 1.0, delta=0.12)
 
+    def test_canonical_short_silent_clip_encodes_without_invalid_audio(self):
+        from dataclasses import replace
+        from script.media_consistency import CanonicalRenderRequest, probe_media, render_canonical_media, resolve_media_profile
+        output = self.root / "canonical_silent.mp4"
+        profile = replace(resolve_media_profile(2), width=320, height=180)
+        render_canonical_media(CanonicalRenderRequest(self.silent, output, profile, probe_media(self.silent)), ffmpeg_bin=self.ffmpeg)
+        probe = probe_media(output)
+        self.assertTrue(probe.has_audio)
+        self.assertAlmostEqual(probe.duration_seconds, 2.0, delta=0.1)
+        self.run_ffmpeg("-xerror", "-i", str(output), "-f", "null", "-")
+
+    def test_final_mix_measures_loudness_before_single_video_encode(self):
+        from dataclasses import replace
+        from script.media_consistency import CanonicalRenderRequest, build_quality_analysis_commands, parse_quality_analysis_outputs, probe_media, render_canonical_media, resolve_media_profile
+        source, output = self.root / "dynamic_audio.mp4", self.root / "normalized_final.mp4"
+        self.run_ffmpeg("-f", "lavfi", "-i", "color=c=blue:s=320x180:r=24:d=15", "-f", "lavfi", "-i", "sine=frequency=440:duration=15", "-af", "volume='if(lt(t,5),0.08,if(lt(t,10),0.5,0.02))':eval=frame", "-c:v", "libx264", "-c:a", "aac", str(source))
+        profile = replace(resolve_media_profile(15), width=320, height=180)
+        calls = []
+        def run(command, **kwargs):
+            calls.append(command)
+            return subprocess.run(command, **kwargs)
+        render_canonical_media(CanonicalRenderRequest(source, output, profile, probe_media(source), final_mix=True), ffmpeg_bin=self.ffmpeg, runner=run)
+        self.assertEqual(sum("-c:v" in command for command in calls), 1)
+        self.assertTrue(any("-vn" in command for command in calls))
+        command = build_quality_analysis_commands(output, ffmpeg_bin=self.ffmpeg).loudness
+        measured = subprocess.run(command, capture_output=True, text=True, check=True, timeout=60)
+        metrics = parse_quality_analysis_outputs(duration_seconds=15, loudness_output=measured.stderr, black_frames_output="", freeze_frames_output="", decode_returncode=0)
+        self.assertAlmostEqual(metrics.integrated_lufs, -16, delta=1.0)
+        self.assertLessEqual(metrics.true_peak_dbfs, -1.5)
+
     def test_registered_narration_tools_use_native_rendering(self):
         from tools import TOOL_REGISTRY, _shared
         from tools.narration_pipeline import compose_prepared_narration
