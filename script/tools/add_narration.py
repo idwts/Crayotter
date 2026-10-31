@@ -11,7 +11,7 @@ def add_narration(
     output_name: str = "narrated",
 ) -> str:
     """为视频添加 AI 生成的 TTS 旁白配音，原视频背景音量会自动降至 20%。
-    旁白音频时长若超过视频时长，超出部分会被截断。
+    旁白音频时长若超过视频时长，会明确报错，不截断台词。
 
     Args:
         video_path: 输入视频文件路径，例如 "/workspace/final_video.mp4"。

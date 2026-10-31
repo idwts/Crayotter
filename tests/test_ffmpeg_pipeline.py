@@ -199,6 +199,55 @@ class FfmpegPipelineTests(unittest.TestCase):
             self.assertEqual(result["segment_count"], 1)
             self.assertAlmostEqual(native.probe_video(Path(result["path"])).duration, 2.0, delta=0.1)
 
+    def test_complete_narration_and_subtitles_extend_into_free_time(self):
+        import numpy as np
+        from tools import TOOL_REGISTRY, _shared
+        segmented = importlib.import_module("tools.add_narration_segments")
+        def generate(text, voice, path):
+            self.run_ffmpeg("-i", str(self.voice), str(path))
+            return None
+        texts = ["完整旁白", "保留末尾"]
+        with patch.object(_shared, "WORKSPACE", self.root), patch.object(segmented, "WORKSPACE", self.root), patch.object(segmented, "_tts_generate", side_effect=generate) as tts:
+            result = TOOL_REGISTRY.call("add_narration_segments", {
+                "video_path": str(self.silent), "segments": [
+                    {"text": texts[0], "start": 0.5, "end": 0.6},
+                    {"text": texts[1], "start": 1.4, "end": 1.5},
+                ], "output_name": "extended_speech",
+            })
+        self.assertFalse(result.is_error, result.text)
+        self.assertEqual([call.args[0] for call in tts.call_args_list], texts)
+        aligned = result.data["segments"]
+        self.assertEqual([item["text"] for item in aligned], texts)
+        self.assertGreater(aligned[0]["end"], 0.6)
+        self.assertAlmostEqual(aligned[0]["end"] - aligned[0]["start"], native.probe_audio_duration(Path(aligned[0]["audio_path"])), places=3)
+        self.assertLessEqual(aligned[0]["end"], aligned[1]["start"])
+        output = Path(result.data["path"])
+        pcm = self.run_ffmpeg("-i", str(output), "-vn", "-ac", "1", "-ar", "8000", "-f", "f32le", "-")
+        samples = np.frombuffer(pcm, dtype=np.float32)
+        self.assertGreater(float(np.sqrt(np.mean(samples[6400:7600] ** 2))), 0.01)
+        for at, expected in [(0.85, True), (1.2, False), (1.65, True)]:
+            frame = self.run_ffmpeg("-ss", str(at), "-i", str(output), "-frames:v", "1", "-f", "rawvideo", "-pix_fmt", "rgb24", "-")
+            white = np.all(np.frombuffer(frame, dtype=np.uint8).reshape(-1, 3) > 180, axis=1).sum()
+            self.assertEqual(white > 5, expected)
+
+    def test_narration_cannot_overlap_next_start_or_overrun_video(self):
+        from tools import _shared
+        from tools.narration_pipeline import align_prepared_narration
+        for segments in [
+            [{"audio_path": str(self.voice), "start": 0.1, "end": 0.2}, {"audio_path": str(self.voice), "start": 0.4, "end": 0.5}],
+            [{"audio_path": str(self.voice), "start": 1.8, "end": 1.9}],
+        ]:
+            with self.subTest(segments=segments), patch.object(_shared, "WORKSPACE", self.root):
+                with self.assertRaisesRegex(ValueError, "不能截断台词"):
+                    align_prepared_narration(segments, 2.0)
+
+    def test_native_mixer_rejects_truncation_without_replacing_output(self):
+        output = self.root / "keep_narration.mp4"
+        output.write_bytes(b"existing output")
+        with self.assertRaisesRegex(ValueError, "refusing to truncate"):
+            native.mix_narration_native(self.silent, output, [(self.voice, 0.1, 0.2)])
+        self.assertEqual(output.read_bytes(), b"existing output")
+
 
 if __name__ == "__main__":
     unittest.main()

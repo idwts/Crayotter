@@ -325,7 +325,7 @@ def mix_narration_native(
     output_path: Path,
     segments: Sequence[tuple[Path, float, float]],
 ) -> float:
-    """Trim/delay narration and mix over a full-length bed; copy video packets."""
+    """Mix complete narration over a full-length bed; copy video packets."""
     probe = probe_video(video_path)
     if not segments:
         raise ValueError("no narration segments were supplied")
@@ -333,6 +333,8 @@ def mix_narration_native(
     for audio_path, start, end in segments:
         if not all(math.isfinite(v) for v in (start, end)) or start < 0 or end <= start or start >= probe.duration:
             raise ValueError(f"invalid narration slot: {start}-{end}")
+        if probe_audio_duration(audio_path) > min(end, probe.duration) - start + 0.001:
+            raise ValueError(f"narration audio exceeds its slot {start}-{end}; refusing to truncate speech")
         command.extend(["-i", str(audio_path)])
     duration = probe.duration
     filters = []

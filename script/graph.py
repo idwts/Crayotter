@@ -4952,6 +4952,7 @@ def _run_controlled_editor_legacy(state: AgentState) -> str:
         kind="narration_mix",
         tool_name="add_narration_segments",
         description="串行混合旁白和字幕",
+        arguments={"timing_policy": "measured_duration_v1"},
         depends_on=[merge_task.id, analyze_task.id, *[task.id for task in tts_tasks]],
         resources={"ffmpeg_pool": 1},
         conflict_keys=[f"write:{(WORKSPACE / 'phase3_narrated.mp4').resolve()}"],
@@ -5090,6 +5091,7 @@ def _run_controlled_editor_legacy(state: AgentState) -> str:
                 data={
                     "audio_path": str(audio_path.resolve()),
                     "text": task.arguments["text"],
+                    "scene_id": task.arguments.get("scene_id", ""),
                     "start": task.arguments["start"],
                     "end": task.arguments["end"],
                 },
@@ -5151,7 +5153,7 @@ def _run_controlled_editor_legacy(state: AgentState) -> str:
             raw = _TOOL_NAME_MAP["add_subtitles"].invoke(
                 {
                     "video_path": input_path,
-                    "subtitles": [item.model_dump() for item in plan.narration],
+                    "subtitles": dependencies[narration_task.id].result["narration"]["segments"],
                     "output_name": "phase3_subtitled",
                 }
             )
@@ -5536,11 +5538,13 @@ def _run_controlled_editor(state: AgentState) -> str:
         arguments={
             "video_path": merged_path,
             "segments": [item.model_dump() for item in narration_plan.narration],
+            "timing_policy": "measured_duration_v1",
         },
         depends_on=[task.id for task in tts_tasks],
         resources={"ffmpeg_pool": 1},
-        conflict_keys=[f"write:{(WORKSPACE / 'phase3_narrated.mp4').resolve()}"],
-        output_kinds=["narrated_video"],
+        conflict_keys=[f"write:{(WORKSPACE / 'phase3_narrated.mp4').resolve()}",
+                       f"write:{(WORKSPACE / 'phase3_narration_aligned.json').resolve()}"],
+        output_kinds=["narrated_video", "aligned_narration"],
     )
     narration_execution = ExecutionPlan(
         plan_id="phase3_narration_execution",
@@ -5567,6 +5571,7 @@ def _run_controlled_editor(state: AgentState) -> str:
                 data={
                     "audio_path": str(audio_path.resolve()),
                     "text": task.arguments["text"],
+                    "scene_id": task.arguments.get("scene_id", ""),
                     "start": task.arguments["start"],
                     "end": task.arguments["end"],
                 },
@@ -5586,17 +5591,9 @@ def _run_controlled_editor(state: AgentState) -> str:
             )
         if not narration_plan.narration:
             return TaskExecutionResult(data={"path": merged_path})
-        validation_raw = _TOOL_NAME_MAP["validate_narration_timeline"].invoke(
-            {
-                "video_path": merged_path,
-                "segments": [item.model_dump() for item in narration_plan.narration],
-            }
-        )
-        validation = json.loads(str(validation_raw))
-        if validation.get("status") == "fail":
-            raise RuntimeError(f"旁白时间线校验失败: {validation}")
         prepared_segments = [
-            dependencies[item.id].result for item in tts_tasks
+            {"scene_id": segment.scene_id, **dependencies[item.id].result}
+            for segment, item in zip(narration_plan.narration, tts_tasks)
         ]
         raw = compose_prepared_narration(
             video_path=merged_path,
@@ -5607,15 +5604,27 @@ def _run_controlled_editor(state: AgentState) -> str:
         path = str(parsed.get("path") or "")
         if parsed.get("status") != "success" or not path:
             raise RuntimeError(f"旁白混合失败: {str(raw)[:300]}")
+        aligned = parsed["segments"]
+        validation = json.loads(str(_TOOL_NAME_MAP["validate_narration_timeline"].invoke(
+            {"video_path": merged_path, "segments": aligned}
+        )))
+        if validation.get("status") == "fail":
+            raise RuntimeError(f"旁白时间线校验失败: {validation}")
+        aligned_path = WORKSPACE / "phase3_narration_aligned.json"
+        aligned_path.write_text(json.dumps({"narration": aligned}, ensure_ascii=False, indent=2), encoding="utf-8")
         return TaskExecutionResult(
-            data={"path": path},
+            data={"path": path, "segments": aligned},
             artifacts=[
                 _task_artifact(
                     artifact_id="phase3_narrated_video",
                     kind="narrated_video",
                     path=path,
                     task=task,
-                )
+                ),
+                _task_artifact(
+                    artifact_id="phase3_narration_aligned", kind="aligned_narration",
+                    path=aligned_path, task=task,
+                ),
             ],
         )
 
@@ -5625,6 +5634,11 @@ def _run_controlled_editor(state: AgentState) -> str:
         resume=True,
     )
     narrated_path = str(narration_states[narration_task.id].result["path"])
+    if narration_plan.narration:
+        narration_plan = ControlledNarrationPlan(
+            narration=[ControlledNarration.model_validate(item) for item in narration_states[narration_task.id].result["segments"]],
+            voice=narration_plan.voice,
+        )
 
     state = _phase3_checkpoint(
         state,
@@ -5722,6 +5736,7 @@ def _run_controlled_editor(state: AgentState) -> str:
             "input_path": subtitled_path,
             "output_name": export_output_name,
             "resolution": plan.resolution,
+            "narration_timing_policy": "measured_duration_v1",
             "revision": REVISION,
             "media_profile": media_profile.to_dict(),
             "preset": "superfast" if state.degradation_level >= 3 else "veryfast",

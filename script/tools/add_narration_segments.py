@@ -1,14 +1,13 @@
 from __future__ import annotations
 
-from app.model_defaults import output_tokens
+import math
+
 from . import _shared
 from ._shared import *
 from ._shared import (
     Any,
     Path,
     WORKSPACE,
-    _extract_chat_content,
-    _get_openai_client,
     _resolve_workspace_input_path,
     _safe_output_video_path,
     _tts_generate,
@@ -19,88 +18,6 @@ from .subtitle_layout import burn_subtitles, resolve_subtitle_font
 
 # Kept as an import alias for callers of the original helper.
 _resolve_subtitle_font_path = resolve_subtitle_font
-
-
-def _normalize_rewritten_text(raw: str) -> str:
-    txt = (raw or "").strip()
-    txt = txt.replace("\n", " ").replace("\r", " ")
-    txt = re.sub(r"\s+", " ", txt)
-    txt = txt.strip("\"'` ")
-    return txt
-
-
-def _heuristic_shorten_text(text: str, target_chars: int) -> str:
-    """在 LLM 不可用时的保底压缩策略。"""
-    if target_chars <= 0:
-        return text
-    compact = re.sub(r"[，。！？；：、,.!?;:]+", "，", text).strip()
-    if len(compact) <= target_chars:
-        return compact
-    out = compact[:target_chars].rstrip("，。！？；：、,.!?;:")
-    if out and out[-1] not in "。！？.!?":
-        out += "。"
-    return out
-
-
-def _rewrite_text_to_fit_duration(
-    text: str,
-    max_duration: float,
-    measured_duration: float,
-    attempt_index: int,
-) -> str:
-    """将文案压缩到更适配时长的表达，不引入新事实。"""
-    safe_max = max(0.3, float(max_duration))
-    safe_measured = max(0.3, float(measured_duration))
-    # 根据当前超时比例估算目标字数，逐轮收紧 5%。
-    ratio = min(1.0, safe_max / safe_measured)
-    tighten = max(0.65, 0.95 - 0.05 * max(0, attempt_index))
-    target_chars = max(6, int(len(text) * ratio * tighten))
-
-    prompt = (
-        "你是视频旁白精修助手。请在不改变核心信息与画面对应关系的前提下，"
-        "把文案压缩得更短，以便在指定时长内自然读完。\n"
-        "要求:\n"
-        f"1) 中文输出，目标不超过 {target_chars} 字。\n"
-        "2) 不要引入新事实，不要改变主语对象。\n"
-        "3) 保留原文关键信息与语义顺序。\n"
-        "4) 只输出改写后的最终文案，不要解释。"
-    )
-
-    started_at = time.perf_counter()
-    try:
-        ensure_model_calls_allowed()
-        client = _get_openai_client()
-        resp = client.chat.completions.create(
-            model=_shared.MODEL_NAME,
-            messages=[
-                {"role": "system", "content": prompt},
-                {"role": "user", "content": text},
-            ],
-            temperature=0.2,
-            max_completion_tokens=output_tokens("auxiliary"),
-        )
-        rewritten = _normalize_rewritten_text(_extract_chat_content(resp))
-        if rewritten:
-            return rewritten
-        if fail_fast_model_errors():
-            raise_model_failure(
-                stage="narration_rewrite",
-                model=_shared.MODEL_NAME,
-                message="Model returned empty narration rewrite.",
-                duration_seconds=time.perf_counter() - started_at,
-            )
-    except ModelCallError:
-        raise
-    except Exception as exc:
-        if fail_fast_model_errors():
-            raise_model_failure(
-                stage="narration_rewrite",
-                model=_shared.MODEL_NAME,
-                message=exc,
-                duration_seconds=time.perf_counter() - started_at,
-            )
-
-    return _heuristic_shorten_text(text, target_chars)
 
 
 @tool
@@ -122,7 +39,8 @@ def add_narration_segments(
     使用流程：
     1. 根据剪辑蓝图和分析数据，为每个片段或片段组编写对应的旁白文案
     2. 指定每段旁白的起止时间（与视频时间轴对齐）
-    3. 工具会为每段独立生成 TTS，按时间偏移精确混合到视频中
+    3. 工具为每段生成一次 TTS，保持原开始时间，按实测时长对齐配音和字幕
+    4. 完整配音超出下一段开始时间或视频结尾时明确报错，不改写或截断台词
 
     Args:
         video_path: 输入视频文件路径（已完成剪辑/合并/转场的视频）。
@@ -130,7 +48,7 @@ def add_narration_segments(
         segments: 分段旁白列表，每个元素是一个 dict：
             - "text": str — 该段旁白文案（必填）
             - "start": float — 旁白开始时间（秒），对应视频时间轴（必填）
-            - "end": float — 旁白结束时间（秒），TTS 超出此时长将被截断（必填）
+            - "end": float — 旁白结束时间（秒），建议结束时间；按实测配音时长对齐字幕，可用时间不足则报错（必填）
             示例：
             [
                 {"text": "新疆大学始建于1924年", "start": 10.0, "end": 20.0},
@@ -155,147 +73,58 @@ def add_narration_segments(
         output_name: 输出文件名（不含扩展名），默认 "narrated_segmented"。
     """
     try:
-        from ._native_ffmpeg import mix_narration_native, probe_video, probe_audio_duration
+        from ._native_ffmpeg import mix_narration_native, probe_video
+        from .narration_pipeline import align_prepared_narration
 
         resolved_video = _resolve_workspace_input_path(video_path, must_exist=True)
         if resolved_video is None:
             return f"分段配音出错: 输入视频不存在或不在WORKSPACE: {video_path}"
-
         if not segments or not isinstance(segments, list):
             return "分段配音出错: segments 参数必须是非空列表"
 
-        # ── 1. 加载视频 ──
         video_dur = probe_video(resolved_video).duration
         resolved_font = _resolve_subtitle_font_path(subtitle_font)
         if add_subtitle and not resolved_font:
             logger.warning("字幕字体未找到，将跳过字幕渲染: %s", subtitle_font)
-
-        # ── 2. 逐段生成 TTS 音频 ──
-        audio_clips: list[tuple[Path, float, float]] = []
-        subtitle_clips: list[dict] = []
-        success_count = 0
-        fail_messages: list[str] = []
+        safe_stem = _safe_output_video_path(output_name, default_stem="narrated_segmented").stem
+        prepared = []
         target_coverage = 0.0
-        actual_coverage = 0.0
+        for idx, segment in enumerate(segments, start=1):
+            text = str(segment.get("text") or "").strip()
+            start, end = float(segment["start"]), float(segment["end"])
+            if not text or not all(math.isfinite(value) for value in (start, end)) or start < 0 or end <= start or start >= video_dur:
+                return f"分段配音出错: 段 {idx} 文案或时间范围无效"
+            target_coverage += min(end, video_dur) - start
+            audio_path = WORKSPACE / f"{safe_stem}_seg{idx}.mp3"
+            error = _tts_generate(text, voice, audio_path)
+            if error:
+                return f"分段配音出错: 段 {idx}: {error}"
+            prepared.append({**segment, "text": text, "start": start, "end": end, "audio_path": str(audio_path)})
 
-        for idx, seg in enumerate(segments):
-            text = seg.get("text", "").strip()
-            start = float(seg.get("start", 0))
-            end = float(seg.get("end", 0))
-
-            if not text:
-                fail_messages.append(f"段 {idx+1}: text 为空，已跳过")
-                continue
-            if start < 0 or end <= start:
-                fail_messages.append(f"段 {idx+1}: end({end}) <= start({start})，已跳过")
-                continue
-            if start >= video_dur:
-                fail_messages.append(f"段 {idx+1}: start({start}) >= 视频时长({video_dur:.1f})，已跳过")
-                continue
-
-            end = min(end, video_dur)
-            max_duration = end - start
-            target_coverage += max_duration
-
-            safe_stem = _safe_output_video_path(output_name, default_stem="narrated_segmented").stem
-            audio_path = WORKSPACE / f"{safe_stem}_seg{idx+1}.mp3"
-            final_text = text
-            generated = False
-            measured_dur = 0.0
-
-            try:
-                for attempt in range(4):
-                    err = _tts_generate(final_text, voice, audio_path)
-                    if err:
-                        fail_messages.append(f"段 {idx+1}: {err}")
-                        generated = False
-                        break
-
-                    measured_dur = probe_audio_duration(audio_path)
-                    generated = True
-
-                    if measured_dur <= max_duration:
-                        break
-
-                    if attempt < 3:
-                        rewritten = _rewrite_text_to_fit_duration(
-                            text=final_text,
-                            max_duration=max_duration,
-                            measured_duration=measured_dur,
-                            attempt_index=attempt,
-                        )
-                        rewritten = _normalize_rewritten_text(rewritten)
-                        if rewritten and rewritten != final_text:
-                            logger.info(
-                                "段 %d 文案压缩: %.2fs -> %.2fs(目标), 字数 %d -> %d",
-                                idx + 1,
-                                measured_dur,
-                                max_duration,
-                                len(final_text),
-                                len(rewritten),
-                            )
-                            final_text = rewritten
-                            continue
-                    break
-
-                if not generated:
-                    continue
-
-                if measured_dur > max_duration:
-                    fail_messages.append(
-                        f"段 {idx+1}: 文案压缩后仍超时({measured_dur:.2f}s/{max_duration:.2f}s)，已做末尾截断。"
-                    )
-                    measured_dur = max_duration
-
-                actual_coverage += min(measured_dur, max_duration)
-                if measured_dur < max_duration * 0.75:
-                    fail_messages.append(
-                        f"段 {idx+1}: 旁白明显短于分配时段({measured_dur:.2f}s/{max_duration:.2f}s)，建议增加文案字数或缩短该段 end。"
-                    )
-
-                audio_clips.append((audio_path, start, end))
-                success_count += 1
-            except ModelCallError:
-                raise
-            except Exception as ae:
-                fail_messages.append(f"段 {idx+1}: 音频加载失败: {ae}")
-                continue
-
-            if add_subtitle and resolved_font:
-                subtitle_clips.append({"text": final_text, "start": start, "end": start + min(measured_dur, max_duration)})
-
-        if success_count == 0:
-            return f"分段配音出错: 所有 {len(segments)} 段均失败。详情: {'; '.join(fail_messages)}"
-
+        aligned = align_prepared_narration(prepared, video_dur)
         output_path = _safe_output_video_path(output_name, default_stem="narrated_segmented")
-        mix_narration_native(resolved_video, output_path, audio_clips)
-        if subtitle_clips:
-            burn_subtitles(output_path, output_path, subtitle_clips, resolved_font)
-
+        mix_narration_native(resolved_video, output_path, [
+            (Path(item["audio_path"]), item["start"], item["end"]) for item in aligned
+        ])
+        subtitles = [{"text": item["text"], "start": item["start"], "end": item["end"]} for item in aligned]
+        if add_subtitle and resolved_font:
+            burn_subtitles(output_path, output_path, subtitles, resolved_font)
+        actual_coverage = sum(item["audio_duration_seconds"] for item in aligned)
         result = {
-            "status": "success",
-            "path": str(output_path),
-            "total_segments": len(segments),
-            "success_segments": success_count,
-            "has_subtitles": add_subtitle and len(subtitle_clips) > 0,
+            "status": "success", "path": str(output_path),
+            "total_segments": len(segments), "success_segments": len(aligned),
+            "has_subtitles": bool(add_subtitle and resolved_font),
             "subtitle_font_used": resolved_font if add_subtitle else None,
             "target_narration_seconds": round(target_coverage, 3),
             "actual_narration_seconds": round(actual_coverage, 3),
-            "narration_coverage_ratio": round(actual_coverage / max(video_dur, 0.01), 4),
+            "narration_coverage_ratio": round(actual_coverage / video_dur, 4),
+            "target_slot_coverage_ratio": round(actual_coverage / target_coverage, 4),
+            "segments": aligned,
         }
-        if target_coverage > 0:
-            target_ratio = actual_coverage / target_coverage
-            result["target_slot_coverage_ratio"] = round(target_ratio, 4)
-            if target_ratio < min_narration_coverage_ratio:
-                fail_messages.append(
-                    f"旁白相对分配时段覆盖率偏低: {target_ratio:.2%} < {min_narration_coverage_ratio:.2%}，"
-                    "建议增加文案长度/段数，或先用 align_narration_to_timeline 重新对齐。"
-                )
-        if fail_messages:
-            result["warnings"] = fail_messages
+        if actual_coverage / target_coverage < min_narration_coverage_ratio:
+            result["warnings"] = ["旁白相对原分配时段覆盖率偏低，请检查文案或时间安排。"]
         return json.dumps(result, ensure_ascii=False)
-
     except ModelCallError:
         raise
-    except Exception as e:
-        return f"分段配音出错: {e}"
+    except Exception as exc:
+        return f"分段配音出错: {exc}"
