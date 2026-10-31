@@ -5130,7 +5130,7 @@ def _run_controlled_editor_legacy(state: AgentState) -> str:
                 prepared_segments=prepared_segments,
                 output_name="phase3_narrated",
             )
-            parsed = json.loads(str(raw))
+            parsed = _parse_tool_json("compose_prepared_narration", raw)
             path = str(parsed.get("path") or "")
             if parsed.get("status") != "success" or not path:
                 raise RuntimeError(f"旁白混合失败: {str(raw)[:300]}")
@@ -5600,7 +5600,7 @@ def _run_controlled_editor(state: AgentState) -> str:
             prepared_segments=prepared_segments,
             output_name="phase3_narrated",
         )
-        parsed = json.loads(str(raw))
+        parsed = _parse_tool_json("compose_prepared_narration", raw)
         path = str(parsed.get("path") or "")
         if parsed.get("status") != "success" or not path:
             raise RuntimeError(f"旁白混合失败: {str(raw)[:300]}")
