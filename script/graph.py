@@ -4589,6 +4589,8 @@ def _build_controlled_edit_plan(state: AgentState) -> ControlledEditPlan:
             "必须满足 sum(end-start) = target_duration_seconds + 重叠秒数×(片段数-1)。"
             "例如30秒成片若选择10个片段，原片段总长应为32.7秒，不能只选30秒再扣转场。"
             "旁白时间使用合并后时间轴，必须位于成片范围内且不重叠。"
+            "resolution只允许720p、1080p或4k；竖屏720x1280也填写720p，"
+            "画幅由导出媒体规格处理，不得在resolution中填写像素尺寸或宽高比。"
             "只返回 JSON，结构为："
             '{"clips":[{"source_path":"","start":0,"end":5,"label":""}],'
             '"narration":[{"text":"","start":0,"end":5}],'

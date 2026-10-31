@@ -73,7 +73,7 @@ Crayotter 是一个多模态、Agent 驱动的视频自动编辑系统，可以�
 
 ## 近期动态
 
-- **2026.10.30** — [Crayotter 1.1.0](https://github.com/idwts/Crayotter/releases/tag/v1.1.0) 发布，支持 Windows 与 Apple Silicon Mac 桌面使用。
+- **2026.10.31** — [Crayotter 1.1.0](https://github.com/idwts/Crayotter/releases/tag/v1.1.0) 发布，支持 Windows 与 Apple Silicon Mac 桌面使用。
 - **2026.9.16** — 我们的[论文](https://arxiv.org/abs/2606.07636)已被 AACL-IJCNLP 2026 Demo Track 接收！
 - **2026.8.5** — 全新工作已公开！迈向长时序视频编辑智能体：[Crayotter: Learning Long-Horizon Video Editing Agents via Group-Relative Preference Backpropagation](https://arxiv.org/abs/2608.02694)。
 - **2026.6.27** — Crayotter 1.0.0 新增多素材源导入、统一下载清洗，并更新 Windows 发布包。

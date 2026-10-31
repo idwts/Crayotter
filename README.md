@@ -73,7 +73,7 @@ A full end-to-end run: from a one-line text request, Crayotter prepares material
 
 ## News
 
-- **2026.10.30** — [Crayotter 1.1.0](https://github.com/idwts/Crayotter/releases/tag/v1.1.0) is available for Windows and Apple Silicon Mac.
+- **2026.10.31** — [Crayotter 1.1.0](https://github.com/idwts/Crayotter/releases/tag/v1.1.0) is available for Windows and Apple Silicon Mac.
 - **2026.9.16** — Our [paper](https://arxiv.org/abs/2606.07636) is accepted by AACL-IJCNLP 2026 Demo Track!
 - **2026.8.5** — Our new work is now available! Towards long-horizon video editing agents: [Crayotter: Learning Long-Horizon Video Editing Agents via Group-Relative Preference Backpropagation](https://arxiv.org/abs/2608.02694)。
 - **2026.6.27** — Crayotter 1.0.0 adds multi-source material import, unified download cleanup, and refreshed Windows release packaging.
